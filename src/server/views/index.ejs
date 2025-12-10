@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>HCS Sync</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body class="min-h-screen bg-white text-gray-900 dark:bg-gray-900 dark:text-gray-100">
+    <div class="max-w-4xl mx-auto p-6">
+      <%- include('partials/header') %>
+      <div class="flex items-center justify-between">
+        <h1 class="text-2xl font-semibold">HCS Sync (Node.js)</h1>
+        <span class="px-2 py-1 rounded text-sm <%= isRunning ? 'bg-yellow-100 text-yellow-800' : 'bg-green-100 text-green-800' %>">
+          Status: <strong><%= isRunning ? 'Running' : 'Idle' %></strong>
+        </span>
+      </div>
+
+      <p class="mt-2 text-sm text-gray-600">Last Run: <%= lastRun ? new Date(lastRun).toLocaleString() : 'Never' %></p>
+
+      <form method="post" action="/run" class="mt-4">
+        <button type="submit" class="px-3 py-2 rounded bg-blue-600 text-white disabled:opacity-50" <%= isRunning ? 'disabled' : '' %>>Run Sync</button>
+      </form>
+
+    <% if (counts) { %>
+      <div class="mt-6">
+        <h2 class="text-lg font-medium mb-2">Latest Fetch Counts</h2>
+        <div class="overflow-hidden rounded border border-gray-200">
+          <table class="w-full">
+            <tbody>
+              <% Object.entries(counts).forEach(([key, value]) => { %>
+                <tr class="border-b border-gray-200">
+                  <th class="text-left p-2 w-1/2 font-medium bg-gray-50"><%= key %></th>
+                  <td class="p-2"><%= value %></td>
+                </tr>
+              <% }) %>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <% } %>
+      <%- include('partials/footer') %>
+    </div>
+    <script src="/static/vendor/flowbite/flowbite.min.js"></script>
+    <script src="/static/app.js"></script>
+  </body>
+</html>
