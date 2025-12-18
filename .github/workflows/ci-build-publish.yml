@@ -50,8 +50,8 @@ jobs:
           push: true
           platforms: linux/amd64,linux/arm64
           tags: |
-            ghcr.io/${{ env.OWNER_LC }}/kashflowapi-cron-ts:latest
-            ghcr.io/${{ env.OWNER_LC }}/kashflowapi-cron-ts:sha-${{ env.SHORT_SHA }}
+            ghcr.io/${{ env.OWNER_LC }}/hcs-sync:latest
+            ghcr.io/${{ env.OWNER_LC }}/hcs-sync:sha-${{ env.SHORT_SHA }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
