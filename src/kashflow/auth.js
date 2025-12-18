@@ -8,21 +8,39 @@ import logger from '../util/logger.js';
 export async function getSessionToken() {
   if (config.token) return config.token;
 
-  const { KASHFLOW_USERNAME, KASHFLOW_PASSWORD, KASHFLOW_MEMORABLE_WORD } = process.env;
-  if (!KASHFLOW_USERNAME || !KASHFLOW_PASSWORD) {
-    throw new Error('Missing KASHFLOW_USERNAME or KASHFLOW_PASSWORD env vars for session token acquisition');
+    const {
+      USERNAME,
+      PASSWORD,
+      MEMORABLE_WORD,
+      KASHFLOW_USERNAME,
+      KASHFLOW_PASSWORD,
+      KASHFLOW_MEMORABLE_WORD,
+    } = process.env;
+    const username = USERNAME || KASHFLOW_USERNAME;
+    const password = PASSWORD || KASHFLOW_PASSWORD;
+    const memorableWord = MEMORABLE_WORD || KASHFLOW_MEMORABLE_WORD;
+    if (!username || !password) {
+      throw new Error('Missing USERNAME or PASSWORD env vars for session token acquisition');
   }
 
   const http = axios.create({ baseURL: config.baseUrl, timeout: config.timeoutMs });
 
-  // Step 1: request temporary token
-  const step1 = await http.post('/sessiontoken', {
-    username: KASHFLOW_USERNAME,
-    password: KASHFLOW_PASSWORD,
-  });
+  // Step 1: request temporary token (KashFlow expects capitalized keys)
+  let step1;
+  try {
+    step1 = await http.post('/sessiontoken', {
+      Username: username,
+      Password: password,
+      KeepUserLoggedIn: false,
+    });
+  } catch (err) {
+    logger.error({ status: err.response?.status, data: err.response?.data }, 'Step1 /sessiontoken request failed');
+    throw err;
+  }
 
-  const tempToken = step1.data?.tempToken || step1.data?.TemToken || step1.data?.token;
-  const requiredChars = step1.data?.requiredChars || step1.data?.RequiredChars;
+  const tempToken = step1.data?.TemporaryToken || step1.data?.tempToken || step1.data?.TemToken || step1.data?.token;
+  // KashFlow often returns positions as a comma-separated string or a list of objects
+  let requiredChars = step1.data?.MemorableWordPositions || step1.data?.requiredChars || step1.data?.RequiredChars;
 
   if (!tempToken) {
     logger.error({ data: step1.data }, 'No temp token returned from KashFlow');
@@ -30,21 +48,33 @@ export async function getSessionToken() {
   }
 
   // If no additional characters required, sometimes PUT may still be needed; try upgrade when we have a memorable word.
-  if (Array.isArray(requiredChars) && requiredChars.length > 0) {
-    if (!KASHFLOW_MEMORABLE_WORD) {
-      throw new Error('Memorable word required but KASHFLOW_MEMORABLE_WORD env var is missing');
+  // Normalize required positions: handle comma-separated string or MemorableWordList with empty values
+  let positions = [];
+  if (typeof requiredChars === 'string' && requiredChars.trim().length > 0) {
+    positions = requiredChars.split(',').map((s) => Number(s.trim())).filter((n) => Number.isFinite(n));
+  } else if (Array.isArray(step1.data?.MemorableWordList)) {
+    positions = step1.data.MemorableWordList
+      .filter((x) => typeof x?.Position === 'number')
+      .map((x) => x.Position);
+  } else if (Array.isArray(requiredChars)) {
+    positions = requiredChars.map((x) => Number(x)).filter((n) => Number.isFinite(n));
+  }
+
+  if (positions.length > 0) {
+      if (!memorableWord) {
+        throw new Error('Memorable word required but MEMORABLE_WORD env var is missing');
     }
-    const chars = {};
-    // Positions are 1-based in many flows; API often returns indexes. Use positions directly.
-    for (const pos of requiredChars) {
-      const idx = Number(pos) - 1;
-      chars[pos] = KASHFLOW_MEMORABLE_WORD[idx];
-    }
-    const step2 = await http.put('/sessiontoken', {
-      tempToken,
-      chars,
-    });
-    const sessionToken = step2.data?.sessionToken || step2.data?.KFSessionToken || step2.data?.token;
+    const list = positions.map((pos) => ({
+      Position: pos,
+        Value: memorableWord[Number(pos) - 1] || '',
+    }));
+    const step2Body = {
+      TemporaryToken: tempToken,
+      MemorableWordList: list,
+      KeepUserLoggedIn: false,
+    };
+    const step2 = await http.put('/sessiontoken', step2Body);
+    const sessionToken = step2.data?.SessionToken || step2.data?.KFSessionToken || step2.data?.token || step2.data?.Token;
     if (!sessionToken) {
       logger.error({ data: step2.data }, 'No permanent token returned from KashFlow');
       throw new Error('Failed to obtain permanent session token');
