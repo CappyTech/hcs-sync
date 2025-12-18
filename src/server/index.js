@@ -10,6 +10,8 @@ const port = Number(process.env.PORT || 3000);
 let lastRun = null;
 let isRunning = false;
 let lastCounts = null;
+let lastError = null;
+const logs = [];
 
 // EJS setup
 const __filename = fileURLToPath(import.meta.url);
@@ -26,11 +28,14 @@ app.get('/health', (_req, res) => {
 });
 // Simple logs stub (extend later)
 app.get('/logs', (_req, res) => {
-  res.render('index', { isRunning, lastRun, counts: lastCounts });
+  res.render('logs', { logs });
+});
+app.get('/logs.json', (_req, res) => {
+  res.json({ logs });
 });
 
 app.get('/', (_req, res) => {
-  res.render('index', { isRunning, lastRun, counts: lastCounts });
+  res.render('index', { isRunning, lastRun, counts: lastCounts, lastError });
 });
 
 app.post('/run', async (_req, res) => {
@@ -38,14 +43,21 @@ app.post('/run', async (_req, res) => {
     return res.status(409).send('Sync already running');
   }
   isRunning = true;
+  lastError = null;
+  logs.unshift({ time: Date.now(), level: 'info', message: 'Sync started' });
   runSync()
-    .then(() => {
+    .then((result) => {
       lastRun = Date.now();
       isRunning = false;
+      lastCounts = result && result.counts ? result.counts : lastCounts;
+      lastError = null;
+      logs.unshift({ time: Date.now(), level: 'success', message: 'Sync completed successfully', meta: { counts: lastCounts } });
     })
     .catch((err) => {
-      logger.error({ err }, 'Sync failed via dashboard');
+      logger.error({ status: err.response?.status, message: err.message, data: err.response?.data }, 'Sync failed via dashboard');
       isRunning = false;
+      lastError = err?.response?.data?.Message || err?.message || 'Sync failed';
+      logs.unshift({ time: Date.now(), level: 'error', message: 'Sync failed', meta: { error: err?.message } });
     });
   res.redirect('/');
 });
