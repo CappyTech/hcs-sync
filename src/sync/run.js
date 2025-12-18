@@ -22,7 +22,16 @@ async function run() {
   logger.info({ invoicesCount: invoices?.length || 0 }, 'Fetched invoices');
   logger.info({ purchasesCount: purchases?.length || 0 }, 'Fetched purchases');
 
-  logger.info('KashFlow admin sync (Node.js) finished');
+  const counts = {
+    customers: customers?.length || 0,
+    suppliers: suppliers?.length || 0,
+    projects: projects?.length || 0,
+    nominals: nominals?.length || 0,
+    invoices: invoices?.length || 0,
+    purchases: purchases?.length || 0,
+  };
+  logger.info({ counts }, 'KashFlow admin sync (Node.js) finished');
+  return { counts };
 }
 
 if (process.argv[1] && process.argv[1].endsWith('run.js')) {
