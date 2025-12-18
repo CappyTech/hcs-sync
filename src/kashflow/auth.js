@@ -12,13 +12,10 @@ export async function getSessionToken() {
       USERNAME,
       PASSWORD,
       MEMORABLE_WORD,
-      KASHFLOW_USERNAME,
-      KASHFLOW_PASSWORD,
-      KASHFLOW_MEMORABLE_WORD,
     } = process.env;
-    const username = USERNAME || KASHFLOW_USERNAME;
-    const password = PASSWORD || KASHFLOW_PASSWORD;
-    const memorableWord = MEMORABLE_WORD || KASHFLOW_MEMORABLE_WORD;
+    const username = USERNAME;
+    const password = PASSWORD;
+    const memorableWord = MEMORABLE_WORD;
     if (!username || !password) {
       throw new Error('Missing USERNAME or PASSWORD env vars for session token acquisition');
   }
