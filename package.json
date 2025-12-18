@@ -15,21 +15,21 @@
   "author": "",
   "license": "MIT",
   "devDependencies": {
-    "nodemon": "^3.1.0",
-    "tailwindcss": "^3.4.13",
-    "postcss": "^8.4.31",
-    "autoprefixer": "^10.4.19",
     "@tailwindcss/forms": "^0.5.7",
     "@tailwindcss/typography": "^0.5.14",
-    "@flowbite/plugin": "^2.3.0"
+    "autoprefixer": "^10.4.19",
+    "nodemon": "^3.1.0",
+    "postcss": "^8.4.31",
+    "tailwindcss": "^3.4.13"
   },
   "dependencies": {
     "axios": "^1.11.0",
-    "express": "^4.19.2",
     "dotenv": "^17.2.1",
-    "pino": "^9.8.0",
-    "pino-pretty": "^13.1.1",
     "ejs": "^3.1.10",
-    "flowbite": "^2.4.1"
+    "express": "^4.19.2",
+    "flowbite": "^4.0.1",
+    "@tailwindcss/typography": "^0.5.14",
+    "pino": "^9.8.0",
+    "pino-pretty": "^13.1.1"
   }
 }
