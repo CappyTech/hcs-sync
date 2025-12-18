@@ -3,3 +3,4 @@
 @tailwind utilities;
 
 /* Custom tweaks if needed */
+@import "flowbite";
