@@ -2,11 +2,18 @@ import axios from 'axios';
 import config from '../config.js';
 import logger from '../util/logger.js';
 
+let cachedToken = '';
+let lockUntil = 0;
+
 // Obtains a permanent KF session token via the two-step flow.
 // If `config.token` is provided, returns it.
 // Otherwise, uses username/password to get a temp token, then upgrades with memorable word chars if provided.
 export async function getSessionToken() {
   if (config.token) return config.token;
+  if (cachedToken) return cachedToken;
+  if (Date.now() < lockUntil) {
+    throw new Error(`Auth temporarily disabled until ${new Date(lockUntil).toLocaleString()} due to previous lockout`);
+  }
 
     const {
       USERNAME,
@@ -31,7 +38,11 @@ export async function getSessionToken() {
       KeepUserLoggedIn: false,
     });
   } catch (err) {
-    logger.error({ status: err.response?.status, data: err.response?.data }, 'Step1 /sessiontoken request failed');
+    const errData = err.response?.data;
+    logger.error({ status: err.response?.status, data: errData }, 'Step1 /sessiontoken request failed');
+    if (errData && (errData.Error === 'AccountLocked' || /locked/i.test(errData.Message || ''))) {
+      lockUntil = Date.now() + 10 * 60 * 1000;
+    }
     throw err;
   }
 
@@ -76,10 +87,16 @@ export async function getSessionToken() {
       logger.error({ data: step2.data }, 'No permanent token returned from KashFlow');
       throw new Error('Failed to obtain permanent session token');
     }
+    cachedToken = sessionToken;
     return sessionToken;
   }
 
   // If no required chars, try using the temp token as bearer (some deployments allow it temporarily)
   logger.warn('No memorable word chars required; using temp token as session token');
+  cachedToken = tempToken;
   return tempToken;
+}
+
+export function clearCachedSessionToken() {
+  cachedToken = '';
 }
