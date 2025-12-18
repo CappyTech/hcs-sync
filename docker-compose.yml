@@ -1,16 +1,16 @@
+version: '3.8'
 services:
-  app:
-    image: ghcr.io/CappyTech/hcs-sync:latest
-    pull_policy: always   # remove if your compose version doesn't support
-    restart: unless-stopped
+  hcs-sync:
+    build: .
     container_name: hcs-sync
     env_file:
-      - compose.env
+      - .env
     ports:
       - "8080:3000"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
       interval: 30s
       timeout: 10s
       retries: 5
       start_period: 20s
+    restart: unless-stopped

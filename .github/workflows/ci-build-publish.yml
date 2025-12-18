@@ -2,7 +2,7 @@ name: "CI Build & Publish"
 
 on:
   push:
-    branches: [ main ]
+    branches: [ "**" ]
   workflow_dispatch: {}
   release:
     types: [published]
@@ -23,12 +23,18 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Derive short SHA & owner (lowercase)
+      - name: Derive vars (lowercase owner/repo, short SHA, branch tag)
         id: vars
         shell: bash
         run: |
           echo "SHORT_SHA=${GITHUB_SHA::7}" >> $GITHUB_ENV
           echo "OWNER_LC=${GITHUB_REPOSITORY_OWNER,,}" >> $GITHUB_ENV
+          echo "REPO_LC=${GITHUB_REPOSITORY,,}" >> $GITHUB_ENV
+          echo "REF_NAME=${GITHUB_REF_NAME}" >> $GITHUB_ENV
+          REF_SLUG=$(echo "${GITHUB_REF_NAME}" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9._-]+/-/g')
+          if [ "${GITHUB_REF_NAME}" = "main" ]; then EXTRA_TAG=latest; else EXTRA_TAG=branch-${REF_SLUG}; fi
+          echo "REF_SLUG=${REF_SLUG}" >> $GITHUB_ENV
+          echo "EXTRA_TAG=${EXTRA_TAG}" >> $GITHUB_ENV
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -50,8 +56,11 @@ jobs:
           push: true
           platforms: linux/amd64,linux/arm64
           tags: |
-            ghcr.io/${{ env.OWNER_LC }}/kashflowapi-cron-ts:latest
-            ghcr.io/${{ env.OWNER_LC }}/kashflowapi-cron-ts:sha-${{ env.SHORT_SHA }}
+            ghcr.io/${{ env.REPO_LC }}:${{ env.EXTRA_TAG }}
+            ghcr.io/${{ env.REPO_LC }}:sha-${{ env.SHORT_SHA }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

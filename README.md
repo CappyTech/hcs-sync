@@ -1,35 +1,32 @@
-# KashFlowAPI-Cron
+# hcs-sync (Node.js)
 
-TypeScript service that syncs KashFlow REST data to MongoDB on a schedule, with a small web dashboard for triggering syncs and viewing history/logs.
+Backend-only KashFlow admin sync rewritten in Node.js using updated REST endpoints.
 
-## Configuration
+## Setup
+- Create `.env` with:
+  - `KASHFLOW_BASE_URL=https://api.kashflow.com/v2`
+  - `KASHFLOW_SESSION_TOKEN=KF_...`
+  - `LOG_LEVEL=info`
+  - `PINO_PRETTY=1` (optional for human-readable logs)
 
-Core environment variables:
+## Install
+```powershell
+npm install
+```
 
-- KashFlow API
-  - KASHFLOW_USERNAME, KASHFLOW_PASSWORD, KASHFLOW_MEMORABLE_WORD
-  - KASHFLOW_TIMEOUT_MS (optional, default 45000)
-- MongoDB
-  - DIRECT_DB=true to connect directly (no SSH tunnel), otherwise set SSH_* to tunnel
-  - MONGO_HOST, MONGO_PORT, MONGO_DB_NAME, MONGO_USER, MONGO_PASSWORD
-- SSH tunnel (when DIRECT_DB=false)
-  - SSH_HOST, SSH_PORT, SSH_USERNAME, SSH_PASSWORD
-  - SSH_DST_HOST, SSH_DST_PORT, SSH_LOCAL_HOST, SSH_LOCAL_PORT
-- Scheduler & flags
-  - CRON_SCHEDULE (default: hourly, 0 * * * *)
-  - CRON_ENABLED (default: true)
-  - RUN_ONCE (default: false)
-  - FULL_REFRESH_HOURS (default: 24) — force full traversal periodically
-  - INCREMENTAL_SOFT_DELETE (default: true)
-  - UPSERT_LOGS (default: false) — verbose per-document upsert logging
-- Dashboard server
-  - METRICS_ENABLED (default: true)
-  - PORT or METRICS_PORT (default: 3000)
-  - METRICS_AUTH_USER, METRICS_AUTH_PASS (Basic Auth for all routes)
-  - METRICS_ALLOW_REMOTE_TRIGGER (default: false) — allow non-LAN IPs to trigger sync
-  - METRICS_TRUST_PROXY (default: false) — trust X-Forwarded-For for client IP
+## Run
+```powershell
+npm start
+```
 
-Note: Prometheus /metrics support was removed; the dashboard still exposes operational routes and HTML.
+For live development:
+```powershell
+npm run dev
+```
+
+## Notes
+- Uses Axios client covering Customers, Suppliers, Invoices, Purchases, Projects, Quotes, Nominals, and Notes endpoints as per Swagger.
+- Extend `src/sync/run.js` with your upsert logic.
 
 ## Dashboard & Routes
 

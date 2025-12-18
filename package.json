@@ -1,43 +1,35 @@
 {
   "name": "hcs-sync",
-  "version": "1.2.14",
-  "description": "",
+  "version": "0.1.0",
+  "description": "Backend-only KashFlow admin sync in Node.js",
   "type": "module",
-  "main": "dist/index.js",
+  "private": true,
   "scripts": {
-    "build": "tsc -p .",
-    "dev": "node --watch --loader ts-node/esm src/index.ts",
-    "start": "tsc -p . && node dist/index.js > output.log 2>&1",
-    "backfill:uuids": "tsc -p . && node dist/scripts/backfill-uuids.js",
-    "inspect": "node dist/scripts/inspect.js",
-  "lint": "echo Lint step deferred due to Node 20.2 engine constraints"
+    "dev": "npm run build:css && nodemon --exec node src/server/index.js",
+    "start": "npm run build:css && node src/server/index.js",
+    "build:css": "tailwindcss -i ./src/server/styles/input.css -o ./src/server/public/styles.css --min",
+    "lint": "echo Lint TBD",
+    "test": "echo No tests yet"
   },
   "keywords": [],
   "author": "",
   "license": "MIT",
   "devDependencies": {
-    "@types/node": "^24.2.1",
-    "@types/ssh2": "^1.15.5",
-    "eslint": "^9.32.0",
-    "eslint-config-prettier": "^10.1.8",
-    "eslint-plugin-import": "^2.32.0",
-    "eslint-plugin-prettier": "^5.5.4",
-    "prettier": "^3.6.2",
-    "ts-node": "^10.9.2",
-    "typescript": "^5.9.2"
+    "@tailwindcss/forms": "^0.5.7",
+    "@tailwindcss/typography": "^0.5.14",
+    "autoprefixer": "^10.4.19",
+    "nodemon": "^3.1.0",
+    "postcss": "^8.4.31",
+    "tailwindcss": "^3.4.13"
   },
   "dependencies": {
-    "async-mutex": "^0.5.0",
     "axios": "^1.11.0",
-    "cron-parser": "^4.9.0",
     "dotenv": "^17.2.1",
-    "http-status-codes": "^2.3.0",
-    "mongoose": "^8.17.1",
-    "node-cron": "^4.2.1",
-    "p-retry": "^6.2.1",
+    "ejs": "^3.1.10",
+    "express": "^4.19.2",
+    "flowbite": "^4.0.1",
+    "@tailwindcss/typography": "^0.5.14",
     "pino": "^9.8.0",
-    "pino-pretty": "^13.1.1",
-    "tunnel-ssh": "^5.2.0",
-    "uuid": "^11.1.0"
+    "pino-pretty": "^13.1.1"
   }
 }
