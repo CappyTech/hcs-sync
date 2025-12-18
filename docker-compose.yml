@@ -3,13 +3,8 @@ services:
   hcs-sync:
     build: .
     container_name: hcs-sync
-    environment:
-      - NODE_ENV=production
-      - PORT=3000
-      - KASHFLOW_BASE_URL=${KASHFLOW_BASE_URL}
-      - KASHFLOW_SESSION_TOKEN=${KASHFLOW_SESSION_TOKEN}
-      - LOG_LEVEL=${LOG_LEVEL:-info}
-      - PINO_PRETTY=${PINO_PRETTY:-1}
+    env_file:
+      - .env
     ports:
       - "8080:3000"
     healthcheck:
