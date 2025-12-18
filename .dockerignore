@@ -6,5 +6,6 @@ dist/*.map
 Dockerfile
 .env
 .env.*
+!.env.example
 README.md
 .vscode
