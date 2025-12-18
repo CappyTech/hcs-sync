@@ -1,3 +1,15 @@
-<footer class="mt-8 py-6 text-center text-xs text-gray-500">
-  <p>&copy; <%= new Date().getFullYear() %> Heron CS — Sync Admin</p>
+<footer class="fixed bottom-0 inset-x-0 z-20 w-full bg-neutral-primary-soft border-t border-default shadow-sm">
+  <div class="w-full mx-auto max-w-screen-xl p-4 md:flex md:items-center md:justify-between">
+    <span class="text-sm text-body sm:text-center">© <%= new Date().getFullYear() %> <a href="#" class="hover:underline">Heron Constructive Solutions LTD</a>. All Rights Reserved.</span>
+    <div class="mt-3 md:mt-0 flex items-center gap-4">
+      <button id="toggle-theme" type="button" class="inline-flex items-center rounded-base px-3 py-2 text-gray-900 hover:bg-gray-100 md:hover:bg-transparent dark:text-white">Toggle Theme</button>
+      <ul class="font-medium flex flex-col p-4 md:p-0 mt-4 border border-gray-100 rounded-lg bg-gray-50 md:flex-row md:space-x-8 md:mt-0 md:border-0 md:bg-white dark:bg-gray-800 md:dark:bg-gray-900 dark:border-gray-700">
+        <li><a href="/" class="block py-2 px-3 text-gray-900 rounded hover:bg-gray-100 md:hover:bg-transparent md:hover:text-blue-700 md:p-0 dark:text-white md:dark:hover:text-blue-500">Dashboard</a></li>
+        <li><a href="/history" class="block py-2 px-3 text-gray-900 rounded hover:bg-gray-100 md:hover:bg-transparent md:hover:text-blue-700 md:p-0 dark:text-white md:dark:hover:text-blue-500">History</a></li>
+        <li><a href="/logs" class="block py-2 px-3 text-gray-900 rounded hover:bg-gray-100 md:hover:bg-transparent md:hover:text-blue-700 md:p-0 dark:text-white md:dark:hover:text-blue-500">Logs</a></li>
+      </ul>
+    </div>
+  </div>
+  <!-- Toast container -->
+  <div id="toast-container" class="fixed top-4 right-4 z-50 space-y-2"></div>
 </footer>
