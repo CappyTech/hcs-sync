@@ -1,7 +1,7 @@
 /* eslint-disable */
 const forms = require('@tailwindcss/forms');
 const typography = require('@tailwindcss/typography');
-const flowbitePlugin = require('@flowbite/plugin');
+const flowbitePlugin = require('flowbite/plugin');
 
 const staticSafelist = [];
 const generatedSafelist = [];
