@@ -2,6 +2,7 @@ import logger from '../util/logger.js';
 import createClient from '../kashflow/client.js';
 import config from '../config.js';
 import progress from '../server/progress.js';
+import db from '../db/mongo.js';
 
 async function run() {
   const start = Date.now();
@@ -25,15 +26,47 @@ async function run() {
   progress.setItemTotal('customers', (customers || []).length);
   progress.setItemDone('customers', (customers || []).length);
   logger.info({ customersCount: customers?.length || 0 }, 'Fetched customers');
+  if (db.isDbEnabled()) {
+    try {
+      const { upserts } = await db.upsertMany('customers', customers || []);
+      logger.info({ upserts }, 'Upserted customers');
+    } catch (e) {
+      logger.warn({ err: e?.message }, 'Customer upsert failed');
+    }
+  }
   progress.setItemTotal('suppliers', (suppliers || []).length);
   progress.setItemDone('suppliers', (suppliers || []).length);
   logger.info({ suppliersCount: suppliers?.length || 0 }, 'Fetched suppliers');
+  if (db.isDbEnabled()) {
+    try {
+      const { upserts } = await db.upsertMany('suppliers', suppliers || []);
+      logger.info({ upserts }, 'Upserted suppliers');
+    } catch (e) {
+      logger.warn({ err: e?.message }, 'Supplier upsert failed');
+    }
+  }
   progress.setItemTotal('projects', (projects || []).length);
   progress.setItemDone('projects', (projects || []).length);
   logger.info({ projectsCount: projects?.length || 0 }, 'Fetched projects');
+  if (db.isDbEnabled()) {
+    try {
+      const { upserts } = await db.upsertMany('projects', projects || []);
+      logger.info({ upserts }, 'Upserted projects');
+    } catch (e) {
+      logger.warn({ err: e?.message }, 'Project upsert failed');
+    }
+  }
   progress.setItemTotal('nominals', (nominals || []).length);
   progress.setItemDone('nominals', (nominals || []).length);
   logger.info({ nominalsCount: nominals?.length || 0 }, 'Fetched nominals');
+  if (db.isDbEnabled()) {
+    try {
+      const { upserts } = await db.upsertMany('nominals', nominals || []);
+      logger.info({ upserts }, 'Upserted nominals');
+    } catch (e) {
+      logger.warn({ err: e?.message }, 'Nominal upsert failed');
+    }
+  }
   // Helper: limited concurrency mapper with progress logging
   const pool = async (items, limit, label, handler) => {
     const results = [];
@@ -74,7 +107,11 @@ async function run() {
     config.concurrency || 4,
     'invoices',
     async (code) => {
-      const n = (await kf.invoices.listAll({ perpage: 200, customerCode: code })).length;
+      const items = await kf.invoices.listAll({ perpage: 200, customerCode: code });
+      if (db.isDbEnabled() && items.length) {
+        try { await db.upsertMany('invoices', items); } catch {}
+      }
+      const n = items.length;
       progress.incItem('invoices', 1);
       return n;
     }
@@ -89,7 +126,11 @@ async function run() {
     config.concurrency || 4,
     'quotes',
     async (code) => {
-      const n = (await kf.quotes.listAll({ perpage: 200, customerCode: code })).length;
+      const items = await kf.quotes.listAll({ perpage: 200, customerCode: code });
+      if (db.isDbEnabled() && items.length) {
+        try { await db.upsertMany('quotes', items); } catch {}
+      }
+      const n = items.length;
       progress.incItem('quotes', 1);
       return n;
     }
@@ -104,7 +145,11 @@ async function run() {
     config.concurrency || 4,
     'purchases',
     async (code) => {
-      const n = (await kf.purchases.listAll({ perpage: 200, supplierCode: code })).length;
+      const items = await kf.purchases.listAll({ perpage: 200, supplierCode: code });
+      if (db.isDbEnabled() && items.length) {
+        try { await db.upsertMany('purchases', items); } catch {}
+      }
+      const n = items.length;
       progress.incItem('purchases', 1);
       return n;
     }
