@@ -5,6 +5,7 @@ import logger from '../util/logger.js';
 import runSync from '../sync/run.js';
 import progress from './progress.js';
 import changeLog from './changeLog.js';
+import config from '../config.js';
 
 const app = express();
 const port = Number(process.env.PORT || 3000);
@@ -48,6 +49,24 @@ app.get('/logs.json', (_req, res) => {
 // Runtime status for dashboard polling
 app.get('/status', (_req, res) => {
   res.json(progress.getState());
+});
+
+// Debug auth summary (no secrets exposed)
+app.get('/debug/auth', (_req, res) => {
+  const tokenPresent = Boolean(config.token);
+  const t = String(config.token || '');
+  const isKF = t.startsWith('KF_');
+  const isGuid = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$/.test(t);
+  res.json({
+    baseUrl: config.baseUrl,
+    usingEnvToken: tokenPresent,
+    tokenType: tokenPresent ? (isKF ? 'kf-bearer' : (isGuid ? 'kf-guid' : 'unknown')) : null,
+    hasUsername: Boolean(process.env.USERNAME),
+    hasPassword: Boolean(process.env.PASSWORD),
+    hasMemorableWord: Boolean(process.env.MEMORABLE_WORD),
+    timeoutMs: config.timeoutMs,
+    mongoEnabled: Boolean(config.mongoUri && config.mongoDbName),
+  });
 });
 
 app.get('/', (_req, res) => {

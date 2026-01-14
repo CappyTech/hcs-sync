@@ -9,7 +9,23 @@ let lockUntil = 0;
 // If `config.token` is provided, returns it.
 // Otherwise, uses username/password to get a temp token, then upgrades with memorable word chars if provided.
 export async function getSessionToken() {
-  if (config.token) return config.token;
+  // Prefer explicit env tokens and handle blanks clearly
+  const envTokenPresent = Object.prototype.hasOwnProperty.call(process.env, 'SESSION_TOKEN')
+    || Object.prototype.hasOwnProperty.call(process.env, 'KASHFLOW_SESSION_TOKEN');
+  const envTokenValue = process.env.SESSION_TOKEN ?? process.env.KASHFLOW_SESSION_TOKEN;
+  if (envTokenPresent) {
+    if (!envTokenValue || String(envTokenValue).trim().length === 0) {
+      logger.warn({ mode: 'env-session-token', present: true, blank: true }, 'SESSION_TOKEN/KASHFLOW_SESSION_TOKEN is set but blank');
+      throw new Error('SESSION_TOKEN/KASHFLOW_SESSION_TOKEN is set but blank; either remove it or provide a valid token');
+    }
+    try { logger.info({ mode: 'env-session-token', present: true }, 'Auth using provided session token'); } catch {}
+    return envTokenValue;
+  }
+  // Fallback to config token when not explicitly provided via env
+  if (config.token) {
+    try { logger.info({ mode: 'config-session-token', present: true }, 'Auth using provided session token'); } catch {}
+    return config.token;
+  }
   if (cachedToken) return cachedToken;
   if (Date.now() < lockUntil) {
     throw new Error(`Auth temporarily disabled until ${new Date(lockUntil).toLocaleString()} due to previous lockout`);
