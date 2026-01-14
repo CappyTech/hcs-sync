@@ -10,18 +10,18 @@ async function run() {
   const heartbeat = setInterval(() => {
     logger.info({ stage, uptimeMs: Date.now() - start }, 'Sync heartbeat');
   }, 5000);
+  try {
+    const kf = await createClient();
+    logger.info('Starting KashFlow admin sync (Node.js)');
 
-  const kf = await createClient();
-  logger.info('Starting KashFlow admin sync (Node.js)');
+    progress.setStage('fetch:lists');
+    const [customers, suppliers, projects, nominals] = await Promise.all([
+      kf.customers.listAll({ perpage: 200 }),
+      kf.suppliers.listAll({ perpage: 200 }),
+      kf.projects.listAll({ perpage: 200 }),
+      kf.nominals.list(),
 
-  progress.setStage('fetch:lists');
-  const [customers, suppliers, projects, nominals] = await Promise.all([
-    kf.customers.listAll({ perpage: 200 }),
-    kf.suppliers.listAll({ perpage: 200 }),
-    kf.projects.listAll({ perpage: 200 }),
-    kf.nominals.list(),
-
-  ]);
+    ]);
 
   progress.setItemTotal('customers', (customers || []).length);
   progress.setItemDone('customers', (customers || []).length);
@@ -155,28 +155,30 @@ async function run() {
     }
   );
 
-  const invoicesTotal = invoiceCounts.reduce((a, b) => a + (Number(b) || 0), 0);
-  const quotesTotal = quoteCounts.reduce((a, b) => a + (Number(b) || 0), 0);
-  const purchasesTotal = purchaseCounts.reduce((a, b) => a + (Number(b) || 0), 0);
-  logger.info({ invoicesCount: invoicesTotal }, 'Fetched invoices (per customer)');
-  logger.info({ quotesCount: quotesTotal }, 'Fetched quotes (per customer)');
-  logger.info({ purchasesCount: purchasesTotal }, 'Fetched purchases (per supplier)');
+    const invoicesTotal = invoiceCounts.reduce((a, b) => a + (Number(b) || 0), 0);
+    const quotesTotal = quoteCounts.reduce((a, b) => a + (Number(b) || 0), 0);
+    const purchasesTotal = purchaseCounts.reduce((a, b) => a + (Number(b) || 0), 0);
+    logger.info({ invoicesCount: invoicesTotal }, 'Fetched invoices (per customer)');
+    logger.info({ quotesCount: quotesTotal }, 'Fetched quotes (per customer)');
+    logger.info({ purchasesCount: purchasesTotal }, 'Fetched purchases (per supplier)');
 
-  const counts = {
-    customers: customers?.length || 0,
-    suppliers: suppliers?.length || 0,
-    projects: projects?.length || 0,
-    nominals: nominals?.length || 0,
-    invoices: invoicesTotal,
-    quotes: quotesTotal,
-    purchases: purchasesTotal,
-  };
-  stage = 'finalising';
-  logger.info({ counts, durationMs: Date.now() - start }, 'KashFlow admin sync (Node.js) finished');
-  clearInterval(heartbeat);
-  // Provide previous counts hook for history delta tracking (if available via env or progress)
-  const previousCounts = null; // placeholder for future persisted state
-  return { counts, previousCounts };
+    const counts = {
+      customers: customers?.length || 0,
+      suppliers: suppliers?.length || 0,
+      projects: projects?.length || 0,
+      nominals: nominals?.length || 0,
+      invoices: invoicesTotal,
+      quotes: quotesTotal,
+      purchases: purchasesTotal,
+    };
+    stage = 'finalising';
+    logger.info({ counts, durationMs: Date.now() - start }, 'KashFlow admin sync (Node.js) finished');
+    // Provide previous counts hook for history delta tracking (if available via env or progress)
+    const previousCounts = null; // placeholder for future persisted state
+    return { counts, previousCounts };
+  } finally {
+    clearInterval(heartbeat);
+  }
 }
 
 if (process.argv[1] && process.argv[1].endsWith('run.js')) {
