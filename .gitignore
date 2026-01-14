@@ -6,3 +6,4 @@ output.log
 dist/
 compose.env
 /dist
+data/runs.json
