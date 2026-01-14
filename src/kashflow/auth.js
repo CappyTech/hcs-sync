@@ -48,10 +48,11 @@ export async function getSessionToken() {
   // Step 1: request temporary token (KashFlow expects capitalized keys)
   let step1;
   try {
+    // Some deployments expect UserName with capital N; send both for compatibility
     step1 = await http.post('/sessiontoken', {
-      Username: username,
+      UserName: username,
       Password: password,
-      KeepUserLoggedIn: false,
+      KeepUserLoggedIn: Boolean(config.keepUserLoggedIn),
     });
   } catch (err) {
     const errData = err.response?.data;
@@ -95,7 +96,7 @@ export async function getSessionToken() {
     const step2Body = {
       TemporaryToken: tempToken,
       MemorableWordList: list,
-      KeepUserLoggedIn: false,
+      KeepUserLoggedIn: Boolean(config.keepUserLoggedIn),
     };
     const step2 = await http.put('/sessiontoken', step2Body);
     const sessionToken = step2.data?.SessionToken || step2.data?.KFSessionToken || step2.data?.token || step2.data?.Token;
