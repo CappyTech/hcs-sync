@@ -2401,10 +2401,6 @@ input:checked + .toggle-bg {
   margin-inline-end: 0.75rem;
 }
 
-.me-4 {
-  margin-inline-end: 1rem;
-}
-
 .ml-2 {
   margin-left: 0.5rem;
 }
@@ -4669,10 +4665,6 @@ input:checked + .toggle-bg {
 }
 
 @media (min-width: 640px) {
-  .sm\:flex {
-    display: flex;
-  }
-
   .sm\:rounded-lg {
     border-radius: 0.5rem;
   }
@@ -4689,10 +4681,6 @@ input:checked + .toggle-bg {
 @media (min-width: 768px) {
   .md\:inset-0 {
     inset: 0px;
-  }
-
-  .md\:me-6 {
-    margin-inline-end: 1.5rem;
   }
 
   .md\:mt-0 {
