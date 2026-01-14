@@ -14,15 +14,15 @@ export async function getSessionToken() {
     || Object.prototype.hasOwnProperty.call(process.env, 'KASHFLOW_SESSION_TOKEN');
   const envTokenValue = process.env.SESSION_TOKEN ?? process.env.KASHFLOW_SESSION_TOKEN;
   if (envTokenPresent) {
-    if (!envTokenValue || String(envTokenValue).trim().length === 0) {
-      logger.warn({ mode: 'env-session-token', present: true, blank: true }, 'SESSION_TOKEN/KASHFLOW_SESSION_TOKEN is set but blank');
-      throw new Error('SESSION_TOKEN/KASHFLOW_SESSION_TOKEN is set but blank; either remove it or provide a valid token');
+    if (envTokenValue && String(envTokenValue).trim().length > 0) {
+      try { logger.info({ mode: 'env-session-token', present: true }, 'Auth using provided session token'); } catch {}
+      return envTokenValue;
     }
-    try { logger.info({ mode: 'env-session-token', present: true }, 'Auth using provided session token'); } catch {}
-    return envTokenValue;
+    // Blank env token: prefer falling back to username/password (or config token) rather than failing
+    logger.warn({ mode: 'env-session-token', present: true, blank: true }, 'SESSION_TOKEN/KASHFLOW_SESSION_TOKEN is blank; falling back to username/password flow');
   }
   // Fallback to config token when not explicitly provided via env
-  if (config.token) {
+  if (config.token && String(config.token).trim().length > 0) {
     try { logger.info({ mode: 'config-session-token', present: true }, 'Auth using provided session token'); } catch {}
     return config.token;
   }
