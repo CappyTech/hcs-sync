@@ -18,8 +18,64 @@
     <div class="p-4 bg-white border border-gray-200 rounded-lg shadow sm:p-6 dark:bg-gray-800 dark:border-gray-700">
       <span class="text-sm font-medium text-gray-500 dark:text-gray-400">Actions</span>
       <div class="mt-2">
-        <button data-modal-target="run-modal" data-modal-toggle="run-modal" class="text-white bg-blue-700 hover:bg-blue-800 focus:ring-4 focus:outline-none focus:ring-blue-300 font-medium rounded-lg text-sm px-5 py-2.5 text-center dark:bg-blue-600 dark:hover:bg-blue-700 dark:focus:ring-blue-800" <%= isRunning ? 'disabled' : '' %>>Run Sync</button>
+        <button data-modal-target="run-modal" data-modal-toggle="run-modal" class="text-white bg-blue-700 hover:bg-blue-800 focus:ring-4 focus:outline-none focus:ring-blue-300 font-medium rounded-lg text-sm px-5 py-2.5 text-center dark:bg-blue-600 dark:hover:bg-blue-700 dark:focus:ring-blue-800" <%= (isRunning || cronConfig?.enabled) ? 'disabled' : '' %>>Run Sync</button>
+        <% if (cronConfig?.enabled) { %>
+          <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">Manual runs are disabled while cron is enabled. Manage this in <a class="text-blue-600 hover:underline" href="/settings">Settings</a>.</p>
+        <% } %>
       </div>
+    </div>
+  </div>
+</section>
+
+<section class="mb-6">
+  <div class="p-4 bg-white border border-gray-200 rounded-lg shadow sm:p-6 dark:bg-gray-800 dark:border-gray-700">
+    <div class="flex items-center justify-between">
+      <span class="text-sm font-medium text-gray-500 dark:text-gray-400">Cron</span>
+      <% const cronEnabled = Boolean(cronConfig?.enabled); %>
+      <span class="px-2 py-1 rounded text-xs <%= cronEnabled ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800' %>"><%= cronEnabled ? 'Enabled' : 'Disabled' %></span>
+    </div>
+
+    <div class="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+      <div>
+        <div class="text-xs text-gray-500 dark:text-gray-400">Schedule</div>
+        <div class="mt-1 font-mono text-xs text-gray-900 dark:text-white"><%= cronConfig?.schedule || '—' %></div>
+      </div>
+      <div>
+        <div class="text-xs text-gray-500 dark:text-gray-400">Timezone</div>
+        <div class="mt-1 font-mono text-xs text-gray-900 dark:text-white"><%= cronConfig?.timezone || '—' %></div>
+      </div>
+      <div>
+        <div class="text-xs text-gray-500 dark:text-gray-400">Next Run</div>
+        <div class="mt-1 text-gray-900 dark:text-white">
+          <% if (cronEnabled && cronNextRunAt) { %>
+            <%= new Date(cronNextRunAt).toLocaleString() %>
+          <% } else { %>
+            —
+          <% } %>
+        </div>
+      </div>
+      <div>
+        <div class="text-xs text-gray-500 dark:text-gray-400">Last Cron Run</div>
+        <div class="mt-1 text-gray-900 dark:text-white">
+          <% const lastCronFinished = cronHealth?.state?.lastRunFinishedAt || null; %>
+          <% if (lastCronFinished) { %>
+            <%= new Date(lastCronFinished).toLocaleString() %>
+          <% } else { %>
+            —
+          <% } %>
+        </div>
+      </div>
+    </div>
+
+    <% const cronStatus = cronHealth?.status || 'unknown'; %>
+    <% const cronErr = cronHealth?.state?.lastRunError || null; %>
+    <div class="mt-3 text-xs text-gray-500 dark:text-gray-400">
+      Health: <span class="font-mono"><%= cronStatus %></span>
+      <% if (cronErr) { %>
+        <span class="ml-2 text-red-700 dark:text-red-400">— <%= cronErr %></span>
+      <% } %>
+      <span class="ml-2">(<span class="font-mono"><%= cronConfig?.source || 'env' %></span>)</span>
+      <a class="ml-2 text-blue-600 hover:underline" href="/settings">Edit</a>
     </div>
   </div>
 </section>

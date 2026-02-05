@@ -7,7 +7,11 @@ import progress from './progress.js';
 import runStore from './runStore.js';
 import { getMongoDb, isMongoEnabled } from '../db/mongo.js';
 import config from '../config.js';
-import { getCronHealth, startCron } from './cron.js';
+import { getCronHealth, startCron, stopCron } from './cron.js';
+import settingsStore from './settingsStore.js';
+import { isMongooseEnabled } from '../db/mongoose.js';
+import cron from 'node-cron';
+import cronParser from 'cron-parser';
 
 const app = express();
 const port = Number(process.env.PORT || 3000);
@@ -18,6 +22,89 @@ let lastCounts = null;
 let lastError = null;
 const logs = [];
 let currentRunId = null;
+
+let cachedSettings = null;
+let cronConfig = {
+  enabled: config.cronEnabled,
+  schedule: config.cronSchedule,
+  timezone: config.cronTimezone,
+  healthStaleMs: config.cronHealthStaleMs,
+  source: 'env',
+};
+
+async function loadSettingsIntoCache() {
+  if (!isMongooseEnabled()) {
+    cachedSettings = null;
+    cronConfig = { ...cronConfig, source: 'env' };
+    return;
+  }
+
+  try {
+    cachedSettings = await settingsStore.getSettings();
+  } catch {
+    cachedSettings = null;
+  }
+
+  const cronFromDb = cachedSettings?.cron || null;
+  if (cronFromDb) {
+    cronConfig = {
+      enabled: Boolean(cronFromDb.enabled),
+      schedule: String(cronFromDb.schedule || config.cronSchedule || '0 * * * *'),
+      timezone: String(cronFromDb.timezone || ''),
+      healthStaleMs: Number(cronFromDb.healthStaleMs || 0),
+      source: 'db',
+    };
+  } else {
+    cronConfig = {
+      enabled: config.cronEnabled,
+      schedule: config.cronSchedule,
+      timezone: config.cronTimezone,
+      healthStaleMs: config.cronHealthStaleMs,
+      source: 'env',
+    };
+  }
+}
+
+function getEffectiveCronConfig() {
+  return { ...cronConfig };
+}
+
+function applyCronConfig() {
+  const eff = getEffectiveCronConfig();
+  stopCron();
+  if (!eff.enabled) return;
+  startCron({
+    enabled: true,
+    schedule: eff.schedule,
+    timezone: eff.timezone,
+    staleMs: eff.healthStaleMs,
+    triggerSync,
+  });
+}
+
+function computeNextCronRunAtMs({ enabled, schedule, timezone }) {
+  if (!enabled) return null;
+  if (!schedule) return null;
+
+  try {
+    const parseExpression = cronParser?.parseExpression;
+    if (typeof parseExpression !== 'function') return null;
+    const expr = parseExpression(schedule, timezone ? { tz: timezone } : undefined);
+    const next = expr.next();
+    const nextDate = next?.toDate?.() || next;
+    const nextMs = nextDate instanceof Date ? nextDate.getTime() : null;
+    return Number.isFinite(nextMs) ? nextMs : null;
+  } catch {
+    return null;
+  }
+}
+
+// Make cron config available to templates.
+app.use((req, res, next) => {
+  res.locals.cronConfig = getEffectiveCronConfig();
+  res.locals.query = req.query || {};
+  next();
+});
 
 async function triggerSync({ requestedBy }) {
   if (isRunning) {
@@ -133,25 +220,27 @@ app.use('/static', express.static(path.join(__dirname, 'public'), {
 app.use('/static/vendor/flowbite', express.static(path.join(__dirname, '../../node_modules/flowbite/dist')));
 
 app.get('/health', (_req, res) => {
-  const cron = getCronHealth({
-    enabled: config.cronEnabled,
-    schedule: config.cronSchedule,
-    timezone: config.cronTimezone,
-    staleMs: config.cronHealthStaleMs,
+  const eff = getEffectiveCronConfig();
+  const cronHealth = getCronHealth({
+    enabled: eff.enabled,
+    schedule: eff.schedule,
+    timezone: eff.timezone,
+    staleMs: eff.healthStaleMs,
   });
-  res.json({ status: 'ok', isRunning, lastRun, cron });
+  res.json({ status: 'ok', isRunning, lastRun, cron: cronHealth });
 });
 
 app.get('/cron/health', (_req, res) => {
-  const cron = getCronHealth({
-    enabled: config.cronEnabled,
-    schedule: config.cronSchedule,
-    timezone: config.cronTimezone,
-    staleMs: config.cronHealthStaleMs,
+  const eff = getEffectiveCronConfig();
+  const cronHealth = getCronHealth({
+    enabled: eff.enabled,
+    schedule: eff.schedule,
+    timezone: eff.timezone,
+    staleMs: eff.healthStaleMs,
   });
 
-  const isOk = cron.status === 'ok' || cron.status === 'disabled';
-  res.status(isOk ? 200 : 503).json(cron);
+  const isOk = cronHealth.status === 'ok' || cronHealth.status === 'disabled';
+  res.status(isOk ? 200 : 503).json(cronHealth);
 });
 // Simple logs stub (extend later)
 app.get('/logs', (_req, res) => {
@@ -166,11 +255,78 @@ app.get('/status', (_req, res) => {
 });
 
 app.get('/', (_req, res) => {
-  res.render('layout', { title: 'HCS Sync', content: 'pages/index', isRunning, lastRun, counts: lastCounts, lastError });
+  const eff = getEffectiveCronConfig();
+  const cronHealth = getCronHealth({
+    enabled: eff.enabled,
+    schedule: eff.schedule,
+    timezone: eff.timezone,
+    staleMs: eff.healthStaleMs,
+  });
+  const cronNextRunAt = computeNextCronRunAtMs(eff);
+
+  res.render('layout', {
+    title: 'HCS Sync',
+    content: 'pages/index',
+    isRunning,
+    lastRun,
+    counts: lastCounts,
+    lastError,
+    cronHealth,
+    cronNextRunAt,
+  });
+});
+
+app.get('/settings', async (req, res) => {
+  const eff = getEffectiveCronConfig();
+  const cronHealth = getCronHealth({
+    enabled: eff.enabled,
+    schedule: eff.schedule,
+    timezone: eff.timezone,
+    staleMs: eff.healthStaleMs,
+  });
+  res.render('layout', {
+    title: 'Settings',
+    content: 'pages/settings',
+    isRunning,
+    lastRun,
+    counts: lastCounts,
+    lastError,
+    cronConfig: eff,
+    cronHealth,
+    settingsEditable: isMongooseEnabled(),
+    query: req.query || {},
+  });
+});
+
+app.post('/settings/cron', async (req, res) => {
+  if (!isMongooseEnabled()) {
+    return res.redirect('/settings?error=' + encodeURIComponent('MongoDB is not configured; cannot save settings.'));
+  }
+
+  const enabled = req.body?.enabled === '1' || req.body?.enabled === 'on' || req.body?.enabled === 'true';
+  const schedule = String(req.body?.schedule || '').trim() || '0 * * * *';
+  const timezone = String(req.body?.timezone || '').trim();
+  const healthStaleMs = Number(req.body?.healthStaleMs || 0);
+
+  if (!cron.validate(schedule)) {
+    return res.redirect('/settings?error=' + encodeURIComponent(`Invalid schedule: ${schedule}`));
+  }
+  if (healthStaleMs < 0 || Number.isNaN(healthStaleMs)) {
+    return res.redirect('/settings?error=' + encodeURIComponent('Health stale window must be a non-negative number.'));
+  }
+
+  try {
+    await settingsStore.upsertCronSettings({ enabled, schedule, timezone, healthStaleMs });
+    await loadSettingsIntoCache();
+    applyCronConfig();
+    return res.redirect('/settings?ok=1');
+  } catch (err) {
+    return res.redirect('/settings?error=' + encodeURIComponent(err?.message || 'Failed to save settings'));
+  }
 });
 
 app.post('/run', async (_req, res) => {
-  if (config.cronEnabled) {
+  if (getEffectiveCronConfig().enabled) {
     return res.status(409).send('Manual runs are disabled when CRON is enabled.');
   }
 
@@ -305,15 +461,14 @@ app.post('/pull', (req, res) => {
 app.listen(port, () => {
   logger.info({ port }, 'Server listening');
 
-  try {
-    startCron({
-      enabled: config.cronEnabled,
-      schedule: config.cronSchedule,
-      timezone: config.cronTimezone,
-      staleMs: config.cronHealthStaleMs,
-      triggerSync,
-    });
-  } catch (err) {
-    logger.error({ err: { message: err?.message } }, 'Failed to start cron scheduler');
-  }
+  // Load settings and apply cron config after the server is up.
+  (async () => {
+    try {
+      await loadSettingsIntoCache();
+      applyCronConfig();
+      logger.info({ cron: getEffectiveCronConfig() }, 'Effective cron config loaded');
+    } catch (err) {
+      logger.error({ err: { message: err?.message } }, 'Failed to load settings / start cron scheduler');
+    }
+  })();
 });

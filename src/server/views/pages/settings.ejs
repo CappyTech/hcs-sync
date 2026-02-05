@@ -1,0 +1,58 @@
+<h1 class="text-2xl font-semibold mb-2">Settings</h1>
+<p class="text-sm text-gray-500 dark:text-gray-400 mb-6">Configure scheduler settings for this container.</p>
+
+<% if (query?.ok) { %>
+  <div class="p-4 mb-4 text-sm text-green-800 rounded-lg bg-green-50 dark:bg-gray-800 dark:text-green-400" role="alert">
+    Settings saved.
+  </div>
+<% } %>
+
+<% if (query?.error) { %>
+  <div class="p-4 mb-4 text-sm text-red-800 rounded-lg bg-red-50 dark:bg-gray-800 dark:text-red-400" role="alert">
+    <span class="font-medium">Error:</span> <%= query.error %>
+  </div>
+<% } %>
+
+<section class="mb-8">
+  <h2 class="text-xl font-semibold mb-2">Cron</h2>
+  <p class="text-sm text-gray-500 dark:text-gray-400 mb-4">When enabled, manual runs are disabled and sync runs on the schedule.</p>
+
+  <% if (!settingsEditable) { %>
+    <div class="p-4 mb-4 text-sm text-amber-800 rounded-lg bg-amber-50 dark:bg-gray-800 dark:text-amber-400" role="alert">
+      MongoDB is not configured, so settings cannot be saved. Configure MongoDB to manage cron from the UI.
+    </div>
+  <% } %>
+
+  <form method="post" action="/settings/cron" class="space-y-4">
+    <div class="flex items-center">
+      <input id="cronEnabled" name="enabled" type="checkbox" value="1" class="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500" <%= cronConfig?.enabled ? 'checked' : '' %> <%= settingsEditable ? '' : 'disabled' %> />
+      <label for="cronEnabled" class="ml-2 text-sm font-medium text-gray-900 dark:text-gray-100">Enable cron</label>
+    </div>
+
+    <div>
+      <label class="block mb-1 text-sm font-medium text-gray-900 dark:text-gray-100" for="cronSchedule">Schedule</label>
+      <input id="cronSchedule" name="schedule" type="text" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:text-white" value="<%= cronConfig?.schedule || '' %>" placeholder="0 * * * *" <%= settingsEditable ? '' : 'disabled' %> />
+      <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">5-field cron expression (min hour day month day-of-week).</p>
+    </div>
+
+    <div>
+      <label class="block mb-1 text-sm font-medium text-gray-900 dark:text-gray-100" for="cronTimezone">Timezone (optional)</label>
+      <input id="cronTimezone" name="timezone" type="text" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:text-white" value="<%= cronConfig?.timezone || '' %>" placeholder="Europe/London" <%= settingsEditable ? '' : 'disabled' %> />
+    </div>
+
+    <div>
+      <label class="block mb-1 text-sm font-medium text-gray-900 dark:text-gray-100" for="cronStale">Health stale window (ms)</label>
+      <input id="cronStale" name="healthStaleMs" type="number" min="0" step="1000" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:text-white" value="<%= typeof cronConfig?.healthStaleMs === 'number' ? cronConfig.healthStaleMs : 0 %>" <%= settingsEditable ? '' : 'disabled' %> />
+      <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">If &gt; 0, <span class="font-mono">/cron/health</span> becomes unhealthy when no cron activity occurs within this window.</p>
+    </div>
+
+    <button type="submit" class="text-white bg-blue-700 hover:bg-blue-800 focus:ring-4 focus:outline-none focus:ring-blue-300 font-medium rounded-lg text-sm px-5 py-2.5 text-center dark:bg-blue-600 dark:hover:bg-blue-700 dark:focus:ring-blue-800" <%= settingsEditable ? '' : 'disabled' %>>Save</button>
+  </form>
+</section>
+
+<section class="mb-8">
+  <h2 class="text-xl font-semibold mb-2">Cron Health</h2>
+  <div class="p-4 bg-white border border-gray-200 rounded-lg shadow dark:bg-gray-800 dark:border-gray-700">
+    <pre class="overflow-auto text-xs bg-gray-50 dark:bg-gray-900 p-3 rounded"><%= JSON.stringify(cronHealth, null, 2) %></pre>
+  </div>
+</section>

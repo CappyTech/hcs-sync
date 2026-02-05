@@ -16,7 +16,7 @@ const config = {
 
   cronEnabled: String(process.env.CRON_ENABLED || '').toLowerCase() === 'true' || process.env.CRON_ENABLED === '1',
   cronSchedule: process.env.CRON_SCHEDULE || '0 * * * *',
-  cronTimezone: process.env.CRON_TIMEZONE || '',
+  cronTimezone: process.env.CRON_TIMEZONE || 'Europe/London',
   cronHealthStaleMs: Number(process.env.CRON_HEALTH_STALE_MS || 0),
 };
 
