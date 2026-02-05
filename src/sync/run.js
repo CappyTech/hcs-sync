@@ -27,6 +27,14 @@ function createPool(limit, label, handler, onProgress) {
   };
 }
 
+function buildUpsertUpdate({ keyField, keyValue, payload, syncedAt, runId }) {
+  const $set = { [keyField]: keyValue, data: payload, syncedAt };
+  const $setOnInsert = runId
+    ? { createdAt: syncedAt, createdByRunId: runId }
+    : { createdAt: syncedAt };
+  return { $set, $setOnInsert };
+}
+
 function createBulkUpserter(collection, batchSize = 250) {
   const options = typeof batchSize === 'object' && batchSize !== null ? batchSize : null;
   const resolvedBatchSize = options ? Number(options.batchSize || 250) : Number(batchSize || 250);
@@ -148,7 +156,8 @@ function addMongoStats(target, stats) {
   return target;
 }
 
-async function run() {
+async function run(options = {}) {
+  const runId = options?.runId ? String(options.runId) : null;
   const start = Date.now();
   let stage = 'initialising';
   const mongoSummary = {};
@@ -229,7 +238,7 @@ async function run() {
         await upsertCustomers.push({
           updateOne: {
             filter: { code },
-            update: { $set: { code, data: c, syncedAt: now } },
+            update: buildUpsertUpdate({ keyField: 'code', keyValue: code, payload: c, syncedAt: now, runId }),
             upsert: true,
           }
         });
@@ -253,7 +262,7 @@ async function run() {
       await upsertSuppliers.push({
         updateOne: {
           filter: { code },
-          update: { $set: { code, data: s, syncedAt: now } },
+          update: buildUpsertUpdate({ keyField: 'code', keyValue: code, payload: s, syncedAt: now, runId }),
           upsert: true,
         }
       });
@@ -277,7 +286,7 @@ async function run() {
       await upsertProjects.push({
         updateOne: {
           filter: { number },
-          update: { $set: { number, data: p, syncedAt: now } },
+          update: buildUpsertUpdate({ keyField: 'number', keyValue: number, payload: p, syncedAt: now, runId }),
           upsert: true,
         }
       });
@@ -301,7 +310,7 @@ async function run() {
         await upsertNominals.push({
           updateOne: {
             filter: { code },
-            update: { $set: { code, data: n, syncedAt: now } },
+            update: buildUpsertUpdate({ keyField: 'code', keyValue: code, payload: n, syncedAt: now, runId }),
             upsert: true,
           }
         });
@@ -331,7 +340,7 @@ async function run() {
         await upserter.push({
           updateOne: {
             filter: { code },
-            update: { $set: { code, data: full, syncedAt: runNow } },
+            update: buildUpsertUpdate({ keyField: 'code', keyValue: code, payload: full, syncedAt: runNow, runId }),
             upsert: true,
           }
         });
@@ -374,7 +383,7 @@ async function run() {
         await upserter.push({
           updateOne: {
             filter: { code },
-            update: { $set: { code, data: full, syncedAt: runNow } },
+            update: buildUpsertUpdate({ keyField: 'code', keyValue: code, payload: full, syncedAt: runNow, runId }),
             upsert: true,
           }
         });
@@ -431,7 +440,7 @@ async function run() {
           await invoicesUpserter.push({
             updateOne: {
               filter: { number },
-              update: { $set: { number, data: item, syncedAt: runNow } },
+              update: buildUpsertUpdate({ keyField: 'number', keyValue: number, payload: item, syncedAt: runNow, runId }),
               upsert: true,
             }
           });
@@ -475,7 +484,7 @@ async function run() {
           await quotesUpserter.push({
             updateOne: {
               filter: { number },
-              update: { $set: { number, data: item, syncedAt: runNow } },
+              update: buildUpsertUpdate({ keyField: 'number', keyValue: number, payload: item, syncedAt: runNow, runId }),
               upsert: true,
             }
           });
@@ -519,7 +528,7 @@ async function run() {
           await purchasesUpserter.push({
             updateOne: {
               filter: { number },
-              update: { $set: { number, data: item, syncedAt: runNow } },
+              update: buildUpsertUpdate({ keyField: 'number', keyValue: number, payload: item, syncedAt: runNow, runId }),
               upsert: true,
             }
           });

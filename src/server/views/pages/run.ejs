@@ -38,8 +38,11 @@
             <th scope="row" class="px-6 py-4 font-medium text-gray-900 whitespace-nowrap dark:text-white"><%= name %></th>
             <td class="px-6 py-4">
               <% const hasUpsertDocs = (run?.summary?.mongoUpserts?.[name]?.filters || []).length > 0; %>
-              <% if ((s?.upserted ?? 0) > 0 && hasUpsertDocs) { %>
+              <% if ((s?.upserted ?? 0) > 0) { %>
                 <a class="text-blue-600 hover:underline" href="/history/<%= run.id %>?mongoCollection=<%= encodeURIComponent(name) %>&mongoType=upserted#mongo-upserted"><%= s?.upserted ?? 0 %></a>
+                <% if (!hasUpsertDocs) { %>
+                  <span class="ml-2 text-xs text-gray-500 dark:text-gray-400">(drilldown may require a newer run)</span>
+                <% } %>
               <% } else { %>
                 <%= s?.upserted ?? 0 %>
               <% } %>
@@ -57,12 +60,16 @@
   <% if (mongoCollection && mongoType === 'upserted') { %>
     <div id="mongo-upserted" class="mb-6 scroll-mt-24">
       <h3 class="text-lg font-semibold mb-2">Upserted Docs: <span class="font-mono text-sm"><%= mongoCollection %></span></h3>
+      <% if (mongoDocsSource) { %>
+        <p class="text-xs text-gray-500 dark:text-gray-400 mb-2">Source: <span class="font-mono"><%= mongoDocsSource %></span></p>
+      <% } %>
       <% if (mongoDocsError) { %>
         <p class="text-sm text-red-700 dark:text-red-400"><%= mongoDocsError %></p>
       <% } else if (!mongoDocs) { %>
         <p class="text-sm text-gray-500 dark:text-gray-400">Loading…</p>
       <% } else if (mongoDocs.length === 0) { %>
         <p class="text-sm text-gray-500 dark:text-gray-400">No documents found for this run.</p>
+        <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">This view shows docs captured as inserted for the run (via bulk upsert metadata or per-run insert tags).</p>
       <% } else { %>
         <div class="space-y-3">
           <% const keyFor = (doc) => {

@@ -1,6 +1,6 @@
 {
   "name": "hcs-sync",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Backend-only KashFlow admin sync in Node.js",
   "type": "module",
   "private": true,
@@ -30,6 +30,7 @@
     "express": "^4.19.2",
     "flowbite": "^4.0.1",
     "@tailwindcss/typography": "^0.5.14",
+    "node-cron": "^3.0.3",
     "mongoose": "^8.18.0",
     "pino": "^9.8.0",
     "pino-pretty": "^13.1.1"

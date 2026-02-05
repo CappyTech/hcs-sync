@@ -13,6 +13,11 @@ const config = {
   mongoUsername: process.env.MONGO_USERNAME || process.env.MONGO_USER || '',
   mongoPassword: process.env.MONGO_PASSWORD || process.env.MONGO_PASS || '',
   mongoAuthSource: process.env.MONGO_AUTH_SOURCE || process.env.MONGO_AUTHSOURCE || '',
+
+  cronEnabled: String(process.env.CRON_ENABLED || '').toLowerCase() === 'true' || process.env.CRON_ENABLED === '1',
+  cronSchedule: process.env.CRON_SCHEDULE || '0 * * * *',
+  cronTimezone: process.env.CRON_TIMEZONE || '',
+  cronHealthStaleMs: Number(process.env.CRON_HEALTH_STALE_MS || 0),
 };
 
 export default config;
