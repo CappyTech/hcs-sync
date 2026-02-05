@@ -4,7 +4,8 @@ import { fileURLToPath } from 'url';
 import logger from '../util/logger.js';
 import runSync from '../sync/run.js';
 import progress from './progress.js';
-import changeLog from './changeLog.js';
+import runStore from './runStore.js';
+import { getMongoDb, isMongoEnabled } from '../db/mongo.js';
 
 const app = express();
 const port = Number(process.env.PORT || 3000);
@@ -58,10 +59,31 @@ app.post('/run', async (_req, res) => {
   if (isRunning) {
     return res.status(409).send('Sync already running');
   }
+
+  // Capture “before” counts at the moment the run starts so history diffs
+  // don’t show `before: null` on every run.
+  let countsBeforeRun = lastCounts ? { ...lastCounts } : null;
+  if (!countsBeforeRun) {
+    try {
+      const runs = await runStore.listRuns({ limit: 50 });
+      const prevFinished = runs.find((r) => r?.status === 'finished' && r?.summary?.counts);
+      countsBeforeRun = prevFinished?.summary?.counts ? { ...prevFinished.summary.counts } : null;
+    } catch {
+      countsBeforeRun = null;
+    }
+  }
+
   isRunning = true;
   lastError = null;
   progress.start();
-  currentRunId = changeLog.beginRun({ requestedBy: 'dashboard' });
+  try {
+    currentRunId = await runStore.beginRun({ requestedBy: 'dashboard' });
+  } catch (err) {
+    isRunning = false;
+    lastError = err?.message || 'Failed to start run';
+    progress.fail(lastError);
+    return res.status(500).send(lastError);
+  }
   logs.unshift({ time: Date.now(), level: 'info', message: 'Sync started' });
   runSync()
     .then((result) => {
@@ -72,7 +94,7 @@ app.post('/run', async (_req, res) => {
       progress.finish(lastCounts);
       // Record count deltas vs previous counts as informational changes
       try {
-        const prev = result?.previousCounts || null;
+        const prev = result?.previousCounts ?? countsBeforeRun;
         const curr = lastCounts || {};
         const resources = ['customers','suppliers','projects','nominals','invoices','quotes','purchases'];
         resources.forEach((name) => {
@@ -80,7 +102,7 @@ app.post('/run', async (_req, res) => {
           const after = curr[name] ?? null;
           if (before === null && after === null) return;
           if (before === after) return;
-          changeLog.recordChange(currentRunId, {
+          runStore.recordChange(currentRunId, {
             entityType: 'metric',
             entityId: name,
             action: 'info',
@@ -92,15 +114,26 @@ app.post('/run', async (_req, res) => {
           });
         });
       } catch {}
-      changeLog.finishRun(currentRunId, { counts: lastCounts, error: null });
+      runStore.finishRun(currentRunId, {
+        counts: lastCounts,
+        mongo: result?.mongo || null,
+        mongoUpserts: result?.mongoUpserts || null,
+        error: null,
+      });
       logs.unshift({ time: Date.now(), level: 'success', message: 'Sync completed successfully', meta: { counts: lastCounts } });
     })
     .catch((err) => {
       logger.error({ status: err.response?.status, message: err.message, data: err.response?.data }, 'Sync failed via dashboard');
       isRunning = false;
-      lastError = err?.response?.data?.Message || err?.message || 'Sync failed';
+      const apiError = err?.response?.data?.Error || '';
+      const apiMessage = err?.response?.data?.Message || '';
+      if (apiError === 'PasswordExpired') {
+        lastError = `${apiMessage || 'KashFlow auth failed'} (Error: PasswordExpired). Try setting SESSION_TOKEN/KASHFLOW_SESSION_TOKEN to a valid token to bypass password login, or reset the KashFlow password for this user.`;
+      } else {
+        lastError = apiMessage || err?.message || 'Sync failed';
+      }
       progress.fail(lastError);
-      changeLog.finishRun(currentRunId, { error: lastError });
+      runStore.finishRun(currentRunId, { error: lastError });
       logs.unshift({ time: Date.now(), level: 'error', message: 'Sync failed', meta: { error: err?.message } });
     });
   res.redirect('/');
@@ -108,24 +141,84 @@ app.post('/run', async (_req, res) => {
 
 // History pages
 app.get('/history', (_req, res) => {
-  const runs = changeLog.listRuns();
-  res.render('layout', { title: 'Sync History', content: 'pages/history', runs, isRunning, lastRun, counts: lastCounts, lastError });
+  runStore
+    .listRuns()
+    .then((runs) => {
+      res.render('layout', { title: 'Sync History', content: 'pages/history', runs, isRunning, lastRun, counts: lastCounts, lastError });
+    })
+    .catch((err) => {
+      const msg = err?.message || 'Failed to load history';
+      res.status(500).send(msg);
+    });
 });
 app.get('/history/:id', (req, res) => {
-  const run = changeLog.getRun(req.params.id);
-  if (!run) return res.status(404).send('Run not found');
-  res.render('layout', { title: 'Run Details', content: 'pages/run', run, isRunning, lastRun, counts: lastCounts, lastError });
+  runStore
+    .getRun(req.params.id)
+    .then(async (run) => {
+      if (!run) return res.status(404).send('Run not found');
+
+      const mongoCollection = String(req.query?.mongoCollection || '');
+      const mongoType = String(req.query?.mongoType || '');
+      let mongoDocs = null;
+      let mongoDocsError = null;
+
+      if (mongoCollection && mongoType === 'upserted') {
+        const upserts = run?.summary?.mongoUpserts?.[mongoCollection] || null;
+        const filters = upserts?.filters || [];
+
+        if (!filters.length) {
+          mongoDocs = [];
+        } else if (!isMongoEnabled()) {
+          mongoDocsError = 'MongoDB is not configured on the server (cannot load docs).';
+        } else {
+          try {
+            const db = await getMongoDb();
+            mongoDocs = await db
+              .collection(mongoCollection)
+              .find({ $or: filters }, { limit: 200 })
+              .toArray();
+          } catch (err) {
+            mongoDocsError = err?.message || 'Failed to load Mongo documents.';
+          }
+        }
+      }
+
+      res.render('layout', {
+        title: 'Run Details',
+        content: 'pages/run',
+        run,
+        isRunning,
+        lastRun,
+        counts: lastCounts,
+        lastError,
+        mongoCollection,
+        mongoType,
+        mongoDocs,
+        mongoDocsError,
+      });
+    })
+    .catch((err) => {
+      const msg = err?.message || 'Failed to load run';
+      res.status(500).send(msg);
+    });
 });
 // Revert and manual pull endpoints (no DB writes yet)
 app.post('/history/:id/revert/:changeId', (req, res) => {
   const note = req.body?.note || '';
-  const out = changeLog.revertChange(req.params.id, req.params.changeId, note);
-  if (!out.ok) return res.status(400).send(out.message || 'Revert failed');
-  res.redirect(`/history/${req.params.id}`);
+  runStore
+    .revertChange(req.params.id, req.params.changeId, note)
+    .then((out) => {
+      if (!out.ok) return res.status(400).send(out.message || 'Revert failed');
+      res.redirect(`/history/${req.params.id}`);
+    })
+    .catch((err) => {
+      const msg = err?.message || 'Revert failed';
+      res.status(500).send(msg);
+    });
 });
 app.post('/pull', (req, res) => {
   const { entityType, entityId } = req.body || {};
-  const out = changeLog.requestPull(entityType, entityId);
+  const out = runStore.requestPull(entityType, entityId);
   if (!out.ok) return res.status(400).send('Pull request failed');
   res.json(out);
 });

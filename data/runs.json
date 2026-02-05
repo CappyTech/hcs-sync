@@ -1,3 +1,737 @@
 {
-  "runs": []
+  "runs": [
+    {
+      "id": "09a13a9d-91dc-4dd2-af54-f515d90522a0",
+      "status": "finished",
+      "startedAt": 1770302656714,
+      "finishedAt": 1770302725813,
+      "metadata": {
+        "requestedBy": "dashboard"
+      },
+      "summary": {
+        "counts": {
+          "customers": 94,
+          "suppliers": 924,
+          "projects": 923,
+          "nominals": 128,
+          "invoices": 1607,
+          "quotes": 734,
+          "purchases": 13476
+        },
+        "mongo": {
+          "customers": {
+            "attemptedOps": 188,
+            "affected": 188,
+            "upserted": 0,
+            "matched": 188,
+            "modified": 188
+          },
+          "suppliers": {
+            "attemptedOps": 1848,
+            "affected": 1848,
+            "upserted": 0,
+            "matched": 1848,
+            "modified": 1848
+          },
+          "projects": {
+            "attemptedOps": 923,
+            "affected": 923,
+            "upserted": 0,
+            "matched": 923,
+            "modified": 923
+          },
+          "nominals": {
+            "attemptedOps": 127,
+            "affected": 127,
+            "upserted": 0,
+            "matched": 127,
+            "modified": 127
+          },
+          "invoices": {
+            "attemptedOps": 1607,
+            "affected": 1607,
+            "upserted": 0,
+            "matched": 1607,
+            "modified": 1607
+          },
+          "quotes": {
+            "attemptedOps": 734,
+            "affected": 734,
+            "upserted": 0,
+            "matched": 734,
+            "modified": 734
+          },
+          "purchases": {
+            "attemptedOps": 13476,
+            "affected": 13476,
+            "upserted": 1,
+            "matched": 13475,
+            "modified": 13475
+          }
+        },
+        "error": null
+      },
+      "changes": [
+        {
+          "id": "4596a512-6947-4a02-ab12-fcb3249d40ce",
+          "ts": 1770302725813,
+          "entityType": "metric",
+          "entityId": "purchases",
+          "action": "info",
+          "reason": "Resource count changed after sync",
+          "source": "system",
+          "before": 13475,
+          "after": 13476,
+          "diff": [
+            {
+              "path": "purchases",
+              "before": 13475,
+              "after": 13476
+            }
+          ],
+          "reverted": false,
+          "revertNote": null
+        }
+      ]
+    },
+    {
+      "id": "a3e73019-fd92-4116-9051-261dc39731b3",
+      "status": "finished",
+      "startedAt": 1770302367194,
+      "finishedAt": 1770302430467,
+      "metadata": {
+        "requestedBy": "dashboard"
+      },
+      "summary": {
+        "counts": {
+          "customers": 94,
+          "suppliers": 924,
+          "projects": 923,
+          "nominals": 128,
+          "invoices": 1607,
+          "quotes": 734,
+          "purchases": 13475
+        },
+        "error": null
+      },
+      "changes": [
+        {
+          "id": "50bcc2ee-eeea-460b-8733-88e4878d0d61",
+          "ts": 1770302430461,
+          "entityType": "metric",
+          "entityId": "customers",
+          "action": "info",
+          "reason": "Resource count changed after sync",
+          "source": "system",
+          "before": null,
+          "after": 94,
+          "diff": [
+            {
+              "path": "customers",
+              "before": null,
+              "after": 94
+            }
+          ],
+          "reverted": false,
+          "revertNote": null
+        },
+        {
+          "id": "1d9e811d-b431-49dd-b83a-6c655a5f57bc",
+          "ts": 1770302430462,
+          "entityType": "metric",
+          "entityId": "suppliers",
+          "action": "info",
+          "reason": "Resource count changed after sync",
+          "source": "system",
+          "before": null,
+          "after": 924,
+          "diff": [
+            {
+              "path": "suppliers",
+              "before": null,
+              "after": 924
+            }
+          ],
+          "reverted": false,
+          "revertNote": null
+        },
+        {
+          "id": "79067c32-96c7-4319-b8a4-c71ba2a049bb",
+          "ts": 1770302430465,
+          "entityType": "metric",
+          "entityId": "projects",
+          "action": "info",
+          "reason": "Resource count changed after sync",
+          "source": "system",
+          "before": null,
+          "after": 923,
+          "diff": [
+            {
+              "path": "projects",
+              "before": null,
+              "after": 923
+            }
+          ],
+          "reverted": false,
+          "revertNote": null
+        },
+        {
+          "id": "6ef913a2-8345-4c7f-b067-f1480dcff86d",
+          "ts": 1770302430466,
+          "entityType": "metric",
+          "entityId": "nominals",
+          "action": "info",
+          "reason": "Resource count changed after sync",
+          "source": "system",
+          "before": null,
+          "after": 128,
+          "diff": [
+            {
+              "path": "nominals",
+              "before": null,
+              "after": 128
+            }
+          ],
+          "reverted": false,
+          "revertNote": null
+        },
+        {
+          "id": "73b6e356-5578-4e84-8653-07df26d636dd",
+          "ts": 1770302430466,
+          "entityType": "metric",
+          "entityId": "invoices",
+          "action": "info",
+          "reason": "Resource count changed after sync",
+          "source": "system",
+          "before": null,
+          "after": 1607,
+          "diff": [
+            {
+              "path": "invoices",
+              "before": null,
+              "after": 1607
+            }
+          ],
+          "reverted": false,
+          "revertNote": null
+        },
+        {
+          "id": "0e6da21f-297e-4ac8-bbcb-bcf3143622ff",
+          "ts": 1770302430466,
+          "entityType": "metric",
+          "entityId": "quotes",
+          "action": "info",
+          "reason": "Resource count changed after sync",
+          "source": "system",
+          "before": null,
+          "after": 734,
+          "diff": [
+            {
+              "path": "quotes",
+              "before": null,
+              "after": 734
+            }
+          ],
+          "reverted": false,
+          "revertNote": null
+        },
+        {
+          "id": "06420442-a6c4-4327-8ce1-7ee8ec190085",
+          "ts": 1770302430466,
+          "entityType": "metric",
+          "entityId": "purchases",
+          "action": "info",
+          "reason": "Resource count changed after sync",
+          "source": "system",
+          "before": null,
+          "after": 13475,
+          "diff": [
+            {
+              "path": "purchases",
+              "before": null,
+              "after": 13475
+            }
+          ],
+          "reverted": false,
+          "revertNote": null
+        }
+      ]
+    },
+    {
+      "id": "f66fcf90-9d3b-4555-b31a-4170999b2dd2",
+      "status": "finished",
+      "startedAt": 1770301314166,
+      "finishedAt": 1770301376212,
+      "metadata": {
+        "requestedBy": "dashboard"
+      },
+      "summary": {
+        "counts": {
+          "customers": 94,
+          "suppliers": 924,
+          "projects": 923,
+          "nominals": 128,
+          "invoices": 1607,
+          "quotes": 734,
+          "purchases": 13475
+        },
+        "error": null
+      },
+      "changes": [
+        {
+          "id": "e877d5a3-7b78-44e2-83d0-a4b9c32ca2a3",
+          "ts": 1770301376210,
+          "entityType": "metric",
+          "entityId": "customers",
+          "action": "info",
+          "reason": "Resource count changed after sync",
+          "source": "system",
+          "before": null,
+          "after": 94,
+          "diff": [
+            {
+              "path": "customers",
+              "before": null,
+              "after": 94
+            }
+          ],
+          "reverted": false,
+          "revertNote": null
+        },
+        {
+          "id": "f2a13ed6-9d51-45d0-9804-7e1535eb7de7",
+          "ts": 1770301376210,
+          "entityType": "metric",
+          "entityId": "suppliers",
+          "action": "info",
+          "reason": "Resource count changed after sync",
+          "source": "system",
+          "before": null,
+          "after": 924,
+          "diff": [
+            {
+              "path": "suppliers",
+              "before": null,
+              "after": 924
+            }
+          ],
+          "reverted": false,
+          "revertNote": null
+        },
+        {
+          "id": "8e79b3a3-dedc-416c-8f2a-8d449e0c916e",
+          "ts": 1770301376211,
+          "entityType": "metric",
+          "entityId": "projects",
+          "action": "info",
+          "reason": "Resource count changed after sync",
+          "source": "system",
+          "before": null,
+          "after": 923,
+          "diff": [
+            {
+              "path": "projects",
+              "before": null,
+              "after": 923
+            }
+          ],
+          "reverted": false,
+          "revertNote": null
+        },
+        {
+          "id": "782c9304-51df-4b9a-8988-69d67c4177fc",
+          "ts": 1770301376211,
+          "entityType": "metric",
+          "entityId": "nominals",
+          "action": "info",
+          "reason": "Resource count changed after sync",
+          "source": "system",
+          "before": null,
+          "after": 128,
+          "diff": [
+            {
+              "path": "nominals",
+              "before": null,
+              "after": 128
+            }
+          ],
+          "reverted": false,
+          "revertNote": null
+        },
+        {
+          "id": "33dda4f9-b1fe-427a-96cb-abdff21ae267",
+          "ts": 1770301376211,
+          "entityType": "metric",
+          "entityId": "invoices",
+          "action": "info",
+          "reason": "Resource count changed after sync",
+          "source": "system",
+          "before": null,
+          "after": 1607,
+          "diff": [
+            {
+              "path": "invoices",
+              "before": null,
+              "after": 1607
+            }
+          ],
+          "reverted": false,
+          "revertNote": null
+        },
+        {
+          "id": "02410b04-8b22-4506-bb31-486b42f1a0cf",
+          "ts": 1770301376211,
+          "entityType": "metric",
+          "entityId": "quotes",
+          "action": "info",
+          "reason": "Resource count changed after sync",
+          "source": "system",
+          "before": null,
+          "after": 734,
+          "diff": [
+            {
+              "path": "quotes",
+              "before": null,
+              "after": 734
+            }
+          ],
+          "reverted": false,
+          "revertNote": null
+        },
+        {
+          "id": "65e473cf-6481-4ac9-ae6e-8e9c51341c2f",
+          "ts": 1770301376212,
+          "entityType": "metric",
+          "entityId": "purchases",
+          "action": "info",
+          "reason": "Resource count changed after sync",
+          "source": "system",
+          "before": null,
+          "after": 13475,
+          "diff": [
+            {
+              "path": "purchases",
+              "before": null,
+              "after": 13475
+            }
+          ],
+          "reverted": false,
+          "revertNote": null
+        }
+      ]
+    },
+    {
+      "id": "f11c2fc6-edba-4e5c-9efd-e89256c64427",
+      "status": "failed",
+      "startedAt": 1770301037452,
+      "finishedAt": 1770301037712,
+      "metadata": {
+        "requestedBy": "dashboard"
+      },
+      "summary": {
+        "error": "Command createIndexes requires authentication"
+      },
+      "changes": []
+    },
+    {
+      "id": "b17481ba-58fd-46ea-b3c7-e80d21474801",
+      "status": "failed",
+      "startedAt": 1770300176736,
+      "finishedAt": 1770300176902,
+      "metadata": {
+        "requestedBy": "dashboard"
+      },
+      "summary": {
+        "error": "Your password has expired. (Error: PasswordExpired). Try setting SESSION_TOKEN/KASHFLOW_SESSION_TOKEN to a valid token to bypass password login, or reset the KashFlow password for this user."
+      },
+      "changes": []
+    },
+    {
+      "id": "dc057d39-549b-44f2-8172-8543b25ae110",
+      "status": "finished",
+      "startedAt": 1770300067928,
+      "finishedAt": 1770300118163,
+      "metadata": {
+        "requestedBy": "dashboard"
+      },
+      "summary": {
+        "counts": {
+          "customers": 94,
+          "suppliers": 924,
+          "projects": 923,
+          "nominals": 128,
+          "invoices": 1607,
+          "quotes": 734,
+          "purchases": 13472
+        },
+        "error": null
+      },
+      "changes": [
+        {
+          "id": "c4d961f2-57fc-4383-b7aa-d1d4a83dcd68",
+          "ts": 1770300118158,
+          "entityType": "metric",
+          "entityId": "customers",
+          "action": "info",
+          "reason": "Resource count changed after sync",
+          "source": "system",
+          "before": null,
+          "after": 94,
+          "diff": [
+            {
+              "path": "customers",
+              "before": null,
+              "after": 94
+            }
+          ],
+          "reverted": false,
+          "revertNote": null
+        },
+        {
+          "id": "8c4f5aa7-76e4-4a0b-8d51-c0e0364e46a2",
+          "ts": 1770300118158,
+          "entityType": "metric",
+          "entityId": "suppliers",
+          "action": "info",
+          "reason": "Resource count changed after sync",
+          "source": "system",
+          "before": null,
+          "after": 924,
+          "diff": [
+            {
+              "path": "suppliers",
+              "before": null,
+              "after": 924
+            }
+          ],
+          "reverted": false,
+          "revertNote": null
+        },
+        {
+          "id": "cfaa7537-e807-432d-a16b-75b3fa58e4db",
+          "ts": 1770300118161,
+          "entityType": "metric",
+          "entityId": "projects",
+          "action": "info",
+          "reason": "Resource count changed after sync",
+          "source": "system",
+          "before": null,
+          "after": 923,
+          "diff": [
+            {
+              "path": "projects",
+              "before": null,
+              "after": 923
+            }
+          ],
+          "reverted": false,
+          "revertNote": null
+        },
+        {
+          "id": "3b933e0a-2cc3-46da-a43b-8d8a01f46a88",
+          "ts": 1770300118162,
+          "entityType": "metric",
+          "entityId": "nominals",
+          "action": "info",
+          "reason": "Resource count changed after sync",
+          "source": "system",
+          "before": null,
+          "after": 128,
+          "diff": [
+            {
+              "path": "nominals",
+              "before": null,
+              "after": 128
+            }
+          ],
+          "reverted": false,
+          "revertNote": null
+        },
+        {
+          "id": "07c04a59-41cf-4ce0-ae19-117b4401d53b",
+          "ts": 1770300118162,
+          "entityType": "metric",
+          "entityId": "invoices",
+          "action": "info",
+          "reason": "Resource count changed after sync",
+          "source": "system",
+          "before": null,
+          "after": 1607,
+          "diff": [
+            {
+              "path": "invoices",
+              "before": null,
+              "after": 1607
+            }
+          ],
+          "reverted": false,
+          "revertNote": null
+        },
+        {
+          "id": "996035fb-827e-4550-86f8-47515233bffc",
+          "ts": 1770300118162,
+          "entityType": "metric",
+          "entityId": "quotes",
+          "action": "info",
+          "reason": "Resource count changed after sync",
+          "source": "system",
+          "before": null,
+          "after": 734,
+          "diff": [
+            {
+              "path": "quotes",
+              "before": null,
+              "after": 734
+            }
+          ],
+          "reverted": false,
+          "revertNote": null
+        },
+        {
+          "id": "ef6e5fb4-40a2-4c65-8218-f84a743925c3",
+          "ts": 1770300118162,
+          "entityType": "metric",
+          "entityId": "purchases",
+          "action": "info",
+          "reason": "Resource count changed after sync",
+          "source": "system",
+          "before": null,
+          "after": 13472,
+          "diff": [
+            {
+              "path": "purchases",
+              "before": null,
+              "after": 13472
+            }
+          ],
+          "reverted": false,
+          "revertNote": null
+        }
+      ]
+    },
+    {
+      "id": "de93d362-6b13-4885-8c60-163e539c4310",
+      "status": "failed",
+      "startedAt": 1770299690032,
+      "finishedAt": 1770299690202,
+      "metadata": {
+        "requestedBy": "dashboard"
+      },
+      "summary": {
+        "error": "Request failed with status code 404"
+      },
+      "changes": []
+    },
+    {
+      "id": "a58d3145-a3b0-431e-bec8-d5ec7a1f7695",
+      "status": "failed",
+      "startedAt": 1770299592689,
+      "finishedAt": 1770299592878,
+      "metadata": {
+        "requestedBy": "dashboard"
+      },
+      "summary": {
+        "error": "Request failed with status code 404"
+      },
+      "changes": []
+    },
+    {
+      "id": "f75b0407-e1e6-4e91-9407-d85970880a6f",
+      "status": "failed",
+      "startedAt": 1770299239272,
+      "finishedAt": 1770299239594,
+      "metadata": {
+        "requestedBy": "dashboard"
+      },
+      "summary": {
+        "error": "Your password has expired."
+      },
+      "changes": []
+    },
+    {
+      "id": "4dc110b2-9d7e-49bb-bff5-ac57103f16a9",
+      "status": "failed",
+      "startedAt": 1770299047975,
+      "finishedAt": 1770299048155,
+      "metadata": {
+        "requestedBy": "dashboard"
+      },
+      "summary": {
+        "error": "Your password has expired."
+      },
+      "changes": []
+    },
+    {
+      "id": "5706b4d5-ba19-484f-ab12-42d783b26660",
+      "status": "failed",
+      "startedAt": 1770298289476,
+      "finishedAt": 1770298289674,
+      "metadata": {
+        "requestedBy": "dashboard"
+      },
+      "summary": {
+        "error": "Your password has expired."
+      },
+      "changes": []
+    },
+    {
+      "id": "15786dbc-805e-4b6f-844b-42b4431b86c5",
+      "status": "failed",
+      "startedAt": 1770298268515,
+      "finishedAt": 1770298268718,
+      "metadata": {
+        "requestedBy": "dashboard"
+      },
+      "summary": {
+        "error": "Your password has expired."
+      },
+      "changes": []
+    },
+    {
+      "id": "58645896-b345-4892-9148-daf56e952190",
+      "status": "failed",
+      "startedAt": 1770297954236,
+      "finishedAt": 1770297954466,
+      "metadata": {
+        "requestedBy": "dashboard"
+      },
+      "summary": {
+        "error": "Your password has expired."
+      },
+      "changes": []
+    },
+    {
+      "id": "d8261c19-3284-40b3-9ebc-b9abd0ac27f3",
+      "status": "running",
+      "startedAt": 1770297761142,
+      "finishedAt": null,
+      "metadata": {
+        "requestedBy": "dashboard"
+      },
+      "summary": null,
+      "changes": []
+    },
+    {
+      "id": "56d3ed65-e581-459a-8f30-5b1b7ff20e80",
+      "status": "running",
+      "startedAt": 1770297753418,
+      "finishedAt": null,
+      "metadata": {
+        "requestedBy": "dashboard"
+      },
+      "summary": null,
+      "changes": []
+    },
+    {
+      "id": "42e3eae3-64ac-4f6b-8b7e-444dad737be1",
+      "status": "running",
+      "startedAt": 1770297735734,
+      "finishedAt": null,
+      "metadata": {
+        "requestedBy": "dashboard"
+      },
+      "summary": null,
+      "changes": []
+    }
+  ]
 }

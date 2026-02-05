@@ -15,20 +15,103 @@
   </div>
 </div>
 
+<h2 class="text-xl font-semibold mb-2">Mongo</h2>
+<% const mongo = run?.summary?.mongo || null; %>
+<% if (!mongo) { %>
+  <p class="text-sm text-gray-500 dark:text-gray-400 mb-6">No Mongo summary recorded for this run.</p>
+<% } else { %>
+  <div class="relative overflow-x-auto shadow-md sm:rounded-lg mb-6">
+    <table class="w-full text-sm text-left rtl:text-right text-gray-500 dark:text-gray-400">
+      <thead class="text-xs text-gray-700 uppercase bg-gray-50 dark:bg-gray-700 dark:text-gray-400">
+        <tr>
+          <th class="px-6 py-3">Collection</th>
+          <th class="px-6 py-3">Upserted (Added)</th>
+          <th class="px-6 py-3">Matched</th>
+          <th class="px-6 py-3">Modified</th>
+          <th class="px-6 py-3">Attempted Ops</th>
+          <th class="px-6 py-3">Affected</th>
+        </tr>
+      </thead>
+      <tbody>
+        <% Object.entries(mongo).forEach(([name, s]) => { %>
+          <tr class="bg-white border-b dark:bg-gray-800 dark:border-gray-700">
+            <th scope="row" class="px-6 py-4 font-medium text-gray-900 whitespace-nowrap dark:text-white"><%= name %></th>
+            <td class="px-6 py-4">
+              <% const hasUpsertDocs = (run?.summary?.mongoUpserts?.[name]?.filters || []).length > 0; %>
+              <% if ((s?.upserted ?? 0) > 0 && hasUpsertDocs) { %>
+                <a class="text-blue-600 hover:underline" href="/history/<%= run.id %>?mongoCollection=<%= encodeURIComponent(name) %>&mongoType=upserted#mongo-upserted"><%= s?.upserted ?? 0 %></a>
+              <% } else { %>
+                <%= s?.upserted ?? 0 %>
+              <% } %>
+            </td>
+            <td class="px-6 py-4"><%= s?.matched ?? 0 %></td>
+            <td class="px-6 py-4"><%= s?.modified ?? 0 %></td>
+            <td class="px-6 py-4"><%= s?.attemptedOps ?? 0 %></td>
+            <td class="px-6 py-4"><%= s?.affected ?? 0 %></td>
+          </tr>
+        <% }) %>
+      </tbody>
+    </table>
+  </div>
+
+  <% if (mongoCollection && mongoType === 'upserted') { %>
+    <div id="mongo-upserted" class="mb-6 scroll-mt-24">
+      <h3 class="text-lg font-semibold mb-2">Upserted Docs: <span class="font-mono text-sm"><%= mongoCollection %></span></h3>
+      <% if (mongoDocsError) { %>
+        <p class="text-sm text-red-700 dark:text-red-400"><%= mongoDocsError %></p>
+      <% } else if (!mongoDocs) { %>
+        <p class="text-sm text-gray-500 dark:text-gray-400">Loading…</p>
+      <% } else if (mongoDocs.length === 0) { %>
+        <p class="text-sm text-gray-500 dark:text-gray-400">No documents found for this run.</p>
+      <% } else { %>
+        <div class="space-y-3">
+          <% const keyFor = (doc) => {
+            if (!doc) return '';
+            if (doc.code) return `code:${doc.code}`;
+            if (typeof doc.number !== 'undefined' && doc.number !== null) return `number:${doc.number}`;
+            if (doc._id) return `_id:${doc._id}`;
+            return '';
+          }; %>
+          <% mongoDocs.forEach((doc, i) => { %>
+            <% const k = keyFor(doc); %>
+            <div id="mongo-doc-<%= i %>" class="border border-gray-200 rounded-lg dark:border-gray-700">
+              <div class="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-800 rounded-t-lg">
+                <div class="text-sm">
+                  <span class="font-semibold">Doc</span>
+                  <% if (k) { %><span class="ml-2 font-mono text-xs text-gray-500"><%= k %></span><% } %>
+                </div>
+                <div class="text-xs text-gray-500 flex items-center gap-3">
+                  <a class="text-blue-600 hover:underline relative z-10" href="#mongo-doc-<%= i %>">Link</a>
+                </div>
+              </div>
+              <div class="p-3">
+                <pre class="overflow-auto bg-gray-50 dark:bg-gray-800 p-3 rounded text-xs"><%= JSON.stringify(doc, null, 2) %></pre>
+              </div>
+            </div>
+          <% }) %>
+        </div>
+      <% } %>
+    </div>
+  <% } %>
+<% } %>
+
 <h2 class="text-xl font-semibold mb-2">Changes</h2>
 <% if (!run.changes || run.changes.length === 0) { %>
   <p class="text-sm text-gray-500 dark:text-gray-400">No changes recorded for this run.</p>
 <% } else { %>
   <div class="space-y-3">
     <% run.changes.forEach((c, idx) => { %>
-      <div class="border border-gray-200 rounded-lg dark:border-gray-700">
+      <div id="change-<%= c.id %>" class="border border-gray-200 rounded-lg dark:border-gray-700 scroll-mt-24">
         <div class="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-800 rounded-t-lg">
           <div class="text-sm">
             <span class="font-semibold"><%= c.entityType %></span>
             <span class="ml-2 font-mono text-xs text-gray-500"><%= c.entityId %></span>
             <span class="ml-2 px-2 py-0.5 rounded text-xs <%= c.action === 'delete' ? 'bg-red-100 text-red-800' : c.action === 'create' ? 'bg-green-100 text-green-800' : c.action === 'update' ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-800' %>"><%= c.action %></span>
           </div>
-          <div class="text-xs text-gray-500"><%= new Date(c.ts).toLocaleString() %></div>
+          <div class="text-xs text-gray-500 flex items-center gap-3">
+            <a class="text-blue-600 hover:underline relative z-10" href="#change-<%= c.id %>">Link</a>
+            <span><%= new Date(c.ts).toLocaleString() %></span>
+          </div>
         </div>
         <div class="p-3">
           <% if (c.reason) { %>

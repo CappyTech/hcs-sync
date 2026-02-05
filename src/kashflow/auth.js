@@ -5,6 +5,26 @@ import logger from '../util/logger.js';
 let cachedToken = '';
 let lockUntil = 0;
 
+function stripWrappingQuotes(value) {
+  const v = String(value ?? '');
+  if (v.length >= 2) {
+    const first = v[0];
+    const last = v[v.length - 1];
+    if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
+      return v.slice(1, -1);
+    }
+  }
+  return v;
+}
+
+function readEnvString(...keys) {
+  for (const k of keys) {
+    const v = process.env[k];
+    if (typeof v === 'string' && v.length) return stripWrappingQuotes(v).trim();
+  }
+  return '';
+}
+
 // Obtains a permanent KF session token via the two-step flow.
 // If `config.token` is provided, returns it.
 // Otherwise, uses username/password to get a temp token, then upgrades with memorable word chars if provided.
@@ -15,16 +35,11 @@ export async function getSessionToken() {
     throw new Error(`Auth temporarily disabled until ${new Date(lockUntil).toLocaleString()} due to previous lockout`);
   }
 
-    const {
-      USERNAME,
-      PASSWORD,
-      MEMORABLE_WORD,
-    } = process.env;
-    const username = USERNAME;
-    const password = PASSWORD;
-    const memorableWord = MEMORABLE_WORD;
-    if (!username || !password) {
-      throw new Error('Missing USERNAME or PASSWORD env vars for session token acquisition');
+  const username = readEnvString('KASHFLOW_USERNAME', 'USERNAME');
+  const password = readEnvString('KASHFLOW_PASSWORD', 'PASSWORD');
+  const memorableWord = readEnvString('KASHFLOW_MEMORABLE_WORD', 'MEMORABLE_WORD');
+  if (!username || !password) {
+    throw new Error('Missing USERNAME/PASSWORD (or KASHFLOW_USERNAME/KASHFLOW_PASSWORD) env vars for session token acquisition');
   }
 
   const http = axios.create({ baseURL: config.baseUrl, timeout: config.timeoutMs });
@@ -33,13 +48,17 @@ export async function getSessionToken() {
   let step1;
   try {
     step1 = await http.post('/sessiontoken', {
-      Username: username,
+      UserName: username,
       Password: password,
-      KeepUserLoggedIn: false,
     });
   } catch (err) {
     const errData = err.response?.data;
     logger.error({ status: err.response?.status, data: errData }, 'Step1 /sessiontoken request failed');
+    if (errData?.Error === 'PasswordExpired') {
+      logger.warn('KashFlow returned PasswordExpired; this can also happen if the password value is malformed (e.g. wrapped quotes/whitespace). Prefer unquoted PASSWORD in .env or set SESSION_TOKEN to bypass login.');
+      // Avoid hammering auth if the account is in a forced-reset state.
+      lockUntil = Date.now() + 10 * 60 * 1000;
+    }
     if (errData && (errData.Error === 'AccountLocked' || /locked/i.test(errData.Message || ''))) {
       lockUntil = Date.now() + 10 * 60 * 1000;
     }

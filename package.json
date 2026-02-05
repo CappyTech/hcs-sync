@@ -1,11 +1,11 @@
 {
   "name": "hcs-sync",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Backend-only KashFlow admin sync in Node.js",
   "type": "module",
   "private": true,
   "scripts": {
-    "dev": "npm run build:css && nodemon --exec node src/server/index.js",
+    "dev": "npm run build:css && nodemon --ignore data/runs.json --exec node src/server/index.js",
     "start": "npm run build:css && node src/server/index.js",
     "build:css": "tailwindcss -i ./src/server/styles/input.css -o ./src/server/public/styles.css --min",
     "lint": "echo Lint TBD",
@@ -24,11 +24,13 @@
   },
   "dependencies": {
     "axios": "^1.11.0",
+    "mongodb": "^6.19.0",
     "dotenv": "^17.2.1",
     "ejs": "^3.1.10",
     "express": "^4.19.2",
     "flowbite": "^4.0.1",
     "@tailwindcss/typography": "^0.5.14",
+    "mongoose": "^8.18.0",
     "pino": "^9.8.0",
     "pino-pretty": "^13.1.1"
   }
