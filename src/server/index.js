@@ -12,6 +12,7 @@ import settingsStore from './settingsStore.js';
 import { isMongooseEnabled } from '../db/mongoose.js';
 import cron from 'node-cron';
 import cronParser from 'cron-parser';
+import cronstrue from 'cronstrue';
 
 const app = express();
 const port = Number(process.env.PORT || 3000);
@@ -50,7 +51,7 @@ async function loadSettingsIntoCache() {
     cronConfig = {
       enabled: Boolean(cronFromDb.enabled),
       schedule: String(cronFromDb.schedule || config.cronSchedule || '0 * * * *'),
-      timezone: String(cronFromDb.timezone || ''),
+      timezone: String(cronFromDb.timezone || '').trim() || config.cronTimezone || 'Europe/London',
       healthStaleMs: Number(cronFromDb.healthStaleMs || 0),
       source: 'db',
     };
@@ -103,6 +104,52 @@ function computeNextCronRunAtMs({ enabled, schedule, timezone }) {
 app.use((req, res, next) => {
   res.locals.cronConfig = getEffectiveCronConfig();
   res.locals.query = req.query || {};
+
+  res.locals.formatCronHuman = (schedule) => {
+    const expr = String(schedule || '').trim();
+    if (!expr) return '—';
+    try {
+      const toString = typeof cronstrue?.toString === 'function' ? cronstrue.toString : null;
+      if (!toString) return expr;
+      return toString(expr, {
+        use24HourTimeFormat: true,
+        verbose: true,
+      });
+    } catch {
+      return expr;
+    }
+  };
+
+  const dtf = new Intl.DateTimeFormat('en-GB', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  });
+
+  const df = new Intl.DateTimeFormat('en-GB', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+  });
+
+  res.locals.formatDateTimeUK = (value) => {
+    if (value === null || typeof value === 'undefined') return '—';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '—';
+    return dtf.format(date);
+  };
+
+  res.locals.formatDateUK = (value) => {
+    if (value === null || typeof value === 'undefined') return '—';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '—';
+    return df.format(date);
+  };
+
   next();
 });
 

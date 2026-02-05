@@ -7,11 +7,11 @@
   </div>
   <div class="p-4 bg-white border border-gray-200 rounded-lg shadow dark:bg-gray-800 dark:border-gray-700">
     <div class="text-sm text-gray-500 dark:text-gray-400">Started</div>
-    <div class="mt-1"><%= run.startedAt ? new Date(run.startedAt).toLocaleString() : '—' %></div>
+    <div class="mt-1"><%= formatDateTimeUK(run.startedAt) %></div>
   </div>
   <div class="p-4 bg-white border border-gray-200 rounded-lg shadow dark:bg-gray-800 dark:border-gray-700">
     <div class="text-sm text-gray-500 dark:text-gray-400">Finished</div>
-    <div class="mt-1"><%= run.finishedAt ? new Date(run.finishedAt).toLocaleString() : '—' %></div>
+    <div class="mt-1"><%= formatDateTimeUK(run.finishedAt) %></div>
   </div>
 </div>
 
@@ -117,7 +117,7 @@
           </div>
           <div class="text-xs text-gray-500 flex items-center gap-3">
             <a class="text-blue-600 hover:underline relative z-10" href="#change-<%= c.id %>">Link</a>
-            <span><%= new Date(c.ts).toLocaleString() %></span>
+            <span><%= formatDateTimeUK(c.ts) %></span>
           </div>
         </div>
         <div class="p-3">

@@ -23,7 +23,7 @@
           </div>
           <div class="p-4 bg-white border border-gray-200 rounded-lg shadow sm:p-6 dark:bg-gray-800 dark:border-gray-700">
             <span class="text-sm font-medium text-gray-500 dark:text-gray-400">Last Run</span>
-            <p id="last-run" class="mt-2 text-gray-900 dark:text-white"><%= lastRun ? new Date(lastRun).toLocaleString() : 'Never' %></p>
+            <p id="last-run" class="mt-2 text-gray-900 dark:text-white"><%= lastRun ? formatDateTimeUK(lastRun) : 'Never' %></p>
           </div>
           <div class="p-4 bg-white border border-gray-200 rounded-lg shadow sm:p-6 dark:bg-gray-800 dark:border-gray-700">
             <span class="text-sm font-medium text-gray-500 dark:text-gray-400">Actions</span>

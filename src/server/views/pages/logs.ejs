@@ -17,7 +17,7 @@
       <% } else { %>
         <% logs.forEach((entry) => { %>
           <tr class="bg-white border-b dark:bg-gray-800 dark:border-gray-700">
-            <td class="px-6 py-4"><%= new Date(entry.time).toLocaleString() %></td>
+              <td class="px-6 py-4"><%= formatDateTimeUK(entry.time) %></td>
             <td class="px-6 py-4">
               <span class="px-2 py-1 rounded text-xs <%= entry.level === 'error' ? 'bg-red-100 text-red-800' : entry.level === 'success' ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800' %>"><%= entry.level %></span>
             </td>
