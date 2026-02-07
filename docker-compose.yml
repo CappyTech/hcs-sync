@@ -1,7 +1,8 @@
 version: '3.8'
 services:
   hcs-sync:
-    build: .
+    image: ghcr.io/cappytech/hcs-sync:latest
+    pull_policy: always
     container_name: hcs-sync
     env_file:
       - .env
