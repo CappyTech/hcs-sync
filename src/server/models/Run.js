@@ -18,6 +18,18 @@ const ChangeSchema = new mongoose.Schema(
   { _id: false }
 );
 
+const LogSchema = new mongoose.Schema(
+  {
+    id: { type: String, required: true },
+    ts: { type: Number, required: true },
+    level: { type: String, required: true },
+    message: { type: String, required: true },
+    stage: { type: String, default: null },
+    meta: { type: mongoose.Schema.Types.Mixed, default: null },
+  },
+  { _id: false }
+);
+
 const RunSchema = new mongoose.Schema(
   {
     id: { type: String, required: true, unique: true, index: true },
@@ -27,6 +39,7 @@ const RunSchema = new mongoose.Schema(
     metadata: { type: mongoose.Schema.Types.Mixed, default: {} },
     summary: { type: mongoose.Schema.Types.Mixed, default: null },
     changes: { type: [ChangeSchema], default: [] },
+    logs: { type: [LogSchema], default: [] },
   },
   {
     collection: 'runs',
