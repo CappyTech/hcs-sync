@@ -156,6 +156,7 @@
         </svg>
         <h3 class="mb-5 text-lg font-normal text-gray-500 dark:text-gray-400">Run the sync now?</h3>
         <form method="post" action="/run" class="inline">
+          <% if (csrfToken) { %><input type="hidden" name="_csrf" value="<%= csrfToken %>" /><% } %>
           <button data-modal-hide="run-modal" type="submit" class="text-white bg-blue-600 hover:bg-blue-700 focus:ring-4 focus:outline-none focus:ring-blue-300 font-medium rounded-lg text-sm inline-flex items-center px-5 py-2.5 text-center mr-2 dark:bg-blue-500 dark:hover:bg-blue-600 dark:focus:ring-blue-800">Confirm</button>
         </form>
         <button data-modal-hide="run-modal" type="button" class="text-gray-500 bg-white hover:bg-gray-100 focus:ring-4 focus:outline-none focus:ring-blue-300 rounded-lg border border-gray-200 text-sm font-medium px-5 py-2.5 dark:bg-gray-700 dark:text-gray-300 dark:border-gray-500 dark:hover:text-white dark:hover:bg-gray-600">Cancel</button>
