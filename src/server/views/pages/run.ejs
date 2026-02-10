@@ -154,6 +154,7 @@
                 <div class="mt-3 flex items-center gap-2">
                   <% if (!c.reverted) { %>
                     <form method="post" action="/history/<%= run.id %>/revert/<%= c.id %>">
+                      <% if (csrfToken) { %><input type="hidden" name="_csrf" value="<%= csrfToken %>" /><% } %>
                       <input type="hidden" name="note" value="Manual revert requested" />
                       <button class="text-white bg-amber-600 hover:bg-amber-700 focus:ring-4 focus:outline-none focus:ring-amber-300 font-medium rounded-lg text-xs px-3 py-1.5 dark:bg-amber-500 dark:hover:bg-amber-600 dark:focus:ring-amber-800" type="submit">Mark Reverted</button>
                     </form>
@@ -162,7 +163,7 @@
                     <% if (c.revertNote) { %><span class="text-xs text-gray-500">— <%= c.revertNote %></span><% } %>
                   <% } %>
                   <form method="post" action="/pull" onsubmit="return false;">
-                    <button type="button" class="text-white bg-blue-600 hover:bg-blue-700 focus:ring-4 focus:outline-none focus:ring-blue-300 font-medium rounded-lg text-xs px-3 py-1.5 dark:bg-blue-500 dark:hover:bg-blue-600 dark:focus:ring-blue-800" onclick='fetch("/pull", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ entityType: "<%= c.entityType %>", entityId: "<%= c.entityId %>" }) }).then(r => r.json()).then(() => { try { window.showToast && window.showToast("info", "Pull requested"); } catch {} })'>Manual Pull</button>
+                    <button type="button" class="text-white bg-blue-600 hover:bg-blue-700 focus:ring-4 focus:outline-none focus:ring-blue-300 font-medium rounded-lg text-xs px-3 py-1.5 dark:bg-blue-500 dark:hover:bg-blue-600 dark:focus:ring-blue-800" onclick='(function(){ const t = (document.querySelector("meta[name=csrf-token]")||{}).content || ""; return fetch("/pull", { method: "POST", headers: { "Content-Type": "application/json", "x-csrf-token": t }, body: JSON.stringify({ entityType: "<%= c.entityType %>", entityId: "<%= c.entityId %>" }) }).then(r => r.json()).then(() => { try { window.showToast && window.showToast("info", "Pull requested"); } catch {} }); })()'>Manual Pull</button>
                   </form>
                 </div>
               </div>
