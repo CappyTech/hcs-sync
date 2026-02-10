@@ -17,9 +17,21 @@
 
 <h2 class="text-xl font-semibold mb-2">Log</h2>
 <% const allLogs = Array.isArray(run.logs) ? run.logs : []; %>
-<% const maxShow = 200; %>
-<% const startIdx = Math.max(0, allLogs.length - maxShow); %>
+<% const logLimitRaw = String((query && query.logLimit) || '200').trim().toLowerCase(); %>
+<% const maxShow = logLimitRaw === 'all' ? null : Math.max(1, Number.parseInt(logLimitRaw, 10) || 200); %>
+<% const startIdx = maxShow === null ? 0 : Math.max(0, allLogs.length - maxShow); %>
 <% const runLogs = allLogs.slice(startIdx); %>
+<form method="get" class="mb-3 flex items-center gap-2">
+  <% if (mongoCollection) { %><input type="hidden" name="mongoCollection" value="<%= mongoCollection %>" /><% } %>
+  <% if (mongoType) { %><input type="hidden" name="mongoType" value="<%= mongoType %>" /><% } %>
+  <label for="logLimit" class="text-xs text-gray-500 dark:text-gray-400">Show</label>
+  <select id="logLimit" name="logLimit" class="text-xs border border-gray-200 rounded px-2 py-1 dark:bg-gray-800 dark:border-gray-700" onchange="this.form.submit()">
+    <option value="50" <%= logLimitRaw === '50' ? 'selected' : '' %>>50</option>
+    <option value="100" <%= logLimitRaw === '100' ? 'selected' : '' %>>100</option>
+    <option value="200" <%= (logLimitRaw === '200' || logLimitRaw === '') ? 'selected' : '' %>>200</option>
+    <option value="all" <%= logLimitRaw === 'all' ? 'selected' : '' %>>All</option>
+  </select>
+</form>
 <% if (runLogs.length === 0) { %>
   <p class="text-sm text-gray-500 dark:text-gray-400 mb-6">No log entries recorded for this run.</p>
 <% } else { %>
