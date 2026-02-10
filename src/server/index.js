@@ -2,6 +2,10 @@ import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
+import cookieParser from 'cookie-parser';
+import jwt from 'jsonwebtoken';
+import helmet from 'helmet';
+import csurf from 'csurf';
 import logger from '../util/logger.js';
 import runSync from '../sync/run.js';
 import progress from './progress.js';
@@ -17,6 +21,10 @@ import cronstrue from 'cronstrue';
 
 const app = express();
 const port = Number(process.env.PORT || 3000);
+
+// Behind reverse proxies (Caddy/FRP): trust loopback and private IPv4 ranges
+// so req.secure works correctly.
+app.set('trust proxy', ['loopback', '127.0.0.1', '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16']);
 
 let lastRun = null;
 let isRunning = false;
@@ -184,6 +192,58 @@ app.use((req, res, next) => {
   next();
 });
 
+app.use(helmet({
+  // Default Helmet policy is fine here; HSTS is assumed to be handled at the edge (Caddy/Cloudflare).
+  contentSecurityPolicy: false,
+}));
+
+app.use(cookieParser());
+
+function getFullUrl(req) {
+  const proto = req.headers['x-forwarded-proto'] ? String(req.headers['x-forwarded-proto']).split(',')[0].trim() : req.protocol;
+  const host = req.headers['x-forwarded-host'] ? String(req.headers['x-forwarded-host']).split(',')[0].trim() : req.get('host');
+  return `${proto}://${host}${req.originalUrl || req.url || '/'}`;
+}
+
+function buildSsoRedirect(req) {
+  const base = String(process.env.HCS_APP_BASE_URL || 'https://app.heroncs.co.uk').replace(/\/$/, '');
+  const returnTo = getFullUrl(req);
+  return `${base}/sso/hcs-sync?return_to=${encodeURIComponent(returnTo)}`;
+}
+
+function verifySsoCookie(req) {
+  const token = req.cookies?.hcs_sso;
+  if (!token) return null;
+  const secret = process.env.HCS_SSO_JWT_SECRET;
+  if (!secret) return null;
+
+  try {
+    const payload = jwt.verify(token, secret, {
+      algorithms: ['HS256'],
+      audience: 'hcs-sync',
+      issuer: 'hcs-app',
+    });
+    return payload && typeof payload === 'object' ? payload : null;
+  } catch {
+    return null;
+  }
+}
+
+// Auth guard: require valid SSO cookie for all non-health endpoints.
+app.use((req, res, next) => {
+  const p = req.path || '';
+  if (p === '/health' || p === '/cron/health') return next();
+
+  const user = verifySsoCookie(req);
+  if (!user) {
+    return res.redirect(buildSsoRedirect(req));
+  }
+
+  req.user = user;
+  res.locals.user = user;
+  next();
+});
+
 async function triggerSync({ requestedBy }) {
   if (isRunning) {
     return { started: false, reason: 'already-running', runId: null, promise: Promise.resolve(null) };
@@ -283,7 +343,33 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
+app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// CSRF protection for state-changing requests (cookie-based).
+const csrfProtection = csurf({
+  cookie: {
+    key: 'hcs_sync_csrf',
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: String(process.env.COOKIE_SECURE || '').toLowerCase() === 'true',
+  },
+});
+
+app.use((req, res, next) => {
+  const method = (req.method || '').toUpperCase();
+  if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return next();
+  return csrfProtection(req, res, next);
+});
+
+app.use((req, res, next) => {
+  try {
+    res.locals.csrfToken = typeof req.csrfToken === 'function' ? req.csrfToken() : null;
+  } catch {
+    res.locals.csrfToken = null;
+  }
+  next();
+});
 // Serve static assets with no-store to avoid stale caching in admin dashboard
 app.use('/static', express.static(path.join(__dirname, 'public'), {
   etag: false,
@@ -534,6 +620,14 @@ app.post('/pull', (req, res) => {
   const out = runStore.requestPull(entityType, entityId);
   if (!out.ok) return res.status(400).send('Pull request failed');
   res.json(out);
+});
+
+// CSRF failures
+app.use((err, req, res, next) => {
+  if (err && err.code === 'EBADCSRFTOKEN') {
+    return res.status(403).send('Invalid CSRF token');
+  }
+  return next(err);
 });
 
 app.listen(port, () => {
