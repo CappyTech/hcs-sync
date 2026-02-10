@@ -30,9 +30,35 @@ export async function beginRun(metadata = {}) {
     metadata,
     summary: null,
     changes: [],
+    logs: [],
   };
   await Run.create(run);
   return id;
+}
+
+export async function recordLog(runId, log) {
+  await ensureConnected();
+
+  const entry = {
+    id: newId(),
+    ts: Date.now(),
+    level: String(log?.level || 'info'),
+    message: String(log?.message || ''),
+    stage: log?.stage ? String(log.stage) : null,
+    meta: typeof log?.meta === 'undefined' ? null : (log?.meta ?? null),
+  };
+
+  // Cap log growth to keep run documents manageable.
+  const maxEntries = Number(process.env.RUN_LOG_MAX_ENTRIES || 1000);
+  const slice = Number.isFinite(maxEntries) && maxEntries > 0 ? -Math.floor(maxEntries) : -1000;
+
+  const out = await Run.updateOne(
+    { id: runId },
+    { $push: { logs: { $each: [entry], $slice: slice } } }
+  ).exec();
+
+  if (out.matchedCount === 0) return false;
+  return entry.id;
 }
 
 export async function recordChange(runId, change) {
@@ -69,7 +95,17 @@ export async function finishRun(runId, summary = {}) {
 
 export async function listRuns({ limit = 200 } = {}) {
   await ensureConnected();
-  return Run.find({}).sort({ startedAt: -1 }).limit(limit).lean().exec();
+  return Run.find({})
+    .select({
+      logs: 0,
+      'changes.before': 0,
+      'changes.after': 0,
+      'changes.diff': 0,
+    })
+    .sort({ startedAt: -1 })
+    .limit(limit)
+    .lean()
+    .exec();
 }
 
 export async function getRun(runId) {
@@ -113,6 +149,7 @@ export function requestPull(entityType, entityId) {
 export default {
   beginRun,
   recordChange,
+  recordLog,
   finishRun,
   listRuns,
   getRun,
