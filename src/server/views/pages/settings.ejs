@@ -24,6 +24,7 @@
   <% } %>
 
   <form method="post" action="/settings/cron" class="space-y-4">
+    <% if (csrfToken) { %><input type="hidden" name="_csrf" value="<%= csrfToken %>" /><% } %>
     <div class="flex items-center">
       <input id="cronEnabled" name="enabled" type="checkbox" value="1" class="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500" <%= cronConfig?.enabled ? 'checked' : '' %> <%= settingsEditable ? '' : 'disabled' %> />
       <label for="cronEnabled" class="ml-2 text-sm font-medium text-gray-900 dark:text-gray-100">Enable cron</label>
