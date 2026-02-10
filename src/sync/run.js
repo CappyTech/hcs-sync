@@ -158,8 +158,28 @@ function addMongoStats(target, stats) {
 
 async function run(options = {}) {
   const runId = options?.runId ? String(options.runId) : null;
+  const recordLog = typeof options?.recordLog === 'function' ? options.recordLog : null;
   const start = Date.now();
   let stage = 'initialising';
+
+  const emitLog = (level, message, meta) => {
+    if (!recordLog) return;
+    Promise.resolve(
+      recordLog({
+        level,
+        message,
+        stage,
+        meta,
+      })
+    ).catch(() => {});
+  };
+
+  const setStage = (nextStage) => {
+    stage = nextStage;
+    progress.setStage(stage);
+    emitLog('info', 'Stage changed', { stage });
+  };
+
   const mongoSummary = {};
   const mongoDetails = {};
   const heartbeat = setInterval(() => {
@@ -169,30 +189,33 @@ async function run(options = {}) {
   try { heartbeat.unref?.(); } catch {}
 
   try {
-    stage = 'kashflow:auth';
+    setStage('kashflow:auth');
     const kf = await createClient();
     logger.info('Starting KashFlow admin sync (Node.js)');
+    emitLog('info', 'Starting KashFlow admin sync');
 
     // Prove KashFlow connectivity/auth early.
     // Some KashFlow tenants don’t expose /metadata; treat a successful “small list” as connectivity too.
     try {
-      stage = 'kashflow:metadata';
-      progress.setStage(stage);
+      setStage('kashflow:metadata');
       const meta = await kf.metadata.get();
       logger.info({ hasMeta: Boolean(meta) }, 'KashFlow connectivity check ok');
+      emitLog('info', 'KashFlow connectivity check ok', { method: 'metadata', hasMeta: Boolean(meta) });
     } catch (err) {
       if (err?.response?.status === 404) {
         try {
-          stage = 'kashflow:probe';
-          progress.setStage(stage);
+          setStage('kashflow:probe');
           const sample = await kf.customers.list({ perpage: 1 });
           logger.info({ sampleCount: Array.isArray(sample) ? sample.length : 0 }, 'KashFlow connectivity check ok (probe fallback)');
+          emitLog('info', 'KashFlow connectivity check ok', { method: 'probe', sampleCount: Array.isArray(sample) ? sample.length : 0 });
         } catch (probeErr) {
           logger.error({ status: probeErr.response?.status, message: probeErr.message, data: probeErr.response?.data }, 'KashFlow connectivity probe failed');
+          emitLog('error', 'KashFlow connectivity probe failed', { status: probeErr?.response?.status || null, message: probeErr?.message || null });
           throw probeErr;
         }
       } else {
         logger.error({ status: err.response?.status, message: err.message, data: err.response?.data }, 'KashFlow connectivity check failed');
+        emitLog('error', 'KashFlow connectivity check failed', { status: err?.response?.status || null, message: err?.message || null });
         throw err;
       }
     }
@@ -200,16 +223,16 @@ async function run(options = {}) {
     // Optional MongoDB sink (skip if not configured).
     let db = null;
     if (isMongoEnabled()) {
-      stage = 'mongo:connect';
-      progress.setStage(stage);
+      setStage('mongo:connect');
       db = await getMongoDb();
       await ensureKashflowIndexes(db);
+      emitLog('info', 'Mongo connected');
     } else {
       logger.warn('MongoDB not configured; running in fetch-only mode (no upserts)');
+      emitLog('warn', 'Mongo not configured; running in fetch-only mode');
     }
 
-    stage = 'fetch:lists';
-    progress.setStage(stage);
+    setStage('fetch:lists');
     const [customers, suppliers, projects, nominals] = await Promise.all([
       kf.customers.listAll({ perpage: 200 }),
       kf.suppliers.listAll({ perpage: 200 }),
@@ -221,10 +244,16 @@ async function run(options = {}) {
     const customerCodes = (customers || []).map(pickCode).filter((x) => !isMissingKey(x));
     const supplierCodes = (suppliers || []).map(pickCode).filter((x) => !isMissingKey(x));
 
+    emitLog('info', 'Fetched KashFlow lists', {
+      customers: customers?.length || 0,
+      suppliers: suppliers?.length || 0,
+      projects: projects?.length || 0,
+      nominals: nominals?.length || 0,
+    });
+
     // Upsert list payloads (fast path) + optionally fetch details (canonical).
     if (db) {
-      stage = 'upsert:lists';
-      progress.setStage(stage);
+      setStage('upsert:lists');
       const now = new Date();
       // List payload upserts
       const upsertCustomers = createBulkUpserter(db.collection('customers'), { captureUpserts: true });
@@ -247,8 +276,10 @@ async function run(options = {}) {
       mongoSummary.customers = addMongoStats(mongoSummary.customers, upsertCustomers.getStats());
       mongoDetails.customers = upsertCustomers.getUpsertedFilters();
       logger.info({ mongo: { customers: upsertCustomers.getStats() } }, 'Mongo upsert summary (customers list)');
+      emitLog('info', 'Mongo upsert summary (customers list)', { stats: upsertCustomers.getStats() });
       if (customersSkip.getMissingKey() > 0) {
         logger.warn({ skippedMissingCode: customersSkip.getMissingKey() }, 'Skipped customer upserts with missing code');
+        emitLog('warn', 'Skipped customer upserts with missing code', { count: customersSkip.getMissingKey() });
       }
 
     const upsertSuppliers = createBulkUpserter(db.collection('suppliers'), { captureUpserts: true });
@@ -271,8 +302,10 @@ async function run(options = {}) {
     mongoSummary.suppliers = addMongoStats(mongoSummary.suppliers, upsertSuppliers.getStats());
     mongoDetails.suppliers = upsertSuppliers.getUpsertedFilters();
     logger.info({ mongo: { suppliers: upsertSuppliers.getStats() } }, 'Mongo upsert summary (suppliers list)');
+    emitLog('info', 'Mongo upsert summary (suppliers list)', { stats: upsertSuppliers.getStats() });
     if (suppliersSkip.getMissingKey() > 0) {
       logger.warn({ skippedMissingCode: suppliersSkip.getMissingKey() }, 'Skipped supplier upserts with missing code');
+      emitLog('warn', 'Skipped supplier upserts with missing code', { count: suppliersSkip.getMissingKey() });
     }
 
     const upsertProjects = createBulkUpserter(db.collection('projects'), { captureUpserts: true });
@@ -295,8 +328,10 @@ async function run(options = {}) {
     mongoSummary.projects = addMongoStats(mongoSummary.projects, upsertProjects.getStats());
     mongoDetails.projects = upsertProjects.getUpsertedFilters();
     logger.info({ mongo: { projects: upsertProjects.getStats() } }, 'Mongo upsert summary (projects list)');
+    emitLog('info', 'Mongo upsert summary (projects list)', { stats: upsertProjects.getStats() });
     if (projectsSkip.getMissingKey() > 0) {
       logger.warn({ skippedMissingNumber: projectsSkip.getMissingKey() }, 'Skipped project upserts with missing number');
+      emitLog('warn', 'Skipped project upserts with missing number', { count: projectsSkip.getMissingKey() });
     }
 
       const upsertNominals = createBulkUpserter(db.collection('nominals'), { captureUpserts: true });
@@ -319,15 +354,16 @@ async function run(options = {}) {
       mongoSummary.nominals = addMongoStats(mongoSummary.nominals, upsertNominals.getStats());
       mongoDetails.nominals = upsertNominals.getUpsertedFilters();
       logger.info({ mongo: { nominals: upsertNominals.getStats() } }, 'Mongo upsert summary (nominals list)');
+      emitLog('info', 'Mongo upsert summary (nominals list)', { stats: upsertNominals.getStats() });
       if (nominalsSkip.getMissingKey() > 0) {
         logger.warn({ skippedMissingCode: nominalsSkip.getMissingKey() }, 'Skipped nominal upserts with missing code');
+        emitLog('warn', 'Skipped nominal upserts with missing code', { count: nominalsSkip.getMissingKey() });
       }
     }
 
     // Fetch details for customers/suppliers to capture fields only present in single-item endpoints.
     if (db && customerCodes.length > 0) {
-    stage = 'customers:details';
-    progress.setStage(stage);
+    setStage('customers:details');
     progress.setItemTotal('customers', customerCodes.length);
     progress.setItemDone('customers', 0);
     const upserter = createBulkUpserter(db.collection('customers'), { captureUpserts: true });
@@ -363,14 +399,14 @@ async function run(options = {}) {
       };
     }
     logger.info({ mongo: { customers: upserter.getStats() } }, 'Mongo upsert summary (customers details)');
+    emitLog('info', 'Mongo upsert summary (customers details)', { stats: upserter.getStats() });
     } else {
       progress.setItemTotal('customers', customerCodes.length);
       progress.setItemDone('customers', customerCodes.length);
     }
 
     if (db && supplierCodes.length > 0) {
-    stage = 'suppliers:details';
-    progress.setStage(stage);
+    setStage('suppliers:details');
     progress.setItemTotal('suppliers', supplierCodes.length);
     progress.setItemDone('suppliers', 0);
     const upserter = createBulkUpserter(db.collection('suppliers'), { captureUpserts: true });
@@ -405,6 +441,7 @@ async function run(options = {}) {
       };
     }
     logger.info({ mongo: { suppliers: upserter.getStats() } }, 'Mongo upsert summary (suppliers details)');
+    emitLog('info', 'Mongo upsert summary (suppliers details)', { stats: upserter.getStats() });
     } else {
       progress.setItemTotal('suppliers', supplierCodes.length);
       progress.setItemDone('suppliers', supplierCodes.length);
@@ -417,11 +454,11 @@ async function run(options = {}) {
     progress.setItemDone('nominals', (nominals || []).length);
     logger.info({ nominalsCount: nominals?.length || 0 }, 'Fetched nominals');
 
-    stage = 'invoices:per-customer';
-    progress.setStage(stage);
+    setStage('invoices:per-customer');
     progress.setItemTotal('invoices', (customers || []).length);
     progress.setItemDone('invoices', 0);
     logger.info({ customers: customerCodes.length, concurrency: config.concurrency || 4 }, 'Starting per-customer invoices fetch');
+    emitLog('info', 'Starting per-customer invoices fetch', { customers: customerCodes.length, concurrency: config.concurrency || 4 });
     let invoicesSkippedMissingNumber = 0;
     const invoicesUpserter = db ? createBulkUpserter(db.collection('invoices'), { captureUpserts: true }) : null;
     const invoicesByCustomer = await createPool(
@@ -459,13 +496,14 @@ async function run(options = {}) {
       mongoSummary.invoices = addMongoStats(mongoSummary.invoices, invoicesUpserter.getStats());
       mongoDetails.invoices = invoicesUpserter.getUpsertedFilters();
       logger.info({ mongo: { invoices: invoicesUpserter.getStats() } }, 'Mongo upsert summary (invoices)');
+      emitLog('info', 'Mongo upsert summary (invoices)', { stats: invoicesUpserter.getStats() });
     }
 
-    stage = 'quotes:per-customer';
-    progress.setStage(stage);
+    setStage('quotes:per-customer');
     progress.setItemTotal('quotes', (customers || []).length);
     progress.setItemDone('quotes', 0);
     logger.info({ customers: customerCodes.length, concurrency: config.concurrency || 4 }, 'Starting per-customer quotes fetch');
+    emitLog('info', 'Starting per-customer quotes fetch', { customers: customerCodes.length, concurrency: config.concurrency || 4 });
     let quotesSkippedMissingNumber = 0;
     const quotesUpserter = db ? createBulkUpserter(db.collection('quotes'), { captureUpserts: true }) : null;
     const quotesByCustomer = await createPool(
@@ -503,13 +541,14 @@ async function run(options = {}) {
       mongoSummary.quotes = addMongoStats(mongoSummary.quotes, quotesUpserter.getStats());
       mongoDetails.quotes = quotesUpserter.getUpsertedFilters();
       logger.info({ mongo: { quotes: quotesUpserter.getStats() } }, 'Mongo upsert summary (quotes)');
+      emitLog('info', 'Mongo upsert summary (quotes)', { stats: quotesUpserter.getStats() });
     }
 
-    stage = 'purchases:per-supplier';
-    progress.setStage(stage);
+    setStage('purchases:per-supplier');
     progress.setItemTotal('purchases', (suppliers || []).length);
     progress.setItemDone('purchases', 0);
     logger.info({ suppliers: supplierCodes.length, concurrency: config.concurrency || 4 }, 'Starting per-supplier purchases fetch');
+    emitLog('info', 'Starting per-supplier purchases fetch', { suppliers: supplierCodes.length, concurrency: config.concurrency || 4 });
     let purchasesSkippedMissingNumber = 0;
     const purchasesUpserter = db ? createBulkUpserter(db.collection('purchases'), { captureUpserts: true }) : null;
     const purchasesBySupplier = await createPool(
@@ -547,6 +586,7 @@ async function run(options = {}) {
       mongoSummary.purchases = addMongoStats(mongoSummary.purchases, purchasesUpserter.getStats());
       mongoDetails.purchases = purchasesUpserter.getUpsertedFilters();
       logger.info({ mongo: { purchases: purchasesUpserter.getStats() } }, 'Mongo upsert summary (purchases)');
+      emitLog('info', 'Mongo upsert summary (purchases)', { stats: purchasesUpserter.getStats() });
     }
 
     const invoicesTotal = invoicesByCustomer.reduce((a, b) => a + (Number(b) || 0), 0);
@@ -565,6 +605,8 @@ async function run(options = {}) {
     logger.info({ quotesCount: quotesTotal }, 'Fetched quotes (per customer)');
     logger.info({ purchasesCount: purchasesTotal }, 'Fetched purchases (per supplier)');
 
+    emitLog('info', 'Fetched transactional items', { invoices: invoicesTotal, quotes: quotesTotal, purchases: purchasesTotal });
+
     const counts = {
       customers: customers?.length || 0,
       suppliers: suppliers?.length || 0,
@@ -574,13 +616,17 @@ async function run(options = {}) {
       quotes: quotesTotal,
       purchases: purchasesTotal,
     };
-    stage = 'finalising';
+    setStage('finalising');
     logger.info({ counts, durationMs: Date.now() - start }, 'KashFlow admin sync (Node.js) finished');
+    emitLog('success', 'Sync finished', { counts, durationMs: Date.now() - start });
     // Provide previous counts hook for history delta tracking (if available via env or progress)
     const previousCounts = null; // placeholder for future persisted state
     const mongo = db ? mongoSummary : null;
     const mongoUpserts = db ? mongoDetails : null;
     return { counts, previousCounts, mongo, mongoUpserts };
+  } catch (err) {
+    emitLog('error', 'Sync runner failed', { message: err?.message || null, status: err?.response?.status || null });
+    throw err;
   } finally {
     try { clearInterval(heartbeat); } catch {}
   }
