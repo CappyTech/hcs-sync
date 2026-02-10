@@ -8,7 +8,6 @@ services:
     ports:
       - "8080:3000"
     networks:
-      - default
       - hcs-net
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3000/cron/health"]
