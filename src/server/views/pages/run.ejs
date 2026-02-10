@@ -15,6 +15,49 @@
   </div>
 </div>
 
+<h2 class="text-xl font-semibold mb-2">Log</h2>
+<% const allLogs = Array.isArray(run.logs) ? run.logs : []; %>
+<% const maxShow = 200; %>
+<% const startIdx = Math.max(0, allLogs.length - maxShow); %>
+<% const runLogs = allLogs.slice(startIdx); %>
+<% if (runLogs.length === 0) { %>
+  <p class="text-sm text-gray-500 dark:text-gray-400 mb-6">No log entries recorded for this run.</p>
+<% } else { %>
+  <p class="text-xs text-gray-500 dark:text-gray-400 mb-2">
+    Showing <%= runLogs.length %> of <%= allLogs.length %> entries.
+  </p>
+  <div class="relative overflow-x-auto shadow-md sm:rounded-lg mb-6">
+    <table class="w-full text-sm text-left rtl:text-right text-gray-500 dark:text-gray-400">
+      <thead class="text-xs text-gray-700 uppercase bg-gray-50 dark:bg-gray-700 dark:text-gray-400">
+        <tr>
+          <th class="px-6 py-3">Time</th>
+          <th class="px-6 py-3">Level</th>
+          <th class="px-6 py-3">Stage</th>
+          <th class="px-6 py-3">Message</th>
+        </tr>
+      </thead>
+      <tbody>
+        <% runLogs.forEach((l, idx) => { %>
+          <tr class="bg-white border-b dark:bg-gray-800 dark:border-gray-700">
+            <td class="px-6 py-4 whitespace-nowrap"><%= formatDateTimeUK(l.ts) %></td>
+            <td class="px-6 py-4"><span class="font-mono text-xs"><%= l.level %></span></td>
+            <td class="px-6 py-4"><span class="font-mono text-xs"><%= l.stage || '—' %></span></td>
+            <td class="px-6 py-4">
+              <div><%= l.message %></div>
+              <% if (l.meta) { %>
+                <details class="mt-1">
+                  <summary class="cursor-pointer text-xs text-gray-500 dark:text-gray-400">meta</summary>
+                  <pre class="overflow-auto bg-gray-50 dark:bg-gray-800 p-2 rounded text-xs"><%= JSON.stringify(l.meta, null, 2) %></pre>
+                </details>
+              <% } %>
+            </td>
+          </tr>
+        <% }) %>
+      </tbody>
+    </table>
+  </div>
+<% } %>
+
 <h2 class="text-xl font-semibold mb-2">Mongo</h2>
 <% const mongo = run?.summary?.mongo || null; %>
 <% if (!mongo) { %>
