@@ -5,7 +5,7 @@ import fs from 'fs';
 import cookieParser from 'cookie-parser';
 import jwt from 'jsonwebtoken';
 import helmet from 'helmet';
-import csurf from 'csurf';
+import CsrfTokens from 'csrf';
 import logger from '../util/logger.js';
 import runSync from '../sync/run.js';
 import progress from './progress.js';
@@ -346,29 +346,49 @@ app.set('views', path.join(__dirname, 'views'));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// CSRF protection for state-changing requests (cookie-based).
-const csrfProtection = csurf({
-  cookie: {
-    key: 'hcs_sync_csrf',
-    httpOnly: true,
-    sameSite: 'lax',
-    secure: String(process.env.COOKIE_SECURE || '').toLowerCase() === 'true',
-  },
+// CSRF protection (double-submit style) using a per-client secret stored in an HttpOnly cookie.
+// This avoids server-side sessions while still protecting POST routes.
+const csrfTokens = new CsrfTokens();
+const csrfCookieName = 'hcs_sync_csrf_secret';
+const csrfCookieSecure = String(process.env.COOKIE_SECURE || '').toLowerCase() === 'true';
+
+app.use((req, res, next) => {
+  // Ensure a stable secret per client.
+  let secret = req.cookies?.[csrfCookieName];
+  if (!secret) {
+    secret = csrfTokens.secretSync();
+    res.cookie(csrfCookieName, secret, {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: csrfCookieSecure,
+      path: '/',
+    });
+  }
+
+  try {
+    res.locals.csrfToken = csrfTokens.create(secret);
+  } catch {
+    res.locals.csrfToken = null;
+  }
+
+  next();
 });
 
 app.use((req, res, next) => {
   const method = (req.method || '').toUpperCase();
   if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return next();
-  return csrfProtection(req, res, next);
-});
 
-app.use((req, res, next) => {
-  try {
-    res.locals.csrfToken = typeof req.csrfToken === 'function' ? req.csrfToken() : null;
-  } catch {
-    res.locals.csrfToken = null;
+  const secret = req.cookies?.[csrfCookieName];
+  const headerToken = req.headers['x-csrf-token'] || req.headers['x-xsrf-token'] || req.headers['csrf-token'] || req.headers['xsrf-token'];
+  const token = (req.body && req.body._csrf) || headerToken;
+
+  if (!secret || !token || typeof token !== 'string') {
+    return res.status(403).send('Missing CSRF token');
   }
-  next();
+
+  const ok = csrfTokens.verify(secret, token);
+  if (!ok) return res.status(403).send('Invalid CSRF token');
+  return next();
 });
 // Serve static assets with no-store to avoid stale caching in admin dashboard
 app.use('/static', express.static(path.join(__dirname, 'public'), {
@@ -622,13 +642,6 @@ app.post('/pull', (req, res) => {
   res.json(out);
 });
 
-// CSRF failures
-app.use((err, req, res, next) => {
-  if (err && err.code === 'EBADCSRFTOKEN') {
-    return res.status(403).send('Invalid CSRF token');
-  }
-  return next(err);
-});
 
 app.listen(port, () => {
   logger.info({ port }, 'Server listening');
