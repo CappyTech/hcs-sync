@@ -276,9 +276,30 @@ async function triggerSync({ requestedBy }) {
   }
 
   const runId = currentRunId;
-  logs.unshift({ time: Date.now(), level: 'info', message: `Sync started (${requestedBy})`, meta: { runId } });
 
-  const promise = runSync({ runId })
+  const recordRunLog = (level, message, meta) => {
+    logs.unshift({ time: Date.now(), level, message, meta: { ...(meta || {}), runId } });
+    Promise.resolve(
+      runStore.recordLog(runId, {
+        level,
+        message,
+        meta,
+      })
+    ).catch(() => {});
+  };
+
+  recordRunLog('info', `Sync started (${requestedBy})`, { requestedBy });
+
+  const promise = runSync({
+    runId,
+    recordLog: (entry) => {
+      const level = String(entry?.level || 'info');
+      const message = String(entry?.message || '');
+      const stage = entry?.stage ? String(entry.stage) : null;
+      const meta = typeof entry?.meta === 'undefined' ? null : (entry?.meta ?? null);
+      return runStore.recordLog(runId, { level, message, stage, meta });
+    },
+  })
     .then((result) => {
       lastRun = Date.now();
       isRunning = false;
@@ -316,7 +337,7 @@ async function triggerSync({ requestedBy }) {
         error: null,
       });
 
-      logs.unshift({ time: Date.now(), level: 'success', message: 'Sync completed successfully', meta: { counts: lastCounts, runId } });
+      recordRunLog('success', 'Sync completed successfully', { counts: lastCounts });
       return result;
     })
     .catch((err) => {
@@ -331,7 +352,7 @@ async function triggerSync({ requestedBy }) {
       }
       progress.fail(lastError);
       runStore.finishRun(runId, { error: lastError });
-      logs.unshift({ time: Date.now(), level: 'error', message: 'Sync failed', meta: { error: err?.message, runId } });
+      recordRunLog('error', 'Sync failed', { error: lastError });
       throw err;
     });
 
