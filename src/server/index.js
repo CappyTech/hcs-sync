@@ -1,6 +1,7 @@
 import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import fs from 'fs';
 import logger from '../util/logger.js';
 import runSync from '../sync/run.js';
 import progress from './progress.js';
@@ -97,6 +98,36 @@ function computeNextCronRunAtMs({ enabled, schedule, timezone }) {
     return Number.isFinite(nextMs) ? nextMs : null;
   } catch {
     return null;
+  }
+}
+
+function isLikelyRunningInDocker() {
+  try {
+    return fs.existsSync('/.dockerenv');
+  } catch {
+    return false;
+  }
+}
+
+function warnIfMongoPointsToLocalhost() {
+  if (!isMongooseEnabled()) return;
+
+  const host = String(config.mongoHost || '').trim().toLowerCase();
+  const uri = String(config.mongoUri || '').trim();
+
+  const isLocalHost = host === 'localhost' || host === '127.0.0.1' || host === '::1';
+  const isLocalUri =
+    !!uri &&
+    /mongodb(\+srv)?:\/\/(?:[^@/]+@)?(localhost|127\.0\.0\.1|\[::1\]|::1)(?::\d+)?\//i.test(uri);
+
+  if ((isLocalHost || isLocalUri) && isLikelyRunningInDocker()) {
+    logger.warn(
+      {
+        mongoHost: config.mongoHost || null,
+        mongoUriProvided: Boolean(config.mongoUri),
+      },
+      'MongoDB is configured to connect to localhost from inside Docker; this usually fails. Use a container hostname (e.g. hcs-mongo) on a shared network, or set MONGO_URI.'
+    );
   }
 }
 
@@ -507,6 +538,7 @@ app.post('/pull', (req, res) => {
 
 app.listen(port, () => {
   logger.info({ port }, 'Server listening');
+  warnIfMongoPointsToLocalhost();
 
   // Load settings and apply cron config after the server is up.
   (async () => {
