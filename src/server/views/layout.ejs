@@ -3,6 +3,9 @@
   <head>
     <meta charset="utf-8" />
     <title><%= typeof title !== 'undefined' ? title : 'HCS Sync' %></title>
+    <% if (typeof csrfToken !== 'undefined' && csrfToken) { %>
+      <meta name="csrf-token" content="<%= csrfToken %>" />
+    <% } %>
     <link rel="stylesheet" href="/static/styles.css" />
     <script>
         // On page load or when changing themes, best to add inline in `head` to avoid FOUC
