@@ -14,6 +14,21 @@
     <div class="p-4 bg-white border border-gray-200 rounded-lg shadow sm:p-6 dark:bg-gray-800 dark:border-gray-700">
       <span class="text-sm font-medium text-gray-500 dark:text-gray-400">Last Run</span>
       <p id="last-run" class="mt-2 text-gray-900 dark:text-white"><%= lastRun ? formatDateTimeUK(lastRun) : 'Never' %></p>
+      <% if (!lastRun) { %>
+        <% const cronEnabled = Boolean(cronConfig?.enabled); %>
+        <% if (cronEnabled) { %>
+          <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+            Cron is enabled.
+            <% if (cronNextRunAt) { %>
+              Next run: <span class="font-medium text-gray-700 dark:text-gray-200"><%= formatDateTimeUK(cronNextRunAt) %></span>.
+            <% } else if (cronConfig?.schedule) { %>
+              Next run time is based on: <span class="font-medium text-gray-700 dark:text-gray-200"><%= cronConfig.schedule %></span>.
+            <% } %>
+          </p>
+        <% } else { %>
+          <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">Cron is disabled. Press <span class="font-medium text-gray-700 dark:text-gray-200">Run Sync</span> to start the first run.</p>
+        <% } %>
+      <% } %>
     </div>
     <div class="p-4 bg-white border border-gray-200 rounded-lg shadow sm:p-6 dark:bg-gray-800 dark:border-gray-700">
       <span class="text-sm font-medium text-gray-500 dark:text-gray-400">Actions</span>
