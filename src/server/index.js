@@ -6,6 +6,9 @@ import runSync from '../sync/run.js';
 import progress from './progress.js';
 import changeLog from './changeLog.js';
 import config from '../config.js';
+import cookieParser from 'cookie-parser';
+import { optionalSso, ensureSsoAuthenticated } from './sso.js';
+import { clearCachedSessionToken } from '../kashflow/auth.js';
 
 const app = express();
 const port = Number(process.env.PORT || 3000);
@@ -23,6 +26,8 @@ const __dirname = path.dirname(__filename);
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
 app.use(express.urlencoded({ extended: true }));
+app.use(cookieParser());
+app.use(optionalSso);
 // Serve static assets with no-store to avoid stale caching in admin dashboard
 app.use('/static', express.static(path.join(__dirname, 'public'), {
   etag: false,
@@ -69,11 +74,29 @@ app.get('/debug/auth', (_req, res) => {
   });
 });
 
-app.get('/', (_req, res) => {
+app.get('/', ensureSsoAuthenticated, (_req, res) => {
   res.render('layout', { title: 'HCS Sync', content: 'pages/index', isRunning, lastRun, counts: lastCounts, lastError });
 });
 
-app.post('/run', async (_req, res) => {
+
+app.get('/logout', (_req, res) => {
+  try {
+    clearCachedSessionToken();
+    logs.unshift({ time: Date.now(), level: 'info', message: 'Logout: cleared cached session token; redirecting to hcs-app' });
+  } catch {}
+  res.redirect('https://app.heroncs.co.uk/logout');
+});
+
+// Alias route: clear token then redirect to app.heroncs.co.uk /user/logout
+app.get('/user/logout', (_req, res) => {
+  try {
+    clearCachedSessionToken();
+    logs.unshift({ time: Date.now(), level: 'info', message: 'User Logout: cleared cached session token; redirecting to hcs-app /user/logout' });
+  } catch {}
+  res.redirect('https://app.heroncs.co.uk/user/logout');
+});
+
+app.post('/run', ensureSsoAuthenticated, async (_req, res) => {
   if (isRunning) {
     return res.status(409).send('Sync already running');
   }

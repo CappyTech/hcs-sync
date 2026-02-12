@@ -24,6 +24,23 @@ For live development:
 npm run dev
 ```
 
+## SSO (hcs-app)
+This app supports SSO via the `hcs-app` provider.
+
+- Login redirect: unauthenticated requests are redirected to `https://app.heroncs.co.uk/sso/hcs-sync?return_to={currentUrl}`.
+- Cookie: `hcs-app` issues an `hcs_sso` JWT cookie for the `hcs-sync` audience.
+- Protected routes: `/` and `/run` require a valid SSO cookie.
+
+Environment variables:
+- `HCS_SSO_JWT_SECRET` — shared HS256 secret used to verify the JWT.
+- `HCS_SSO_COOKIE_NAME` — cookie name (default `hcs_sso`).
+- `HCS_SSO_ISSUER` — expected issuer (default `hcs-app`).
+- `HCS_SSO_AUDIENCE` — expected audience (default `hcs-sync`).
+- `HCS_SSO_LOGIN_URL` — SSO handoff URL (default `https://app.heroncs.co.uk/sso/hcs-sync`).
+
+Logout:
+- `GET /user/logout` clears the local KashFlow token cache and redirects to `https://app.heroncs.co.uk/user/logout`.
+
 ## Notes
 - Uses Axios client covering Customers, Suppliers, Invoices, Purchases, Projects, Quotes, Nominals, and Notes endpoints as per Swagger.
 - Extend `src/sync/run.js` with your upsert logic.
