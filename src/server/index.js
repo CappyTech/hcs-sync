@@ -9,6 +9,7 @@ import config from '../config.js';
 import cookieParser from 'cookie-parser';
 import { optionalSso, ensureSsoAuthenticated } from './sso.js';
 import { clearCachedSessionToken } from '../kashflow/auth.js';
+import mongo from '../db/mongo.js';
 
 const app = express();
 const port = Number(process.env.PORT || 3000);
@@ -174,4 +175,12 @@ app.post('/pull', (req, res) => {
 
 app.listen(port, () => {
   logger.info({ port }, 'Server listening');
+
+  // Trigger Mongo connection once at startup so logs show which DB is in use.
+  // Do not block startup; if Mongo is down we still want the UI/routes.
+  if (mongo.isDbEnabled()) {
+    mongo.getDb().catch((e) => {
+      logger.warn({ err: e?.message }, 'MongoDB connect on startup failed');
+    });
+  }
 });

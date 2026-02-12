@@ -7,6 +7,22 @@ let db;
 let loggedVersion = false;
 const migrationPromises = new Map();
 
+function redactMongoUri(uri) {
+  if (!uri) return '';
+  try {
+    const u = new URL(uri);
+    // Preserve scheme + hosts + path/options, but hide credentials.
+    if (u.username || u.password) {
+      u.username = '***';
+      u.password = '***';
+    }
+    return u.toString();
+  } catch {
+    // Fallback for non-standard URIs or parse failures.
+    return String(uri).replace(/\/\/[^@/]+@/g, '//***:***@');
+  }
+}
+
 export function isDbEnabled() {
   return Boolean(config.mongoUri && config.mongoDbName);
 }
@@ -29,6 +45,37 @@ export async function getDb() {
   if (!loggedVersion) {
     try {
       const admin = db.admin();
+
+      logger.info(
+        {
+          mongoDbName: config.mongoDbName,
+          mongoUri: redactMongoUri(config.mongoUri),
+          migrateEnvelopes: Boolean(config.mongoMigrateEnvelopes),
+        },
+        'MongoDB configured'
+      );
+
+      try {
+        let hello;
+        try {
+          hello = await admin.command({ hello: 1 });
+        } catch {
+          hello = await admin.command({ isMaster: 1 });
+        }
+        logger.info(
+          {
+            me: hello?.me,
+            setName: hello?.setName,
+            primary: hello?.primary,
+            hosts: hello?.hosts,
+            isWritablePrimary: hello?.isWritablePrimary ?? hello?.ismaster,
+          },
+          'MongoDB topology'
+        );
+      } catch (e) {
+        logger.warn({ err: e?.message }, 'MongoDB topology check failed');
+      }
+
       let info;
       try {
         info = await admin.serverStatus();
