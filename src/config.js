@@ -28,6 +28,8 @@ const config = {
   mongoUri: process.env.MONGO_URI || buildMongoUriFromParts(process.env) || '',
   mongoDbName: process.env.MONGO_DB_NAME || '',
   mongoMigrateEnvelopes: /^1|true|yes$/i.test(String(process.env.MONGO_MIGRATE_ENVELOPES || 'false')),
+  mongoValidateDocs: /^1|true|yes$/i.test(String(process.env.MONGO_VALIDATE_DOCS || 'false')),
+  mongoValidateModels: /^1|true|yes$/i.test(String(process.env.MONGO_VALIDATE_MODELS || 'false')),
   keepUserLoggedIn: /^1|true|yes$/i.test(String(process.env.KEEP_USER_LOGGED_IN || 'false')),
 };
 

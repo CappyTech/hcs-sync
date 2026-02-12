@@ -9,6 +9,7 @@ Backend-only KashFlow admin sync rewritten in Node.js using updated REST endpoin
   - `LOG_LEVEL=info`
   - `PINO_PRETTY=1` (optional for human-readable logs)
   - `MONGO_MIGRATE_ENVELOPES=1` (optional one-time migration to flatten legacy `{ data: { ... } }` documents)
+  - `MONGO_VALIDATE_DOCS=1` (optional: validates incoming docs before upsert; invalid docs are skipped with a warning)
 
 ## Install
 ```powershell

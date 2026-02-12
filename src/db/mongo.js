@@ -1,8 +1,7 @@
-import { MongoClient } from 'mongodb';
+import mongoose from 'mongoose';
 import config from '../config.js';
 import logger from '../util/logger.js';
 
-let client; // cached MongoClient
 let db;
 let loggedVersion = false;
 const migrationPromises = new Map();
@@ -32,16 +31,18 @@ export async function getDb() {
     throw new Error('MongoDB not configured: set MONGO_URI and MONGO_DB_NAME');
   }
   if (db) return db;
-  if (!client) {
-    client = new MongoClient(config.mongoUri, {
+
+  if (mongoose.connection.readyState !== 1) {
+    await mongoose.connect(config.mongoUri, {
+      dbName: config.mongoDbName,
       maxPoolSize: 10,
       serverSelectionTimeoutMS: 10000,
       // Pin to Stable API v1 for forward compatibility with MongoDB 8+
       serverApi: { version: '1', strict: true, deprecationErrors: true },
     });
   }
-  await client.connect();
-  db = client.db(config.mongoDbName);
+
+  db = mongoose.connection.db;
   if (!loggedVersion) {
     try {
       const admin = db.admin();
@@ -94,11 +95,10 @@ export async function getDb() {
 
 export async function closeDb() {
   try {
-    await client?.close();
+    await mongoose.disconnect();
   } catch (e) {
     logger.warn({ err: e?.message }, 'Mongo close failed');
   } finally {
-    client = undefined;
     db = undefined;
   }
 }
@@ -138,6 +138,30 @@ function normalizeDoc(d, now) {
   }
 
   return d;
+}
+
+function validateNormalizedDoc(collectionName, doc) {
+  if (!isPlainObject(doc)) {
+    return { ok: false, reason: 'notPlainObject' };
+  }
+  const id = pickId(doc);
+  if (!id) {
+    return { ok: false, reason: 'missingIdentifier' };
+  }
+
+  // Minimal per-collection expectations (kept intentionally loose)
+  if ((collectionName === 'customers' || collectionName === 'suppliers') && !String(doc.Code ?? doc.code ?? '')) {
+    return { ok: false, reason: 'missingCode' };
+  }
+  if (collectionName === 'projects' && !String(doc.ProjectNumber ?? doc.projectNumber ?? doc.Code ?? doc.code ?? '')) {
+    return { ok: false, reason: 'missingProjectNumber' };
+  }
+  if (collectionName === 'nominals' && !String(doc.NominalCode ?? doc.nominalCode ?? doc.Code ?? doc.code ?? '')) {
+    return { ok: false, reason: 'missingNominalCode' };
+  }
+  // invoices/quotes/purchases can key off Number or Code; pickId already enforces at least one.
+
+  return { ok: true, id };
 }
 
 async function maybeMigrateEnvelopeDocs(col, collectionName) {
@@ -214,13 +238,30 @@ export async function upsertMany(collectionName, docs = []) {
   await maybeMigrateEnvelopeDocs(col, collectionName);
   const now = new Date();
   const ops = [];
+  let skipped = 0;
+  const skipReasons = {};
   for (const d of docs) {
     const normalized = normalizeDoc(d, now);
-    const id = pickId(normalized);
-    if (!id) continue;
+    let id = pickId(normalized);
+
+    if (config.mongoValidateDocs) {
+      const verdict = validateNormalizedDoc(collectionName, normalized);
+      if (!verdict.ok) {
+        skipped += 1;
+        skipReasons[verdict.reason] = (skipReasons[verdict.reason] || 0) + 1;
+        continue;
+      }
+      id = verdict.id;
+    }
+
+    if (!id) {
+      skipped += 1;
+      skipReasons.missingIdentifier = (skipReasons.missingIdentifier || 0) + 1;
+      continue;
+    }
     // Never $set _id; it is set via the update filter.
     // eslint-disable-next-line no-unused-vars
-    const { _id, ...setDoc } = normalized || {};
+    const { _id, data, ...setDoc } = normalized || {};
     ops.push({
       updateOne: {
         filter: { _id: id },
@@ -234,7 +275,14 @@ export async function upsertMany(collectionName, docs = []) {
   }
   if (ops.length === 0) return { upserts: 0 };
   const res = await col.bulkWrite(ops, { ordered: false });
-  return { upserts: (res.upsertedCount || 0) + (res.modifiedCount || 0) };
+  const upserts = (res.upsertedCount || 0) + (res.modifiedCount || 0);
+  if (config.mongoValidateDocs && skipped > 0) {
+    logger.warn(
+      { collectionName, skipped, skipReasons },
+      'Mongo upsert skipped invalid docs'
+    );
+  }
+  return { upserts };
 }
 
 export default {
