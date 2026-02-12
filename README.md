@@ -8,6 +8,7 @@ Backend-only KashFlow admin sync rewritten in Node.js using updated REST endpoin
   - `KASHFLOW_SESSION_TOKEN=KF_...`
   - `LOG_LEVEL=info`
   - `PINO_PRETTY=1` (optional for human-readable logs)
+  - `MONGO_MIGRATE_ENVELOPES=1` (optional one-time migration to flatten legacy `{ data: { ... } }` documents)
 
 ## Install
 ```powershell
@@ -44,6 +45,7 @@ Logout:
 ## Notes
 - Uses Axios client covering Customers, Suppliers, Invoices, Purchases, Projects, Quotes, Nominals, and Notes endpoints as per Swagger.
 - Extend `src/sync/run.js` with your upsert logic.
+- Mongo legacy envelope migration: see `docs/mongo-envelope-migration.md`.
 
 ## Dashboard & Routes
 
