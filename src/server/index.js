@@ -233,6 +233,8 @@ function verifySsoCookie(req) {
 app.use((req, res, next) => {
   const p = req.path || '';
   if (p === '/health' || p === '/cron/health') return next();
+  if (p === '/favicon.ico' || p === '/robots.txt') return next();
+  if (p === '/static' || p.startsWith('/static/')) return next();
 
   const user = verifySsoCookie(req);
   if (!user) {
@@ -422,7 +424,7 @@ app.use('/static', express.static(path.join(__dirname, 'public'), {
   },
 }));
 // Serve Flowbite JS from node_modules
-app.use('/static/vendor/flowbite', express.static(path.join(__dirname, '../../../node_modules/flowbite/dist')));
+app.use('/static/vendor/flowbite', express.static(path.join(__dirname, '../../node_modules/flowbite/dist')));
 
 app.get('/health', (_req, res) => {
   const eff = getEffectiveCronConfig();
