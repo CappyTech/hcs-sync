@@ -28,11 +28,30 @@ function createPool(limit, label, handler, onProgress) {
 }
 
 function buildUpsertUpdate({ keyField, keyValue, payload, syncedAt, runId }) {
-  const $set = { [keyField]: keyValue, data: payload, syncedAt };
+  const source = payload && typeof payload === 'object' && !Array.isArray(payload) ? payload : {};
+  const flattened = {};
+  for (const [k, v] of Object.entries(source)) {
+    if (!k) continue;
+    if (k === '_id') continue;
+    if (k === 'data') continue;
+    if (k === 'syncedAt') continue;
+    if (k === 'createdAt') continue;
+    if (k === 'createdByRunId') continue;
+    if (k.startsWith('$')) continue;
+    if (k.includes('.') || k.includes('\u0000')) continue;
+    flattened[k] = v;
+  }
+
+  // Store KashFlow fields at the document root so list views show real fields.
+  // Preserve our normalized key field (e.g. `code`/`number`) and sync metadata.
+  const $set = { ...flattened, [keyField]: keyValue, syncedAt };
   const $setOnInsert = runId
     ? { createdAt: syncedAt, createdByRunId: runId }
     : { createdAt: syncedAt };
-  return { $set, $setOnInsert };
+
+  // Clean up legacy envelope docs that stored the payload under `data`.
+  const $unset = { data: '' };
+  return { $set, $setOnInsert, $unset };
 }
 
 function createBulkUpserter(collection, batchSize = 250) {
