@@ -43,6 +43,25 @@ Environment variables:
 Logout:
 - `GET /user/logout` clears the local KashFlow token cache and redirects to `https://app.heroncs.co.uk/user/logout`.
 
+### Local/dev without SSO
+
+If you’re running this app standalone (no hcs-app SSO available), you can disable SSO checks explicitly:
+
+- `HCS_SSO_DISABLED=1`
+
+This makes `/` and `/run` accessible without an SSO cookie.
+
+### Headless trigger (cron/scripts)
+
+You can allow a non-SSO client (cron, curl, another service) to trigger a sync by setting:
+
+- `HCS_SYNC_RUN_TOKEN=...`
+
+Then call `POST /run` with either:
+
+- Header `X-Run-Token: ...`, or
+- Header `Authorization: Bearer ...`
+
 ## Notes
 - Uses Axios client covering Customers, Suppliers, Invoices, Purchases, Projects, Quotes, Nominals, and Notes endpoints as per Swagger.
 - Extend `src/sync/run.js` with your upsert logic.

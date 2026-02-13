@@ -6,6 +6,17 @@ const AUDIENCE = process.env.HCS_SSO_AUDIENCE || 'hcs-sync';
 const SECRET = process.env.HCS_SSO_JWT_SECRET || '';
 const LOGIN_URL = process.env.HCS_SSO_LOGIN_URL || 'https://app.heroncs.co.uk/sso/hcs-sync';
 
+const SSO_DISABLED = /^(1|true|yes)$/i.test(process.env.HCS_SSO_DISABLED || '');
+
+function attachLocalUser(req) {
+  req.user = {
+    id: 'local',
+    username: 'local',
+    role: 'admin',
+    sso: false,
+  };
+}
+
 function verifyToken(token) {
   if (!SECRET) throw new Error('HCS_SSO_JWT_SECRET is not configured');
   return jwt.verify(token, SECRET, {
@@ -16,6 +27,10 @@ function verifyToken(token) {
 }
 
 export function optionalSso(req, _res, next) {
+  if (SSO_DISABLED) {
+    attachLocalUser(req);
+    return next();
+  }
   try {
     const token = req.cookies?.[COOKIE_NAME];
     if (!token) return next();
@@ -32,6 +47,10 @@ export function optionalSso(req, _res, next) {
 }
 
 export function ensureSsoAuthenticated(req, res, next) {
+  if (SSO_DISABLED) {
+    attachLocalUser(req);
+    return next();
+  }
   try {
     const token = req.cookies?.[COOKIE_NAME];
     if (!token) {

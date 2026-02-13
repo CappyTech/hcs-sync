@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { isDbEnabled as isMongoEnabled, getDb as getMongoDb } from '../db/mongo.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -34,10 +35,19 @@ function randomId() {
   }
 }
 
-export function beginRun(metadata = {}) {
-  const runs = readRuns();
+async function getRunsCollection() {
+  const db = await getMongoDb();
+  return db.collection('runs');
+}
+
+function shouldUseMongo() {
+  return isMongoEnabled();
+}
+
+export async function beginRun(metadata = {}) {
   const id = randomId();
   const run = {
+    _id: id,
     id,
     status: 'running',
     startedAt: Date.now(),
@@ -46,15 +56,20 @@ export function beginRun(metadata = {}) {
     summary: null,
     changes: [],
   };
-  runs.unshift(run);
+
+  if (shouldUseMongo()) {
+    const col = await getRunsCollection();
+    await col.updateOne({ _id: id }, { $setOnInsert: run }, { upsert: true });
+    return id;
+  }
+
+  const runs = readRuns();
+  runs.unshift({ ...run, _id: undefined });
   writeRuns(runs);
   return id;
 }
 
-export function recordChange(runId, change) {
-  const runs = readRuns();
-  const run = runs.find((r) => r.id === runId);
-  if (!run) return false;
+export async function recordChange(runId, change) {
   const entry = {
     id: randomId(),
     ts: Date.now(),
@@ -69,32 +84,79 @@ export function recordChange(runId, change) {
     reverted: false,
     revertNote: null,
   };
+
+  if (shouldUseMongo()) {
+    const col = await getRunsCollection();
+    const res = await col.updateOne(
+      { _id: runId },
+      { $push: { changes: entry } },
+      { upsert: false }
+    );
+    return res.matchedCount ? entry.id : false;
+  }
+
+  const runs = readRuns();
+  const run = runs.find((r) => r.id === runId);
+  if (!run) return false;
   run.changes.push(entry);
   writeRuns(runs);
   return entry.id;
 }
 
-export function finishRun(runId, summary = {}) {
+export async function finishRun(runId, summary = {}) {
+  const patch = {
+    status: summary.error ? 'failed' : 'finished',
+    finishedAt: Date.now(),
+    summary,
+  };
+
+  if (shouldUseMongo()) {
+    const col = await getRunsCollection();
+    const res = await col.updateOne({ _id: runId }, { $set: patch }, { upsert: false });
+    return Boolean(res.matchedCount);
+  }
+
   const runs = readRuns();
   const run = runs.find((r) => r.id === runId);
   if (!run) return false;
-  run.status = summary.error ? 'failed' : 'finished';
-  run.finishedAt = Date.now();
-  run.summary = summary;
+  Object.assign(run, patch);
   writeRuns(runs);
   return true;
 }
 
-export function listRuns() {
+export async function listRuns() {
+  if (shouldUseMongo()) {
+    const col = await getRunsCollection();
+    return await col.find({}).sort({ startedAt: -1 }).toArray();
+  }
   return readRuns();
 }
 
-export function getRun(runId) {
+export async function getRun(runId) {
+  if (shouldUseMongo()) {
+    const col = await getRunsCollection();
+    return await col.findOne({ _id: runId });
+  }
   const runs = readRuns();
   return runs.find((r) => r.id === runId) || null;
 }
 
-export function revertChange(runId, changeId, note = '') {
+export async function revertChange(runId, changeId, note = '') {
+  if (shouldUseMongo()) {
+    const col = await getRunsCollection();
+    const res = await col.updateOne(
+      { _id: runId, 'changes.id': changeId },
+      {
+        $set: {
+          'changes.$.reverted': true,
+          'changes.$.revertNote': note || 'Marked reverted (no DB write performed)',
+        },
+      }
+    );
+    if (!res.matchedCount) return { ok: false, message: 'Change not found' };
+    return { ok: true };
+  }
+
   const runs = readRuns();
   const run = runs.find((r) => r.id === runId);
   if (!run) return { ok: false, message: 'Run not found' };
