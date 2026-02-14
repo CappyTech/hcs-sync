@@ -24,7 +24,29 @@ import cronstrue from 'cronstrue';
 const app = express();
 const port = Number(process.env.PORT || 3000);
 
-const REPO_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
+const __serverFilename = fileURLToPath(import.meta.url);
+const __serverDirname = path.dirname(__serverFilename);
+
+function findRepoRoot(startDir) {
+  let dir = startDir;
+  for (let i = 0; i < 10; i += 1) {
+    try {
+      const hasPkg = fs.existsSync(path.join(dir, 'package.json'));
+      const hasGit = fs.existsSync(path.join(dir, '.git'));
+      if (hasPkg || hasGit) return dir;
+    } catch {
+      // ignore
+    }
+
+    const parent = path.dirname(dir);
+    if (!parent || parent === dir) break;
+    dir = parent;
+  }
+
+  return startDir;
+}
+
+const REPO_ROOT = findRepoRoot(__serverDirname);
 
 const APP_BUILD = (() => {
   const envCommit = (
@@ -38,10 +60,15 @@ const APP_BUILD = (() => {
 
   let version = null;
   try {
-    const pkgPath = fileURLToPath(new URL('../../../package.json', import.meta.url));
-    const pkgRaw = fs.readFileSync(pkgPath, 'utf8');
-    const pkg = JSON.parse(pkgRaw);
-    version = String(pkg?.version || '').trim() || null;
+    const envPkgVersion = typeof process.env.npm_package_version === 'string' ? process.env.npm_package_version.trim() : '';
+    if (envPkgVersion) {
+      version = envPkgVersion;
+    } else {
+      const pkgPath = path.join(REPO_ROOT, 'package.json');
+      const pkgRaw = fs.readFileSync(pkgPath, 'utf8');
+      const pkg = JSON.parse(pkgRaw);
+      version = String(pkg?.version || '').trim() || null;
+    }
   } catch {
   }
 
