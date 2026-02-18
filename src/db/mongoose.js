@@ -1,6 +1,10 @@
 import mongoose from 'mongoose';
 import config from '../config.js';
 
+// Import KashFlow models so they are registered on the Mongoose instance.
+// This is a side-effect import; the models register themselves via mongoose.model().
+import '../server/models/kashflow.js';
+
 let connectPromise = null;
 
 function buildMongoUri() {

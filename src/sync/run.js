@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import logger from '../util/logger.js';
 import createClient from '../kashflow/client.js';
 import config from '../config.js';
@@ -27,27 +28,33 @@ function createPool(limit, label, handler, onProgress) {
   };
 }
 
-function buildUpsertUpdate({ keyField, keyValue, payload, syncedAt, runId }) {
+function buildUpsertUpdate({ keyField, keyValue, payload, syncedAt, runId, protectedFields }) {
   const source = payload && typeof payload === 'object' && !Array.isArray(payload) ? payload : {};
+  const protectedSet = new Set(protectedFields || []);
   const flattened = {};
   for (const [k, v] of Object.entries(source)) {
     if (!k) continue;
     if (k === '_id') continue;
     if (k === 'data') continue;
+    if (k === 'uuid') continue;
     if (k === 'syncedAt') continue;
     if (k === 'createdAt') continue;
     if (k === 'createdByRunId') continue;
     if (k.startsWith('$')) continue;
     if (k.includes('.') || k.includes('\u0000')) continue;
+    if (protectedSet.has(k)) continue;
     flattened[k] = v;
   }
 
   // Store KashFlow fields at the document root so list views show real fields.
   // Preserve our normalized key field (e.g. `code`/`number`) and sync metadata.
   const $set = { ...flattened, [keyField]: keyValue, syncedAt };
-  const $setOnInsert = runId
-    ? { createdAt: syncedAt, createdByRunId: runId }
-    : { createdAt: syncedAt };
+  // Assign a v4 UUID on first insert; existing docs keep their uuid untouched.
+  const $setOnInsert = {
+    uuid: crypto.randomUUID(),
+    createdAt: syncedAt,
+    ...(runId ? { createdByRunId: runId } : {}),
+  };
 
   // Clean up legacy envelope docs that stored the payload under `data`.
   const $unset = { data: '' };
@@ -147,6 +154,13 @@ function pickCode(x) {
 function pickNumber(x) {
   return x?.Number ?? x?.number ?? null;
 }
+
+function pickId(x) {
+  return x?.Id ?? x?.id ?? null;
+}
+
+// CIS fields managed by hcs-app – must not be overwritten by sync.
+const SUPPLIER_PROTECTED_FIELDS = ['Subcontractor', 'IsSubcontractor', 'CISRate', 'CISNumber'];
 
 function isMissingKey(value) {
   if (value === null || typeof value === 'undefined') return true;
@@ -278,15 +292,15 @@ async function run(options = {}) {
       const upsertCustomers = createBulkUpserter(db.collection('customers'), { captureUpserts: true });
       const customersSkip = createSkipCounter();
       for (const c of customers || []) {
-        const code = pickCode(c);
-        if (isMissingKey(code)) {
+        const id = pickId(c);
+        if (id == null) {
           customersSkip.incMissingKey();
           continue;
         }
         await upsertCustomers.push({
           updateOne: {
-            filter: { code },
-            update: buildUpsertUpdate({ keyField: 'code', keyValue: code, payload: c, syncedAt: now, runId }),
+            filter: { Id: id },
+            update: buildUpsertUpdate({ keyField: 'Id', keyValue: id, payload: c, syncedAt: now, runId }),
             upsert: true,
           }
         });
@@ -297,22 +311,22 @@ async function run(options = {}) {
       logger.info({ mongo: { customers: upsertCustomers.getStats() } }, 'Mongo upsert summary (customers list)');
       emitLog('info', 'Mongo upsert summary (customers list)', { stats: upsertCustomers.getStats() });
       if (customersSkip.getMissingKey() > 0) {
-        logger.warn({ skippedMissingCode: customersSkip.getMissingKey() }, 'Skipped customer upserts with missing code');
-        emitLog('warn', 'Skipped customer upserts with missing code', { count: customersSkip.getMissingKey() });
+        logger.warn({ skippedMissingId: customersSkip.getMissingKey() }, 'Skipped customer upserts with missing Id');
+        emitLog('warn', 'Skipped customer upserts with missing Id', { count: customersSkip.getMissingKey() });
       }
 
     const upsertSuppliers = createBulkUpserter(db.collection('suppliers'), { captureUpserts: true });
     const suppliersSkip = createSkipCounter();
     for (const s of suppliers || []) {
-      const code = pickCode(s);
-      if (isMissingKey(code)) {
+      const id = pickId(s);
+      if (id == null) {
         suppliersSkip.incMissingKey();
         continue;
       }
       await upsertSuppliers.push({
         updateOne: {
-          filter: { code },
-          update: buildUpsertUpdate({ keyField: 'code', keyValue: code, payload: s, syncedAt: now, runId }),
+          filter: { Id: id },
+          update: buildUpsertUpdate({ keyField: 'Id', keyValue: id, payload: s, syncedAt: now, runId, protectedFields: SUPPLIER_PROTECTED_FIELDS }),
           upsert: true,
         }
       });
@@ -323,22 +337,25 @@ async function run(options = {}) {
     logger.info({ mongo: { suppliers: upsertSuppliers.getStats() } }, 'Mongo upsert summary (suppliers list)');
     emitLog('info', 'Mongo upsert summary (suppliers list)', { stats: upsertSuppliers.getStats() });
     if (suppliersSkip.getMissingKey() > 0) {
-      logger.warn({ skippedMissingCode: suppliersSkip.getMissingKey() }, 'Skipped supplier upserts with missing code');
-      emitLog('warn', 'Skipped supplier upserts with missing code', { count: suppliersSkip.getMissingKey() });
+      logger.warn({ skippedMissingId: suppliersSkip.getMissingKey() }, 'Skipped supplier upserts with missing Id');
+      emitLog('warn', 'Skipped supplier upserts with missing Id', { count: suppliersSkip.getMissingKey() });
     }
 
     const upsertProjects = createBulkUpserter(db.collection('projects'), { captureUpserts: true });
     const projectsSkip = createSkipCounter();
     for (const p of projects || []) {
+      const id = pickId(p);
       const number = pickNumber(p);
-      if (number === null || typeof number === 'undefined') {
+      const keyField = id != null ? 'Id' : 'number';
+      const keyValue = id != null ? id : number;
+      if (keyValue == null) {
         projectsSkip.incMissingKey();
         continue;
       }
       await upsertProjects.push({
         updateOne: {
-          filter: { number },
-          update: buildUpsertUpdate({ keyField: 'number', keyValue: number, payload: p, syncedAt: now, runId }),
+          filter: { [keyField]: keyValue },
+          update: buildUpsertUpdate({ keyField, keyValue, payload: p, syncedAt: now, runId }),
           upsert: true,
         }
       });
@@ -349,22 +366,25 @@ async function run(options = {}) {
     logger.info({ mongo: { projects: upsertProjects.getStats() } }, 'Mongo upsert summary (projects list)');
     emitLog('info', 'Mongo upsert summary (projects list)', { stats: upsertProjects.getStats() });
     if (projectsSkip.getMissingKey() > 0) {
-      logger.warn({ skippedMissingNumber: projectsSkip.getMissingKey() }, 'Skipped project upserts with missing number');
-      emitLog('warn', 'Skipped project upserts with missing number', { count: projectsSkip.getMissingKey() });
+      logger.warn({ skippedMissingId: projectsSkip.getMissingKey() }, 'Skipped project upserts with missing Id/number');
+      emitLog('warn', 'Skipped project upserts with missing Id/number', { count: projectsSkip.getMissingKey() });
     }
 
       const upsertNominals = createBulkUpserter(db.collection('nominals'), { captureUpserts: true });
       const nominalsSkip = createSkipCounter();
       for (const n of nominals || []) {
+        const id = pickId(n);
         const code = pickCode(n);
-        if (isMissingKey(code)) {
+        const keyField = id != null ? 'Id' : 'code';
+        const keyValue = id != null ? id : code;
+        if (keyValue == null || (typeof keyValue === 'string' && keyValue.trim() === '')) {
           nominalsSkip.incMissingKey();
           continue;
         }
         await upsertNominals.push({
           updateOne: {
-            filter: { code },
-            update: buildUpsertUpdate({ keyField: 'code', keyValue: code, payload: n, syncedAt: now, runId }),
+            filter: { [keyField]: keyValue },
+            update: buildUpsertUpdate({ keyField, keyValue, payload: n, syncedAt: now, runId }),
             upsert: true,
           }
         });
@@ -375,8 +395,8 @@ async function run(options = {}) {
       logger.info({ mongo: { nominals: upsertNominals.getStats() } }, 'Mongo upsert summary (nominals list)');
       emitLog('info', 'Mongo upsert summary (nominals list)', { stats: upsertNominals.getStats() });
       if (nominalsSkip.getMissingKey() > 0) {
-        logger.warn({ skippedMissingCode: nominalsSkip.getMissingKey() }, 'Skipped nominal upserts with missing code');
-        emitLog('warn', 'Skipped nominal upserts with missing code', { count: nominalsSkip.getMissingKey() });
+        logger.warn({ skippedMissingId: nominalsSkip.getMissingKey() }, 'Skipped nominal upserts with missing Id/code');
+        emitLog('warn', 'Skipped nominal upserts with missing Id/code', { count: nominalsSkip.getMissingKey() });
       }
     }
 
@@ -392,10 +412,15 @@ async function run(options = {}) {
       'customers',
       async (code) => {
         const full = await kf.customers.get(code);
+        const id = pickId(full);
+        if (id == null) {
+          progress.incItem('customers', 1);
+          return 0;
+        }
         await upserter.push({
           updateOne: {
-            filter: { code },
-            update: buildUpsertUpdate({ keyField: 'code', keyValue: code, payload: full, syncedAt: runNow, runId }),
+            filter: { Id: id },
+            update: buildUpsertUpdate({ keyField: 'Id', keyValue: id, payload: full, syncedAt: runNow, runId }),
             upsert: true,
           }
         });
@@ -435,10 +460,15 @@ async function run(options = {}) {
       'suppliers',
       async (code) => {
         const full = await kf.suppliers.get(code);
+        const id = pickId(full);
+        if (id == null) {
+          progress.incItem('suppliers', 1);
+          return 0;
+        }
         await upserter.push({
           updateOne: {
-            filter: { code },
-            update: buildUpsertUpdate({ keyField: 'code', keyValue: code, payload: full, syncedAt: runNow, runId }),
+            filter: { Id: id },
+            update: buildUpsertUpdate({ keyField: 'Id', keyValue: id, payload: full, syncedAt: runNow, runId, protectedFields: SUPPLIER_PROTECTED_FIELDS }),
             upsert: true,
           }
         });
@@ -478,7 +508,7 @@ async function run(options = {}) {
     progress.setItemDone('invoices', 0);
     logger.info({ customers: customerCodes.length, concurrency: config.concurrency || 4 }, 'Starting per-customer invoices fetch');
     emitLog('info', 'Starting per-customer invoices fetch', { customers: customerCodes.length, concurrency: config.concurrency || 4 });
-    let invoicesSkippedMissingNumber = 0;
+    let invoicesSkippedMissingId = 0;
     const invoicesUpserter = db ? createBulkUpserter(db.collection('invoices'), { captureUpserts: true }) : null;
     const invoicesByCustomer = await createPool(
     config.concurrency || 4,
@@ -488,15 +518,15 @@ async function run(options = {}) {
       if (db && list?.length) {
         const runNow = new Date();
         for (const item of list) {
-          const number = pickNumber(item);
-          if (number === null || typeof number === 'undefined') {
-            invoicesSkippedMissingNumber += 1;
+          const id = pickId(item);
+          if (id == null) {
+            invoicesSkippedMissingId += 1;
             continue;
           }
           await invoicesUpserter.push({
             updateOne: {
-              filter: { number },
-              update: buildUpsertUpdate({ keyField: 'number', keyValue: number, payload: item, syncedAt: runNow, runId }),
+              filter: { Id: id },
+              update: buildUpsertUpdate({ keyField: 'Id', keyValue: id, payload: item, syncedAt: runNow, runId }),
               upsert: true,
             }
           });
@@ -523,7 +553,7 @@ async function run(options = {}) {
     progress.setItemDone('quotes', 0);
     logger.info({ customers: customerCodes.length, concurrency: config.concurrency || 4 }, 'Starting per-customer quotes fetch');
     emitLog('info', 'Starting per-customer quotes fetch', { customers: customerCodes.length, concurrency: config.concurrency || 4 });
-    let quotesSkippedMissingNumber = 0;
+    let quotesSkippedMissingId = 0;
     const quotesUpserter = db ? createBulkUpserter(db.collection('quotes'), { captureUpserts: true }) : null;
     const quotesByCustomer = await createPool(
     config.concurrency || 4,
@@ -533,15 +563,15 @@ async function run(options = {}) {
       if (db && list?.length) {
         const runNow = new Date();
         for (const item of list) {
-          const number = pickNumber(item);
-          if (number === null || typeof number === 'undefined') {
-            quotesSkippedMissingNumber += 1;
+          const id = pickId(item);
+          if (id == null) {
+            quotesSkippedMissingId += 1;
             continue;
           }
           await quotesUpserter.push({
             updateOne: {
-              filter: { number },
-              update: buildUpsertUpdate({ keyField: 'number', keyValue: number, payload: item, syncedAt: runNow, runId }),
+              filter: { Id: id },
+              update: buildUpsertUpdate({ keyField: 'Id', keyValue: id, payload: item, syncedAt: runNow, runId }),
               upsert: true,
             }
           });
@@ -568,7 +598,7 @@ async function run(options = {}) {
     progress.setItemDone('purchases', 0);
     logger.info({ suppliers: supplierCodes.length, concurrency: config.concurrency || 4 }, 'Starting per-supplier purchases fetch');
     emitLog('info', 'Starting per-supplier purchases fetch', { suppliers: supplierCodes.length, concurrency: config.concurrency || 4 });
-    let purchasesSkippedMissingNumber = 0;
+    let purchasesSkippedMissingId = 0;
     const purchasesUpserter = db ? createBulkUpserter(db.collection('purchases'), { captureUpserts: true }) : null;
     const purchasesBySupplier = await createPool(
     config.concurrency || 4,
@@ -578,15 +608,15 @@ async function run(options = {}) {
       if (db && list?.length) {
         const runNow = new Date();
         for (const item of list) {
-          const number = pickNumber(item);
-          if (number === null || typeof number === 'undefined') {
-            purchasesSkippedMissingNumber += 1;
+          const id = pickId(item);
+          if (id == null) {
+            purchasesSkippedMissingId += 1;
             continue;
           }
           await purchasesUpserter.push({
             updateOne: {
-              filter: { number },
-              update: buildUpsertUpdate({ keyField: 'number', keyValue: number, payload: item, syncedAt: runNow, runId }),
+              filter: { Id: id },
+              update: buildUpsertUpdate({ keyField: 'Id', keyValue: id, payload: item, syncedAt: runNow, runId }),
               upsert: true,
             }
           });
@@ -611,14 +641,14 @@ async function run(options = {}) {
     const invoicesTotal = invoicesByCustomer.reduce((a, b) => a + (Number(b) || 0), 0);
     const quotesTotal = quotesByCustomer.reduce((a, b) => a + (Number(b) || 0), 0);
     const purchasesTotal = purchasesBySupplier.reduce((a, b) => a + (Number(b) || 0), 0);
-    if (invoicesSkippedMissingNumber > 0) {
-      logger.warn({ skippedMissingNumber: invoicesSkippedMissingNumber }, 'Skipped invoice upserts with missing number');
+    if (invoicesSkippedMissingId > 0) {
+      logger.warn({ skippedMissingId: invoicesSkippedMissingId }, 'Skipped invoice upserts with missing Id');
     }
-    if (quotesSkippedMissingNumber > 0) {
-      logger.warn({ skippedMissingNumber: quotesSkippedMissingNumber }, 'Skipped quote upserts with missing number');
+    if (quotesSkippedMissingId > 0) {
+      logger.warn({ skippedMissingId: quotesSkippedMissingId }, 'Skipped quote upserts with missing Id');
     }
-    if (purchasesSkippedMissingNumber > 0) {
-      logger.warn({ skippedMissingNumber: purchasesSkippedMissingNumber }, 'Skipped purchase upserts with missing number');
+    if (purchasesSkippedMissingId > 0) {
+      logger.warn({ skippedMissingId: purchasesSkippedMissingId }, 'Skipped purchase upserts with missing Id');
     }
     logger.info({ invoicesCount: invoicesTotal }, 'Fetched invoices (per customer)');
     logger.info({ quotesCount: quotesTotal }, 'Fetched quotes (per customer)');

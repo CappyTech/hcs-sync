@@ -65,7 +65,7 @@ export async function closeMongo() {
 }
 
 export async function ensureKashflowIndexes(db) {
-  // Minimal indexes to make upserts efficient and enforce uniqueness.
+  // Indexes to make upserts efficient and enforce uniqueness on the KashFlow Id.
   try {
     const ensureUniqueKeyIndex = async (collectionName, keyField, keyType = 'any') => {
       const col = db.collection(collectionName);
@@ -112,6 +112,20 @@ export async function ensureKashflowIndexes(db) {
       );
     };
 
+    /** Create a non-unique index (for query performance on secondary fields). */
+    const ensureSecondaryIndex = async (collectionName, keyField) => {
+      const col = db.collection(collectionName);
+      const indexName = `${keyField}_1`;
+      // Drop any existing index (may have been unique previously).
+      try {
+        await col.dropIndex(indexName);
+      } catch (err) {
+        const codeName = err?.codeName || '';
+        if (codeName !== 'IndexNotFound' && err?.code !== 27) throw err;
+      }
+      await col.createIndex({ [keyField]: 1 }, { name: indexName });
+    };
+
     const dropIndexIfExists = async (collectionName, indexName) => {
       const col = db.collection(collectionName);
       try {
@@ -123,23 +137,27 @@ export async function ensureKashflowIndexes(db) {
       }
     };
 
+    // Primary unique dedup key: Id (KashFlow-assigned numeric identifier).
+    // Secondary non-unique indexes: code/number (for query performance).
     const managedUniqueFields = {
-      customers: ['code'],
-      suppliers: ['code'],
-      nominals: ['code'],
-      invoices: ['number'],
-      quotes: ['number'],
-      purchases: ['number'],
-      projects: ['number'],
+      customers: ['Id'],
+      suppliers: ['Id'],
+      nominals: ['Id'],
+      invoices: ['Id'],
+      quotes: ['Id'],
+      purchases: ['Id'],
+      projects: ['Id'],
     };
 
     // Repair legacy indexes that cause dup-key errors on missing fields.
     // Two common breakages:
     // - Old unique indexes on capitalized keys (e.g. `Code_1`, `Number_1`).
     // - Old unique indexes on `uuid` (or `UUID`), which treat missing as null.
+    // - Old unique indexes on code/number that were previously the dedup key.
     // We drop the legacy index and recreate a compatible partial unique index
-    // on our normalized lower-case field.
+    // on our normalized Id field.
     const collectionsNeedingUuid = new Set();
+    const legacyUniqueFieldsToDowngrade = ['code', 'number'];
     for (const [collectionName, desiredFields] of Object.entries(managedUniqueFields)) {
       const col = db.collection(collectionName);
       let indexes = [];
@@ -167,29 +185,47 @@ export async function ensureKashflowIndexes(db) {
           continue;
         }
 
-        // If the index is on a case-variant of our managed key fields (Code vs code,
-        // Number vs number), drop it and rely on the normalized index we create below.
-        if (desiredFields.includes(lower) && keyField !== lower) {
+        // Drop old unique indexes on code/number (now secondary, non-unique).
+        if (legacyUniqueFieldsToDowngrade.includes(lower)) {
+          await dropIndexIfExists(collectionName, idx.name);
+          continue;
+        }
+
+        // If the index is on a case-variant of our managed key fields (Id vs id),
+        // drop it and rely on the normalized index we create below.
+        if (desiredFields.map((f) => f.toLowerCase()).includes(lower) && !desiredFields.includes(keyField)) {
           await dropIndexIfExists(collectionName, idx.name);
         }
       }
     }
 
+    // Primary unique indexes on Id (dedup key).
     const indexJobs = [
-      ensureUniqueKeyIndex('customers', 'code', 'string'),
-      ensureUniqueKeyIndex('suppliers', 'code', 'string'),
-      ensureUniqueKeyIndex('nominals', 'code', 'string'),
-      ensureUniqueKeyIndex('invoices', 'number'),
-      ensureUniqueKeyIndex('quotes', 'number'),
-      ensureUniqueKeyIndex('purchases', 'number'),
-      ensureUniqueKeyIndex('projects', 'number'),
+      ensureUniqueKeyIndex('customers', 'Id'),
+      ensureUniqueKeyIndex('suppliers', 'Id'),
+      ensureUniqueKeyIndex('nominals', 'Id'),
+      ensureUniqueKeyIndex('invoices', 'Id'),
+      ensureUniqueKeyIndex('quotes', 'Id'),
+      ensureUniqueKeyIndex('purchases', 'Id'),
+      ensureUniqueKeyIndex('projects', 'Id'),
+    ];
+
+    // Secondary non-unique indexes on code/number for query performance.
+    const secondaryJobs = [
+      ensureSecondaryIndex('customers', 'code'),
+      ensureSecondaryIndex('suppliers', 'code'),
+      ensureSecondaryIndex('nominals', 'code'),
+      ensureSecondaryIndex('invoices', 'number'),
+      ensureSecondaryIndex('quotes', 'number'),
+      ensureSecondaryIndex('purchases', 'number'),
+      ensureSecondaryIndex('projects', 'number'),
     ];
 
     for (const collectionName of collectionsNeedingUuid) {
       indexJobs.push(ensureUniqueKeyIndex(collectionName, 'uuid', 'string'));
     }
 
-    await Promise.all(indexJobs);
+    await Promise.all([...indexJobs, ...secondaryJobs]);
   } catch (err) {
     if (isMongoAuthError(err)) {
       throw new Error(
