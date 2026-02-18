@@ -1,4 +1,45 @@
 (function(){
+  // ── Simple modal helpers (replaces Flowbite declarative modal API) ──
+  window.openModal = function openModal(id) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    el.classList.remove('hidden');
+    el.classList.add('flex');
+    el.setAttribute('aria-hidden', 'false');
+    // backdrop
+    var bg = document.getElementById(id + '-backdrop');
+    if (!bg) {
+      bg = document.createElement('div');
+      bg.id = id + '-backdrop';
+      bg.className = 'bg-gray-900/50 dark:bg-gray-900/80 fixed inset-0 z-40';
+      bg.addEventListener('click', function () { closeModal(id); });
+      document.body.appendChild(bg);
+    }
+    document.body.classList.add('overflow-hidden');
+  };
+
+  window.closeModal = function closeModal(id) {
+    var el = document.getElementById(id);
+    if (el) {
+      el.classList.add('hidden');
+      el.classList.remove('flex');
+      el.setAttribute('aria-hidden', 'true');
+    }
+    var bg = document.getElementById(id + '-backdrop');
+    if (bg) bg.remove();
+    document.body.classList.remove('overflow-hidden');
+  };
+
+  // Close modal on Escape key
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') {
+      ['run-modal', 'dedup-modal'].forEach(function (id) {
+        var el = document.getElementById(id);
+        if (el && !el.classList.contains('hidden')) closeModal(id);
+      });
+    }
+  });
+
   // Theme toggle
   const btn = document.getElementById('toggle-theme');
   if (btn) {
