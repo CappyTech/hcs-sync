@@ -168,6 +168,86 @@ function isMissingKey(value) {
   return false;
 }
 
+// ── Purchase date / CIS tax-period helpers ──────────────────────────────
+
+/**
+ * Convert a KashFlow date string (e.g. "2025-12-10 12:00:00") to a JS Date.
+ * Returns null for null / undefined / empty / unparseable values.
+ */
+function toDate(value) {
+  if (value == null || value === '') return null;
+  if (value instanceof Date) return isNaN(value.getTime()) ? null : value;
+  const d = new Date(value);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+/**
+ * Compute the CIS TaxYear and TaxMonth for a given date.
+ *
+ * Rules:
+ *   Tax year starts 6 April.  A date before 6 April belongs to the previous year.
+ *   Tax month 1 = 6 Apr – 5 May, month 2 = 6 May – 5 Jun, …, month 12 = 6 Mar – 5 Apr.
+ *
+ * Returns { TaxYear: Number, TaxMonth: Number } or null if the date is invalid.
+ */
+function computeCisTaxPeriod(date) {
+  const d = toDate(date);
+  if (!d) return null;
+
+  const year  = d.getFullYear();
+  const month = d.getMonth();  // 0-based (0 = Jan, 3 = Apr)
+  const day   = d.getDate();
+
+  // Tax year that this date falls in (labelled by the starting calendar year).
+  const taxYear = (month > 3 || (month === 3 && day >= 6)) ? year : year - 1;
+
+  // Months elapsed since 6 April of the tax year.
+  let monthDiff = (month - 3) + (year - taxYear) * 12;
+  if (day < 6) monthDiff -= 1;
+  const taxMonth = monthDiff + 1; // 1-based
+
+  return { TaxYear: taxYear, TaxMonth: taxMonth };
+}
+
+/**
+ * Mutate a purchase item in-place:
+ *   1. Convert date-string fields to proper JS Date objects.
+ *   2. Compute and set TaxYear / TaxMonth from the earliest payment date.
+ */
+function preparePurchaseForUpsert(item) {
+  // --- Convert top-level date fields --------------------------------
+  item.PaidDate   = toDate(item.PaidDate);
+  item.IssuedDate = toDate(item.IssuedDate);
+  item.DueDate    = toDate(item.DueDate);
+
+  // --- Convert PaymentLines date fields -----------------------------
+  if (Array.isArray(item.PaymentLines)) {
+    for (const pl of item.PaymentLines) {
+      pl.PayDate = toDate(pl.PayDate);
+      pl.Date    = toDate(pl.Date);
+    }
+  }
+
+  // --- Derive reference date (priority order) -----------------------
+  let refDate = null;
+  if (Array.isArray(item.PaymentLines)) {
+    for (const pl of item.PaymentLines) {
+      if (pl.PayDate) { refDate = pl.PayDate; break; }
+    }
+  }
+  if (!refDate && item.PaidDate)   refDate = item.PaidDate;
+  if (!refDate && item.IssuedDate) refDate = item.IssuedDate;
+
+  // --- Compute CIS tax period ---------------------------------------
+  const period = computeCisTaxPeriod(refDate);
+  if (period) {
+    item.TaxYear  = period.TaxYear;
+    item.TaxMonth = period.TaxMonth;
+  }
+
+  return item;
+}
+
 function createSkipCounter() {
   let skippedMissingKey = 0;
   return {
@@ -613,6 +693,7 @@ async function run(options = {}) {
             purchasesSkippedMissingId += 1;
             continue;
           }
+          preparePurchaseForUpsert(item);
           await purchasesUpserter.push({
             updateOne: {
               filter: { Id: id },
