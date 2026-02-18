@@ -576,40 +576,101 @@ async function run(options = {}) {
       progress.setItemDone('suppliers', supplierCodes.length);
     }
 
-    progress.setItemTotal('projects', (projects || []).length);
-    progress.setItemDone('projects', (projects || []).length);
+    // Fetch full details for each project (list may omit some fields).
+    const projectNumbers = (projects || []).map(pickNumber).filter((x) => x != null);
+    if (db && projectNumbers.length > 0) {
+      setStage('projects:details');
+      progress.setItemTotal('projects', projectNumbers.length);
+      progress.setItemDone('projects', 0);
+      const projectDetailUpserter = createBulkUpserter(db.collection('projects'), { captureUpserts: true });
+      const runNow = new Date();
+      let projectsDetailFailed = 0;
+      const fetchProject = createPool(
+        detailConcurrency,
+        'projects',
+        async (number) => {
+          let full;
+          try {
+            full = await kf.projects.get(number);
+          } catch (err) {
+            projectsDetailFailed += 1;
+            logger.warn({ projectNumber: number, err: err.message }, 'Failed to fetch project detail, skipping');
+            progress.incItem('projects', 1);
+            return 0;
+          }
+          const id = pickId(full);
+          const keyField = id != null ? 'Id' : 'Number';
+          const keyValue = id != null ? id : number;
+          await projectDetailUpserter.push({
+            updateOne: {
+              filter: { [keyField]: keyValue },
+              update: buildUpsertUpdate({ keyField, keyValue, payload: full, syncedAt: runNow, runId }),
+              upsert: true,
+            }
+          });
+          progress.incItem('projects', 1);
+          return 1;
+        },
+        undefined
+      );
+      await fetchProject(projectNumbers);
+      await projectDetailUpserter.flush();
+      mongoSummary.projects = addMongoStats(mongoSummary.projects, projectDetailUpserter.getStats());
+      const projectAdded = projectDetailUpserter.getUpsertedFilters();
+      if (projectAdded?.filters?.length) {
+        const existing = mongoDetails.projects?.filters || [];
+        mongoDetails.projects = {
+          filters: existing.concat(projectAdded.filters).slice(0, projectAdded.maxCapturedUpserts || 2000),
+          truncated: Boolean(mongoDetails.projects?.truncated) || Boolean(projectAdded.truncated),
+          maxCapturedUpserts: projectAdded.maxCapturedUpserts || 2000,
+        };
+      }
+      if (projectsDetailFailed > 0) {
+        logger.warn({ projectsDetailFailed }, 'Some project detail fetches failed');
+        emitLog('warn', 'Some project detail fetches failed', { projectsDetailFailed });
+      }
+      logger.info({ mongo: { projects: projectDetailUpserter.getStats() } }, 'Mongo upsert summary (projects details)');
+      emitLog('info', 'Mongo upsert summary (projects details)', { stats: projectDetailUpserter.getStats() });
+    } else {
+      progress.setItemTotal('projects', (projects || []).length);
+      progress.setItemDone('projects', (projects || []).length);
+    }
     logger.info({ projectsCount: projects?.length || 0 }, 'Fetched projects');
     progress.setItemTotal('nominals', (nominals || []).length);
     progress.setItemDone('nominals', (nominals || []).length);
     logger.info({ nominalsCount: nominals?.length || 0 }, 'Fetched nominals');
 
+    // ── Invoices: Phase 1 — list + upsert summaries + collect numbers ──
+    const detailConcurrency = config.detailConcurrency || 8;
     setStage('invoices:per-customer');
     progress.setItemTotal('invoices', (customers || []).length);
     progress.setItemDone('invoices', 0);
-    logger.info({ customers: customerCodes.length, concurrency: config.concurrency || 4 }, 'Starting per-customer invoices fetch');
-    emitLog('info', 'Starting per-customer invoices fetch', { customers: customerCodes.length, concurrency: config.concurrency || 4 });
+    logger.info({ customers: customerCodes.length, concurrency: config.concurrency || 4 }, 'Starting per-customer invoices list fetch');
+    emitLog('info', 'Starting per-customer invoices list fetch', { customers: customerCodes.length, concurrency: config.concurrency || 4 });
     let invoicesSkippedMissingId = 0;
-    const invoicesUpserter = db ? createBulkUpserter(db.collection('invoices'), { captureUpserts: true }) : null;
+    const invoiceEntries = []; // { id, number } pairs for detail phase
+    const invoicesListUpserter = db ? createBulkUpserter(db.collection('invoices'), { captureUpserts: true }) : null;
     const invoicesByCustomer = await createPool(
     config.concurrency || 4,
     'invoices',
     async (code) => {
       const list = await kf.invoices.listAll({ perpage: 200, customerCode: code });
-      if (db && list?.length) {
+      if (list?.length) {
         const runNow = new Date();
         for (const item of list) {
           const id = pickId(item);
-          if (id == null) {
-            invoicesSkippedMissingId += 1;
-            continue;
+          if (id == null) { invoicesSkippedMissingId += 1; continue; }
+          const number = pickNumber(item);
+          if (number != null) invoiceEntries.push({ id, number });
+          if (invoicesListUpserter) {
+            await invoicesListUpserter.push({
+              updateOne: {
+                filter: { Id: id },
+                update: buildUpsertUpdate({ keyField: 'Id', keyValue: id, payload: item, syncedAt: runNow, runId }),
+                upsert: true,
+              }
+            });
           }
-          await invoicesUpserter.push({
-            updateOne: {
-              filter: { Id: id },
-              update: buildUpsertUpdate({ keyField: 'Id', keyValue: id, payload: item, syncedAt: runNow, runId }),
-              upsert: true,
-            }
-          });
         }
       }
       progress.incItem('invoices', 1);
@@ -617,44 +678,104 @@ async function run(options = {}) {
     },
     ({ done, total }) => {
       const step = Math.max(1, Math.ceil(total / 10));
-      if (done % step === 0 || done === total) logger.info({ label: 'invoices', done, total }, 'Per-customer fetch progress');
+      if (done % step === 0 || done === total) logger.info({ label: 'invoices', done, total }, 'Per-customer list progress');
     }
     )(customerCodes);
-    if (invoicesUpserter) {
-      await invoicesUpserter.flush();
-      mongoSummary.invoices = addMongoStats(mongoSummary.invoices, invoicesUpserter.getStats());
-      mongoDetails.invoices = invoicesUpserter.getUpsertedFilters();
-      logger.info({ mongo: { invoices: invoicesUpserter.getStats() } }, 'Mongo upsert summary (invoices)');
-      emitLog('info', 'Mongo upsert summary (invoices)', { stats: invoicesUpserter.getStats() });
+    if (invoicesListUpserter) {
+      await invoicesListUpserter.flush();
+      mongoSummary.invoices = addMongoStats(mongoSummary.invoices, invoicesListUpserter.getStats());
+      mongoDetails.invoices = invoicesListUpserter.getUpsertedFilters();
+      logger.info({ mongo: { invoices: invoicesListUpserter.getStats() } }, 'Mongo upsert summary (invoices list)');
+      emitLog('info', 'Mongo upsert summary (invoices list)', { stats: invoicesListUpserter.getStats() });
     }
 
+    // ── Invoices: Phase 2 — detail fanout with high concurrency ──
+    let invoicesDetailFailed = 0;
+    if (db && invoiceEntries.length > 0) {
+      setStage('invoices:details');
+      progress.setItemTotal('invoices', invoiceEntries.length);
+      progress.setItemDone('invoices', 0);
+      logger.info({ count: invoiceEntries.length, concurrency: detailConcurrency }, 'Starting invoice detail fanout');
+      emitLog('info', 'Starting invoice detail fanout', { count: invoiceEntries.length, concurrency: detailConcurrency });
+      const invoiceDetailUpserter = createBulkUpserter(db.collection('invoices'), { captureUpserts: true });
+      const runNow = new Date();
+      await createPool(
+        detailConcurrency,
+        'invoices',
+        async ({ id, number }) => {
+          let full;
+          try {
+            full = await kf.invoices.get(number);
+          } catch (err) {
+            invoicesDetailFailed += 1;
+            logger.warn({ invoiceNumber: number, err: err.message }, 'Failed to fetch invoice detail');
+            progress.incItem('invoices', 1);
+            return 0;
+          }
+          await invoiceDetailUpserter.push({
+            updateOne: {
+              filter: { Id: id },
+              update: buildUpsertUpdate({ keyField: 'Id', keyValue: id, payload: full, syncedAt: runNow, runId }),
+              upsert: true,
+            }
+          });
+          progress.incItem('invoices', 1);
+          return 1;
+        },
+        ({ done, total }) => {
+          const step = Math.max(1, Math.ceil(total / 20));
+          if (done % step === 0 || done === total) logger.info({ label: 'invoiceDetails', done, total }, 'Invoice detail progress');
+        }
+      )(invoiceEntries);
+      await invoiceDetailUpserter.flush();
+      mongoSummary.invoices = addMongoStats(mongoSummary.invoices, invoiceDetailUpserter.getStats());
+      const invoiceAdded = invoiceDetailUpserter.getUpsertedFilters();
+      if (invoiceAdded?.filters?.length) {
+        const existing = mongoDetails.invoices?.filters || [];
+        mongoDetails.invoices = {
+          filters: existing.concat(invoiceAdded.filters).slice(0, invoiceAdded.maxCapturedUpserts || 2000),
+          truncated: Boolean(mongoDetails.invoices?.truncated) || Boolean(invoiceAdded.truncated),
+          maxCapturedUpserts: invoiceAdded.maxCapturedUpserts || 2000,
+        };
+      }
+      logger.info({ mongo: { invoices: invoiceDetailUpserter.getStats() } }, 'Mongo upsert summary (invoices details)');
+      emitLog('info', 'Mongo upsert summary (invoices details)', { stats: invoiceDetailUpserter.getStats() });
+    }
+    if (invoicesDetailFailed > 0) {
+      logger.warn({ invoicesDetailFailed }, 'Some invoice detail fetches failed; those documents used summary data');
+      emitLog('warn', 'Some invoice detail fetches failed', { invoicesDetailFailed });
+    }
+
+    // ── Quotes: Phase 1 — list + upsert summaries + collect numbers ──
     setStage('quotes:per-customer');
     progress.setItemTotal('quotes', (customers || []).length);
     progress.setItemDone('quotes', 0);
-    logger.info({ customers: customerCodes.length, concurrency: config.concurrency || 4 }, 'Starting per-customer quotes fetch');
-    emitLog('info', 'Starting per-customer quotes fetch', { customers: customerCodes.length, concurrency: config.concurrency || 4 });
+    logger.info({ customers: customerCodes.length, concurrency: config.concurrency || 4 }, 'Starting per-customer quotes list fetch');
+    emitLog('info', 'Starting per-customer quotes list fetch', { customers: customerCodes.length, concurrency: config.concurrency || 4 });
     let quotesSkippedMissingId = 0;
-    const quotesUpserter = db ? createBulkUpserter(db.collection('quotes'), { captureUpserts: true }) : null;
+    const quoteEntries = []; // { id, number } pairs for detail phase
+    const quotesListUpserter = db ? createBulkUpserter(db.collection('quotes'), { captureUpserts: true }) : null;
     const quotesByCustomer = await createPool(
     config.concurrency || 4,
     'quotes',
     async (code) => {
       const list = await kf.quotes.listAll({ perpage: 200, customerCode: code });
-      if (db && list?.length) {
+      if (list?.length) {
         const runNow = new Date();
         for (const item of list) {
           const id = pickId(item);
-          if (id == null) {
-            quotesSkippedMissingId += 1;
-            continue;
+          if (id == null) { quotesSkippedMissingId += 1; continue; }
+          const number = pickNumber(item);
+          if (number != null) quoteEntries.push({ id, number });
+          if (quotesListUpserter) {
+            await quotesListUpserter.push({
+              updateOne: {
+                filter: { Id: id },
+                update: buildUpsertUpdate({ keyField: 'Id', keyValue: id, payload: item, syncedAt: runNow, runId }),
+                upsert: true,
+              }
+            });
           }
-          await quotesUpserter.push({
-            updateOne: {
-              filter: { Id: id },
-              update: buildUpsertUpdate({ keyField: 'Id', keyValue: id, payload: item, syncedAt: runNow, runId }),
-              upsert: true,
-            }
-          });
         }
       }
       progress.incItem('quotes', 1);
@@ -662,45 +783,104 @@ async function run(options = {}) {
     },
     ({ done, total }) => {
       const step = Math.max(1, Math.ceil(total / 10));
-      if (done % step === 0 || done === total) logger.info({ label: 'quotes', done, total }, 'Per-customer fetch progress');
+      if (done % step === 0 || done === total) logger.info({ label: 'quotes', done, total }, 'Per-customer list progress');
     }
     )(customerCodes);
-    if (quotesUpserter) {
-      await quotesUpserter.flush();
-      mongoSummary.quotes = addMongoStats(mongoSummary.quotes, quotesUpserter.getStats());
-      mongoDetails.quotes = quotesUpserter.getUpsertedFilters();
-      logger.info({ mongo: { quotes: quotesUpserter.getStats() } }, 'Mongo upsert summary (quotes)');
-      emitLog('info', 'Mongo upsert summary (quotes)', { stats: quotesUpserter.getStats() });
+    if (quotesListUpserter) {
+      await quotesListUpserter.flush();
+      mongoSummary.quotes = addMongoStats(mongoSummary.quotes, quotesListUpserter.getStats());
+      mongoDetails.quotes = quotesListUpserter.getUpsertedFilters();
+      logger.info({ mongo: { quotes: quotesListUpserter.getStats() } }, 'Mongo upsert summary (quotes list)');
+      emitLog('info', 'Mongo upsert summary (quotes list)', { stats: quotesListUpserter.getStats() });
     }
 
+    // ── Quotes: Phase 2 — detail fanout with high concurrency ──
+    let quotesDetailFailed = 0;
+    if (db && quoteEntries.length > 0) {
+      setStage('quotes:details');
+      progress.setItemTotal('quotes', quoteEntries.length);
+      progress.setItemDone('quotes', 0);
+      logger.info({ count: quoteEntries.length, concurrency: detailConcurrency }, 'Starting quote detail fanout');
+      emitLog('info', 'Starting quote detail fanout', { count: quoteEntries.length, concurrency: detailConcurrency });
+      const quoteDetailUpserter = createBulkUpserter(db.collection('quotes'), { captureUpserts: true });
+      const runNow = new Date();
+      await createPool(
+        detailConcurrency,
+        'quotes',
+        async ({ id, number }) => {
+          let full;
+          try {
+            full = await kf.quotes.get(number);
+          } catch (err) {
+            quotesDetailFailed += 1;
+            logger.warn({ quoteNumber: number, err: err.message }, 'Failed to fetch quote detail');
+            progress.incItem('quotes', 1);
+            return 0;
+          }
+          await quoteDetailUpserter.push({
+            updateOne: {
+              filter: { Id: id },
+              update: buildUpsertUpdate({ keyField: 'Id', keyValue: id, payload: full, syncedAt: runNow, runId }),
+              upsert: true,
+            }
+          });
+          progress.incItem('quotes', 1);
+          return 1;
+        },
+        ({ done, total }) => {
+          const step = Math.max(1, Math.ceil(total / 20));
+          if (done % step === 0 || done === total) logger.info({ label: 'quoteDetails', done, total }, 'Quote detail progress');
+        }
+      )(quoteEntries);
+      await quoteDetailUpserter.flush();
+      mongoSummary.quotes = addMongoStats(mongoSummary.quotes, quoteDetailUpserter.getStats());
+      const quoteAdded = quoteDetailUpserter.getUpsertedFilters();
+      if (quoteAdded?.filters?.length) {
+        const existing = mongoDetails.quotes?.filters || [];
+        mongoDetails.quotes = {
+          filters: existing.concat(quoteAdded.filters).slice(0, quoteAdded.maxCapturedUpserts || 2000),
+          truncated: Boolean(mongoDetails.quotes?.truncated) || Boolean(quoteAdded.truncated),
+          maxCapturedUpserts: quoteAdded.maxCapturedUpserts || 2000,
+        };
+      }
+      logger.info({ mongo: { quotes: quoteDetailUpserter.getStats() } }, 'Mongo upsert summary (quotes details)');
+      emitLog('info', 'Mongo upsert summary (quotes details)', { stats: quoteDetailUpserter.getStats() });
+    }
+    if (quotesDetailFailed > 0) {
+      logger.warn({ quotesDetailFailed }, 'Some quote detail fetches failed; those documents used summary data');
+      emitLog('warn', 'Some quote detail fetches failed', { quotesDetailFailed });
+    }
+
+    // ── Purchases: Phase 1 — list + upsert summaries + collect numbers ──
     setStage('purchases:per-supplier');
     progress.setItemTotal('purchases', (suppliers || []).length);
     progress.setItemDone('purchases', 0);
-    logger.info({ suppliers: supplierCodes.length, concurrency: config.concurrency || 4 }, 'Starting per-supplier purchases fetch');
-    emitLog('info', 'Starting per-supplier purchases fetch', { suppliers: supplierCodes.length, concurrency: config.concurrency || 4 });
+    logger.info({ suppliers: supplierCodes.length, concurrency: config.concurrency || 4 }, 'Starting per-supplier purchases list fetch');
+    emitLog('info', 'Starting per-supplier purchases list fetch', { suppliers: supplierCodes.length, concurrency: config.concurrency || 4 });
     let purchasesSkippedMissingId = 0;
-    const purchasesUpserter = db ? createBulkUpserter(db.collection('purchases'), { captureUpserts: true }) : null;
+    const purchaseEntries = []; // { id, number } pairs for detail phase
+    const purchasesListUpserter = db ? createBulkUpserter(db.collection('purchases'), { captureUpserts: true }) : null;
     const purchasesBySupplier = await createPool(
     config.concurrency || 4,
     'purchases',
     async (code) => {
       const list = await kf.purchases.listAll({ perpage: 200, supplierCode: code });
-      if (db && list?.length) {
+      if (list?.length) {
         const runNow = new Date();
         for (const item of list) {
           const id = pickId(item);
-          if (id == null) {
-            purchasesSkippedMissingId += 1;
-            continue;
+          if (id == null) { purchasesSkippedMissingId += 1; continue; }
+          const number = pickNumber(item);
+          if (number != null) purchaseEntries.push({ id, number });
+          if (purchasesListUpserter) {
+            await purchasesListUpserter.push({
+              updateOne: {
+                filter: { Id: id },
+                update: buildUpsertUpdate({ keyField: 'Id', keyValue: id, payload: item, syncedAt: runNow, runId }),
+                upsert: true,
+              }
+            });
           }
-          preparePurchaseForUpsert(item);
-          await purchasesUpserter.push({
-            updateOne: {
-              filter: { Id: id },
-              update: buildUpsertUpdate({ keyField: 'Id', keyValue: id, payload: item, syncedAt: runNow, runId }),
-              upsert: true,
-            }
-          });
         }
       }
       progress.incItem('purchases', 1);
@@ -708,15 +888,73 @@ async function run(options = {}) {
     },
     ({ done, total }) => {
       const step = Math.max(1, Math.ceil(total / 10));
-      if (done % step === 0 || done === total) logger.info({ label: 'purchases', done, total }, 'Per-supplier fetch progress');
+      if (done % step === 0 || done === total) logger.info({ label: 'purchases', done, total }, 'Per-supplier list progress');
     }
     )(supplierCodes);
-    if (purchasesUpserter) {
-      await purchasesUpserter.flush();
-      mongoSummary.purchases = addMongoStats(mongoSummary.purchases, purchasesUpserter.getStats());
-      mongoDetails.purchases = purchasesUpserter.getUpsertedFilters();
-      logger.info({ mongo: { purchases: purchasesUpserter.getStats() } }, 'Mongo upsert summary (purchases)');
-      emitLog('info', 'Mongo upsert summary (purchases)', { stats: purchasesUpserter.getStats() });
+    if (purchasesListUpserter) {
+      await purchasesListUpserter.flush();
+      mongoSummary.purchases = addMongoStats(mongoSummary.purchases, purchasesListUpserter.getStats());
+      mongoDetails.purchases = purchasesListUpserter.getUpsertedFilters();
+      logger.info({ mongo: { purchases: purchasesListUpserter.getStats() } }, 'Mongo upsert summary (purchases list)');
+      emitLog('info', 'Mongo upsert summary (purchases list)', { stats: purchasesListUpserter.getStats() });
+    }
+
+    // ── Purchases: Phase 2 — detail fanout with high concurrency ──
+    let purchasesDetailFailed = 0;
+    if (db && purchaseEntries.length > 0) {
+      setStage('purchases:details');
+      progress.setItemTotal('purchases', purchaseEntries.length);
+      progress.setItemDone('purchases', 0);
+      logger.info({ count: purchaseEntries.length, concurrency: detailConcurrency }, 'Starting purchase detail fanout');
+      emitLog('info', 'Starting purchase detail fanout', { count: purchaseEntries.length, concurrency: detailConcurrency });
+      const purchaseDetailUpserter = createBulkUpserter(db.collection('purchases'), { captureUpserts: true });
+      const runNow = new Date();
+      await createPool(
+        detailConcurrency,
+        'purchases',
+        async ({ id, number }) => {
+          let full;
+          try {
+            full = await kf.purchases.get(number);
+          } catch (err) {
+            purchasesDetailFailed += 1;
+            logger.warn({ purchaseNumber: number, err: err.message }, 'Failed to fetch purchase detail');
+            progress.incItem('purchases', 1);
+            return 0;
+          }
+          preparePurchaseForUpsert(full);
+          await purchaseDetailUpserter.push({
+            updateOne: {
+              filter: { Id: id },
+              update: buildUpsertUpdate({ keyField: 'Id', keyValue: id, payload: full, syncedAt: runNow, runId }),
+              upsert: true,
+            }
+          });
+          progress.incItem('purchases', 1);
+          return 1;
+        },
+        ({ done, total }) => {
+          const step = Math.max(1, Math.ceil(total / 20));
+          if (done % step === 0 || done === total) logger.info({ label: 'purchaseDetails', done, total }, 'Purchase detail progress');
+        }
+      )(purchaseEntries);
+      await purchaseDetailUpserter.flush();
+      mongoSummary.purchases = addMongoStats(mongoSummary.purchases, purchaseDetailUpserter.getStats());
+      const purchaseAdded = purchaseDetailUpserter.getUpsertedFilters();
+      if (purchaseAdded?.filters?.length) {
+        const existing = mongoDetails.purchases?.filters || [];
+        mongoDetails.purchases = {
+          filters: existing.concat(purchaseAdded.filters).slice(0, purchaseAdded.maxCapturedUpserts || 2000),
+          truncated: Boolean(mongoDetails.purchases?.truncated) || Boolean(purchaseAdded.truncated),
+          maxCapturedUpserts: purchaseAdded.maxCapturedUpserts || 2000,
+        };
+      }
+      logger.info({ mongo: { purchases: purchaseDetailUpserter.getStats() } }, 'Mongo upsert summary (purchases details)');
+      emitLog('info', 'Mongo upsert summary (purchases details)', { stats: purchaseDetailUpserter.getStats() });
+    }
+    if (purchasesDetailFailed > 0) {
+      logger.warn({ purchasesDetailFailed }, 'Some purchase detail fetches failed; those documents used summary data');
+      emitLog('warn', 'Some purchase detail fetches failed', { purchasesDetailFailed });
     }
 
     const invoicesTotal = invoicesByCustomer.reduce((a, b) => a + (Number(b) || 0), 0);

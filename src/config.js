@@ -6,6 +6,7 @@ const config = {
   token: process.env.SESSION_TOKEN || process.env.KASHFLOW_SESSION_TOKEN || '',
   timeoutMs: Number(process.env.HTTP_TIMEOUT_MS || 30000),
   concurrency: Number(process.env.CONCURRENCY || 4),
+  detailConcurrency: Number(process.env.DETAIL_CONCURRENCY || 8),
   mongoUri: process.env.MONGO_URI || '',
   mongoHost: process.env.MONGO_HOST || '',
   mongoPort: Number(process.env.MONGO_PORT || 27017),
