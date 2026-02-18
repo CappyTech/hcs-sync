@@ -577,6 +577,7 @@ async function run(options = {}) {
     }
 
     // Fetch full details for each project (list may omit some fields).
+    const detailConcurrency = config.detailConcurrency || 8;
     const projectNumbers = (projects || []).map(pickNumber).filter((x) => x != null);
     if (db && projectNumbers.length > 0) {
       setStage('projects:details');
@@ -641,7 +642,6 @@ async function run(options = {}) {
     logger.info({ nominalsCount: nominals?.length || 0 }, 'Fetched nominals');
 
     // ── Invoices: Phase 1 — list + upsert summaries + collect numbers ──
-    const detailConcurrency = config.detailConcurrency || 8;
     setStage('invoices:per-customer');
     progress.setItemTotal('invoices', (customers || []).length);
     progress.setItemDone('invoices', 0);
