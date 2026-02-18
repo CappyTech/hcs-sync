@@ -17,6 +17,7 @@ import config from '../config.js';
 import { getCronHealth, startCron, stopCron } from './cron.js';
 import settingsStore from './settingsStore.js';
 import { isMongooseEnabled } from '../db/mongoose.js';
+import { runDedup } from '../db/dedup.js';
 import cron from 'node-cron';
 import cronParser from 'cron-parser';
 import cronstrue from 'cronstrue';
@@ -617,7 +618,7 @@ app.get('/status', (_req, res) => {
   res.json(progress.getState());
 });
 
-app.get('/', (_req, res) => {
+app.get('/', (req, res) => {
   const eff = getEffectiveCronConfig();
   const cronHealth = getCronHealth({
     enabled: eff.enabled,
@@ -626,6 +627,9 @@ app.get('/', (_req, res) => {
     staleMs: eff.healthStaleMs,
   });
   const cronNextRunAt = computeNextCronRunAtMs(eff);
+
+  // Show dedup result banner when redirected back from POST /dedup
+  const dedupResult = req.query?.dedup === 'done' ? lastDedupResult : null;
 
   res.render('layout', {
     title: 'HCS Sync',
@@ -636,6 +640,7 @@ app.get('/', (_req, res) => {
     lastError,
     cronHealth,
     cronNextRunAt,
+    dedupResult,
   });
 });
 
@@ -703,6 +708,55 @@ app.post('/run', async (_req, res) => {
     const msg = err?.message || 'Failed to start run';
     return res.status(500).send(msg);
   }
+});
+
+// Deduplication + uuid backfill
+let dedupRunning = false;
+let lastDedupResult = null;
+
+app.post('/dedup', async (_req, res) => {
+  if (!isMongoEnabled()) {
+    return res.status(400).send('MongoDB is not configured.');
+  }
+  if (isRunning) {
+    return res.status(409).send('Cannot run dedup while sync is in progress.');
+  }
+  if (dedupRunning) {
+    return res.status(409).send('Dedup is already running.');
+  }
+
+  dedupRunning = true;
+  try {
+    const db = await getMongoDb();
+    const logLines = [];
+    const result = await runDedup(db, {
+      dryRun: false,
+      log: (msg) => logLines.push(msg),
+    });
+    lastDedupResult = { ...result, logLines, ranAt: new Date().toISOString() };
+
+    // Log structured summary
+    const { actions, ...summary } = result;
+    logger.info({ dedup: summary }, 'Dedup completed from dashboard');
+
+    // Log every individual action for audit trail
+    if (actions && actions.length) {
+      for (const action of actions) {
+        logger.info({ dedupAction: action }, `dedup: ${action.type} ${action.collection} _id=${action.documentId}`);
+      }
+    }
+
+    return res.redirect('/?dedup=done');
+  } catch (err) {
+    logger.error({ err }, 'Dedup failed');
+    return res.status(500).send(err?.message || 'Dedup failed');
+  } finally {
+    dedupRunning = false;
+  }
+});
+
+app.get('/dedup/status', (_req, res) => {
+  res.json({ running: dedupRunning, lastResult: lastDedupResult });
 });
 
 // History pages
