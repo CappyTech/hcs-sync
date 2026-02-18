@@ -8,12 +8,13 @@
  *   Pass 1 – Remove uuid-less duplicates
  *     Group documents by the KashFlow `Id` field.  Within each duplicate group,
  *     keep every document that already has a `uuid` and delete those without.
- *     If ALL copies lack a uuid, keep the most recent one (by `syncedAt` / `_id`)
- *     so the next sync run can assign a uuid via `$setOnInsert`.
+ *     If ALL copies lack a uuid, keep the oldest one (by `syncedAt` / `_id`)
+ *     because it is most likely to carry edits made by hcs-app.
  *
- *   Pass 2 – Remove remaining duplicates (multiple docs with uuid for same Id)
- *     If a uuid-bearing group still has duplicates (e.g. two docs were assigned
- *     uuids independently), keep the most recently synced one and delete the rest.
+ *   Pass 2 – Backfill missing uuids
+ *     Any surviving document that still lacks a uuid gets a fresh UUIDv4
+ *     assigned.  This is necessary because the sync's `$setOnInsert` only
+ *     fires on inserts, not on updates to existing matched documents.
  *
  * After the migration completes, each KashFlow `Id` maps to exactly one document
  * and the unique index on `Id` can be enforced.  The next sync will fill in any

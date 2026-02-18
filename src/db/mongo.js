@@ -210,15 +210,16 @@ export async function ensureKashflowIndexes(db) {
       ensureUniqueKeyIndex('projects', 'Id'),
     ];
 
-    // Secondary non-unique indexes on code/number for query performance.
+    // Secondary non-unique indexes on Code/Number for query performance.
+    // Field names are capitalized to match the KashFlow API payload keys.
     const secondaryJobs = [
-      ensureSecondaryIndex('customers', 'code'),
-      ensureSecondaryIndex('suppliers', 'code'),
-      ensureSecondaryIndex('nominals', 'code'),
-      ensureSecondaryIndex('invoices', 'number'),
-      ensureSecondaryIndex('quotes', 'number'),
-      ensureSecondaryIndex('purchases', 'number'),
-      ensureSecondaryIndex('projects', 'number'),
+      ensureSecondaryIndex('customers', 'Code'),
+      ensureSecondaryIndex('suppliers', 'Code'),
+      ensureSecondaryIndex('nominals', 'Code'),
+      ensureSecondaryIndex('invoices', 'Number'),
+      ensureSecondaryIndex('quotes', 'Number'),
+      ensureSecondaryIndex('purchases', 'Number'),
+      ensureSecondaryIndex('projects', 'Number'),
     ];
 
     for (const collectionName of collectionsNeedingUuid) {

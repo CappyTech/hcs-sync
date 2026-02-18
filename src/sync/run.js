@@ -346,7 +346,7 @@ async function run(options = {}) {
     for (const p of projects || []) {
       const id = pickId(p);
       const number = pickNumber(p);
-      const keyField = id != null ? 'Id' : 'number';
+      const keyField = id != null ? 'Id' : 'Number';
       const keyValue = id != null ? id : number;
       if (keyValue == null) {
         projectsSkip.incMissingKey();
@@ -375,7 +375,7 @@ async function run(options = {}) {
       for (const n of nominals || []) {
         const id = pickId(n);
         const code = pickCode(n);
-        const keyField = id != null ? 'Id' : 'code';
+        const keyField = id != null ? 'Id' : 'Code';
         const keyValue = id != null ? id : code;
         if (keyValue == null || (typeof keyValue === 'string' && keyValue.trim() === '')) {
           nominalsSkip.incMissingKey();
