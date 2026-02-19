@@ -18,27 +18,36 @@
     "@tailwindcss/forms": "^0.5.7",
     "@tailwindcss/typography": "^0.5.14",
     "autoprefixer": "^10.4.19",
-    "nodemon": "^3.1.0",
+    "nodemon": "^3.1.13",
     "postcss": "^8.4.31",
     "tailwindcss": "^3.4.13"
   },
   "dependencies": {
+    "@tailwindcss/typography": "^0.5.14",
     "axios": "^1.11.0",
-    "mongodb": "^6.19.0",
+    "cookie-parser": "^1.4.7",
+    "cron-parser": "^4.9.0",
+    "cronstrue": "^2.57.0",
+    "csrf": "^3.1.0",
     "dotenv": "^17.2.1",
     "ejs": "^3.1.10",
     "express": "^4.19.2",
-    "cookie-parser": "^1.4.7",
-    "jsonwebtoken": "^9.0.2",
-    "helmet": "^7.2.0",
-    "csrf": "^3.1.0",
     "flowbite": "^4.0.1",
-    "@tailwindcss/typography": "^0.5.14",
-    "node-cron": "^3.0.3",
-    "cron-parser": "^4.9.0",
-    "cronstrue": "^2.57.0",
+    "helmet": "^7.2.0",
+    "jsonwebtoken": "^9.0.2",
+    "mongodb": "^6.19.0",
     "mongoose": "^8.18.0",
+    "node-cron": "^3.0.3",
     "pino": "^9.8.0",
     "pino-pretty": "^13.1.1"
+  },
+  "overrides": {
+    "ejs": {
+      "jake": {
+        "filelist": {
+          "minimatch": "^10.2.1"
+        }
+      }
+    }
   }
 }
