@@ -898,7 +898,7 @@ app.use((err, req, res, next) => {
 });
 
 
-app.listen(port, () => {
+const server = app.listen(port, () => {
   logger.info({ port }, 'Server listening');
   warnIfMongoPointsToLocalhost();
 
@@ -913,3 +913,5 @@ app.listen(port, () => {
     }
   })();
 });
+
+export { app, server };

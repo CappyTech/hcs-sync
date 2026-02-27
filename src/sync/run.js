@@ -1008,3 +1008,20 @@ if (process.argv[1] && process.argv[1].endsWith('run.js')) {
 }
 
 export default run;
+
+// Named exports for unit testing of internal helpers
+export {
+  createPool,
+  buildUpsertUpdate,
+  createBulkUpserter,
+  pickCode,
+  pickNumber,
+  pickId,
+  isMissingKey,
+  toDate,
+  computeCisTaxPeriod,
+  preparePurchaseForUpsert,
+  createSkipCounter,
+  addMongoStats,
+  SUPPLIER_PROTECTED_FIELDS,
+};

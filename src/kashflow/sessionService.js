@@ -15,7 +15,6 @@
  * 2. Two-step username/password + memorable word – credentials env vars.
  *    POST /sessiontoken (credentials) → TemporaryToken + character positions
  *    PUT  /sessiontoken (temp token + characters) → SessionToken
- * 3. Pre-set session token – SESSION_TOKEN / KASHFLOW_SESSION_TOKEN env var.
  *
  * ENV VARS (supports both long-form and legacy short aliases)
  * - BASE_URL / KASHFLOW_BASE_URL / KASHFLOW_API_BASE_URL
@@ -24,7 +23,6 @@
  * - KASHFLOW_MEMORABLE / KFMEMORABLE / KASHFLOW_MEMORABLE_WORD / MEMORABLE_WORD
  * - KASHFLOW_EXTERNAL_TOKEN
  * - KASHFLOW_EXTERNAL_UID / KFEXTERNALUID
- * - KASHFLOW_SESSION_TOKEN / KFSESSIONTOKEN / SESSION_TOKEN
  * - KASHFLOW_DEBUG_SESSION=1  – logs redacted step-1 payloads on failure
  */
 
@@ -455,8 +453,7 @@ async function twoStepLogin(user, pass, memorable) {
  *   1. Return cached token if still valid.
  *   2. External token exchange   (KASHFLOW_EXTERNAL_TOKEN)
  *   3. Two-step login            (username + password + memorable)
- *   4. Pre-set token from env    (SESSION_TOKEN / KASHFLOW_SESSION_TOKEN / KFSESSIONTOKEN)
- *   5. Throw – no credentials available.
+ *   4. Throw – no credentials available.
  *
  * @returns {Promise<string>} a valid session token
  * @throws {Error} if no credentials are configured or account is locked
@@ -479,23 +476,15 @@ export async function ensureSessionToken() {
   // Strategy 2: two-step login
   if (user && pass && memorable) return twoStepLogin(user, pass, memorable);
 
-  // Strategy 3: accept a pre-provided session token from env / config
-  const preset =
-    config.token ||
-    process.env.KASHFLOW_SESSION_TOKEN ||
-    process.env.KFSESSIONTOKEN ||
-    process.env.SESSION_TOKEN ||
-    '';
-  if (preset) {
-    _sessionToken = stripWrappingQuotes(preset).trim();
-    _tokenAcquiredAt = now();
-    _tokenTTLms = 0;
-    logger.warn('[kashflow] Using pre-configured session token from env');
-    return _sessionToken;
-  }
+  // Build a helpful error message indicating which credentials are missing
+  const missing = [];
+  if (!user) missing.push('USERNAME');
+  if (!pass) missing.push('PASSWORD');
+  if (!memorable) missing.push('MEMORABLE_WORD');
 
   throw new Error(
-    'No KashFlow credentials or external token configured to obtain a session token',
+    `KashFlow credentials incomplete (missing ${missing.join(', ')}). ` +
+    'Set KASHFLOW_API_USERNAME, KASHFLOW_API_PASSWORD and KASHFLOW_MEMORABLE env vars.',
   );
 }
 
