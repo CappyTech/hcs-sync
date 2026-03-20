@@ -68,6 +68,11 @@ function createBulkUpserter(collection, batchSize = 250) {
   const captureUpserts = Boolean(options?.captureUpserts);
   const maxCapturedUpserts = Number(options?.maxCapturedUpserts || 2000);
 
+  // Audit options: { auditCollection, runId, collectionName }
+  const audit = options?.audit || null;
+  let auditedChanges = 0;
+  let auditedCreates = 0;
+
   let pending = [];
   let attemptedOps = 0;
   let affected = 0;
@@ -90,8 +95,88 @@ function createBulkUpserter(collection, batchSize = 250) {
     upserted += out?.upsertedCount || 0;
     modified += out?.modifiedCount || 0;
     matched += out?.matchedCount || 0;
-    // `matchedCount` already includes those that were modified.
     affected += (out?.upsertedCount || 0) + (out?.matchedCount || 0);
+  };
+
+  /** Batch-read existing documents before the bulkWrite for audit diffing. */
+  const preReadForAudit = async (opsToWrite) => {
+    if (!audit?.auditCollection) return null;
+    try {
+      const filters = opsToWrite.map((op) => op?.updateOne?.filter).filter(Boolean);
+      if (!filters.length) return null;
+      const existingDocs = await collection.find({ $or: filters }).toArray();
+      const docMap = new Map();
+      for (const doc of existingDocs) {
+        for (const f of filters) {
+          const fKeys = Object.keys(f);
+          const matches = fKeys.every((k) => doc[k] != null && String(doc[k]) === String(f[k]));
+          if (matches) {
+            docMap.set(JSON.stringify(f), doc);
+            break;
+          }
+        }
+      }
+      return docMap;
+    } catch (err) {
+      logger.warn({ err: err?.message }, 'Audit pre-read failed (non-fatal)');
+      return null;
+    }
+  };
+
+  /** Compute diffs using the pre-read map and write audit entries. */
+  const writeAuditEntries = async (opsToWrite, docMap, upsertedEntries) => {
+    if (!audit?.auditCollection || !docMap) return;
+    try {
+      const upsertedSet = new Set((upsertedEntries || []).map((e) => e?.index));
+      const auditEntries = [];
+      const now = new Date();
+
+      for (let i = 0; i < opsToWrite.length; i++) {
+        const op = opsToWrite[i];
+        const filter = op?.updateOne?.filter;
+        if (!filter) continue;
+        const setFields = op?.updateOne?.update?.$set;
+        if (!setFields) continue;
+
+        const filterKey = JSON.stringify(filter);
+        const existing = docMap.get(filterKey) || null;
+        const isCreate = !existing || upsertedSet.has(i);
+
+        if (isCreate) {
+          auditEntries.push({
+            collection: audit.collectionName,
+            documentId: filter.Id ?? filter.Code ?? filter.Number ?? null,
+            filter,
+            runId: audit.runId || null,
+            action: 'create',
+            changes: [],
+            timestamp: now,
+          });
+          auditedCreates++;
+          continue;
+        }
+
+        const changes = deepDiff(existing, setFields);
+        if (!changes.length) continue;
+
+        auditEntries.push({
+          collection: audit.collectionName,
+          documentId: filter.Id ?? filter.Code ?? filter.Number ?? null,
+          filter,
+          runId: audit.runId || null,
+          action: 'update',
+          changes,
+          timestamp: now,
+        });
+        auditedChanges++;
+      }
+
+      if (auditEntries.length) {
+        await audit.auditCollection.insertMany(auditEntries, { ordered: false });
+      }
+    } catch (err) {
+      logger.warn({ err: err?.message, collection: audit.collectionName }, 'Audit write failed (non-fatal)');
+    }
   };
 
   const enqueueWrite = async (opsToWrite) => {
@@ -103,12 +188,16 @@ function createBulkUpserter(collection, batchSize = 250) {
       : null;
 
     writeChain = writeChain.then(async () => {
+      // Pre-read for audit before the write so we capture the "before" state.
+      const preReadDocs = audit ? await preReadForAudit(opsToWrite) : null;
+
       const out = await collection.bulkWrite(opsToWrite, { ordered: false });
       applyResult(out);
 
+      const upsertedEntries = extractUpsertedEntries(out);
+
       if (captureUpserts && filtersForOps) {
-        const entries = extractUpsertedEntries(out);
-        for (const entry of entries) {
+        for (const entry of upsertedEntries) {
           const idx = entry?.index;
           if (!Number.isInteger(idx) || idx < 0 || idx >= filtersForOps.length) continue;
           const filter = filtersForOps[idx];
@@ -120,8 +209,12 @@ function createBulkUpserter(collection, batchSize = 250) {
           upsertedFilters.push(filter);
         }
       }
+
+      // Post-write: compute diffs and write audit entries.
+      if (preReadDocs) {
+        await writeAuditEntries(opsToWrite, preReadDocs, upsertedEntries);
+      }
     });
-    // Backpressure: don’t let memory grow unbounded.
     await writeChain;
   };
 
@@ -144,6 +237,7 @@ function createBulkUpserter(collection, batchSize = 250) {
     push,
     flush,
     getStats: () => ({ attemptedOps, affected, upserted, matched, modified }),
+    getAuditStats: () => ({ auditedChanges, auditedCreates }),
     getUpsertedFilters: () => ({ filters: upsertedFilters.slice(), truncated: upsertedFiltersTruncated, maxCapturedUpserts }),
   };
 }
@@ -346,6 +440,9 @@ async function run(options = {}) {
       emitLog('warn', 'Mongo not configured; running in fetch-only mode');
     }
 
+    const auditCol = db ? db.collection('audit_log') : null;
+    const auditOpts = (collectionName) => auditCol ? { auditCollection: auditCol, runId, collectionName } : null;
+
     setStage('fetch:lists');
     const [customers, suppliers, projects, nominals] = await Promise.all([
       kf.customers.listAll({ perpage: 200 }),
@@ -370,7 +467,7 @@ async function run(options = {}) {
       setStage('upsert:lists');
       const now = new Date();
       // List payload upserts
-      const upsertCustomers = createBulkUpserter(db.collection('customers'), { captureUpserts: true });
+      const upsertCustomers = createBulkUpserter(db.collection('customers'), { captureUpserts: true, audit: auditOpts('customers') });
       const customersSkip = createSkipCounter();
       for (const c of customers || []) {
         const id = pickId(c);
@@ -396,7 +493,7 @@ async function run(options = {}) {
         emitLog('warn', 'Skipped customer upserts with missing Id', { count: customersSkip.getMissingKey() });
       }
 
-    const upsertSuppliers = createBulkUpserter(db.collection('suppliers'), { captureUpserts: true });
+    const upsertSuppliers = createBulkUpserter(db.collection('suppliers'), { captureUpserts: true, audit: auditOpts('suppliers') });
     const suppliersSkip = createSkipCounter();
     for (const s of suppliers || []) {
       const id = pickId(s);
@@ -422,7 +519,7 @@ async function run(options = {}) {
       emitLog('warn', 'Skipped supplier upserts with missing Id', { count: suppliersSkip.getMissingKey() });
     }
 
-    const upsertProjects = createBulkUpserter(db.collection('projects'), { captureUpserts: true });
+    const upsertProjects = createBulkUpserter(db.collection('projects'), { captureUpserts: true, audit: auditOpts('projects') });
     const projectsSkip = createSkipCounter();
     for (const p of projects || []) {
       const id = pickId(p);
@@ -451,7 +548,7 @@ async function run(options = {}) {
       emitLog('warn', 'Skipped project upserts with missing Id/number', { count: projectsSkip.getMissingKey() });
     }
 
-      const upsertNominals = createBulkUpserter(db.collection('nominals'), { captureUpserts: true });
+      const upsertNominals = createBulkUpserter(db.collection('nominals'), { captureUpserts: true, audit: auditOpts('nominals') });
       const nominalsSkip = createSkipCounter();
       for (const n of nominals || []) {
         const id = pickId(n);
@@ -486,7 +583,7 @@ async function run(options = {}) {
     setStage('customers:details');
     progress.setItemTotal('customers', customerCodes.length);
     progress.setItemDone('customers', 0);
-    const upserter = createBulkUpserter(db.collection('customers'), { captureUpserts: true });
+    const upserter = createBulkUpserter(db.collection('customers'), { captureUpserts: true, audit: auditOpts('customers') });
     const runNow = new Date();
     const fetchCustomer = createPool(
       config.concurrency || 4,
@@ -534,7 +631,7 @@ async function run(options = {}) {
     setStage('suppliers:details');
     progress.setItemTotal('suppliers', supplierCodes.length);
     progress.setItemDone('suppliers', 0);
-    const upserter = createBulkUpserter(db.collection('suppliers'), { captureUpserts: true });
+    const upserter = createBulkUpserter(db.collection('suppliers'), { captureUpserts: true, audit: auditOpts('suppliers') });
     const runNow = new Date();
     const fetchSupplier = createPool(
       config.concurrency || 4,
@@ -584,7 +681,7 @@ async function run(options = {}) {
       setStage('projects:details');
       progress.setItemTotal('projects', projectNumbers.length);
       progress.setItemDone('projects', 0);
-      const projectDetailUpserter = createBulkUpserter(db.collection('projects'), { captureUpserts: true });
+      const projectDetailUpserter = createBulkUpserter(db.collection('projects'), { captureUpserts: true, audit: auditOpts('projects') });
       const runNow = new Date();
       let projectsDetailFailed = 0;
       const fetchProject = createPool(
@@ -650,7 +747,7 @@ async function run(options = {}) {
     emitLog('info', 'Starting per-customer invoices list fetch', { customers: customerCodes.length, concurrency: config.concurrency || 4 });
     let invoicesSkippedMissingId = 0;
     const invoiceEntries = []; // { id, number } pairs for detail phase
-    const invoicesListUpserter = db ? createBulkUpserter(db.collection('invoices'), { captureUpserts: true }) : null;
+    const invoicesListUpserter = db ? createBulkUpserter(db.collection('invoices'), { captureUpserts: true, audit: auditOpts('invoices') }) : null;
     const invoicesByCustomer = await createPool(
     config.concurrency || 4,
     'invoices',
@@ -698,7 +795,7 @@ async function run(options = {}) {
       progress.setItemDone('invoices', 0);
       logger.info({ count: invoiceEntries.length, concurrency: detailConcurrency }, 'Starting invoice detail fanout');
       emitLog('info', 'Starting invoice detail fanout', { count: invoiceEntries.length, concurrency: detailConcurrency });
-      const invoiceDetailUpserter = createBulkUpserter(db.collection('invoices'), { captureUpserts: true });
+      const invoiceDetailUpserter = createBulkUpserter(db.collection('invoices'), { captureUpserts: true, audit: auditOpts('invoices') });
       const runNow = new Date();
       await createPool(
         detailConcurrency,
@@ -755,7 +852,7 @@ async function run(options = {}) {
     emitLog('info', 'Starting per-customer quotes list fetch', { customers: customerCodes.length, concurrency: config.concurrency || 4 });
     let quotesSkippedMissingId = 0;
     const quoteEntries = []; // { id, number } pairs for detail phase
-    const quotesListUpserter = db ? createBulkUpserter(db.collection('quotes'), { captureUpserts: true }) : null;
+    const quotesListUpserter = db ? createBulkUpserter(db.collection('quotes'), { captureUpserts: true, audit: auditOpts('quotes') }) : null;
     const quotesByCustomer = await createPool(
     config.concurrency || 4,
     'quotes',
@@ -803,7 +900,7 @@ async function run(options = {}) {
       progress.setItemDone('quotes', 0);
       logger.info({ count: quoteEntries.length, concurrency: detailConcurrency }, 'Starting quote detail fanout');
       emitLog('info', 'Starting quote detail fanout', { count: quoteEntries.length, concurrency: detailConcurrency });
-      const quoteDetailUpserter = createBulkUpserter(db.collection('quotes'), { captureUpserts: true });
+      const quoteDetailUpserter = createBulkUpserter(db.collection('quotes'), { captureUpserts: true, audit: auditOpts('quotes') });
       const runNow = new Date();
       await createPool(
         detailConcurrency,
@@ -860,7 +957,7 @@ async function run(options = {}) {
     emitLog('info', 'Starting per-supplier purchases list fetch', { suppliers: supplierCodes.length, concurrency: config.concurrency || 4 });
     let purchasesSkippedMissingId = 0;
     const purchaseEntries = []; // { id, number } pairs for detail phase
-    const purchasesListUpserter = db ? createBulkUpserter(db.collection('purchases'), { captureUpserts: true }) : null;
+    const purchasesListUpserter = db ? createBulkUpserter(db.collection('purchases'), { captureUpserts: true, audit: auditOpts('purchases') }) : null;
     const purchasesBySupplier = await createPool(
     config.concurrency || 4,
     'purchases',
@@ -908,7 +1005,7 @@ async function run(options = {}) {
       progress.setItemDone('purchases', 0);
       logger.info({ count: purchaseEntries.length, concurrency: detailConcurrency }, 'Starting purchase detail fanout');
       emitLog('info', 'Starting purchase detail fanout', { count: purchaseEntries.length, concurrency: detailConcurrency });
-      const purchaseDetailUpserter = createBulkUpserter(db.collection('purchases'), { captureUpserts: true });
+      const purchaseDetailUpserter = createBulkUpserter(db.collection('purchases'), { captureUpserts: true, audit: auditOpts('purchases') });
       const runNow = new Date();
       await createPool(
         detailConcurrency,
