@@ -4,6 +4,7 @@ import createClient from '../kashflow/client.js';
 import config from '../config.js';
 import progress from '../server/progress.js';
 import { ensureKashflowIndexes, getMongoDb, isMongoEnabled } from '../db/mongo.js';
+import deepDiff from '../util/deepDiff.js';
 
 function createPool(limit, label, handler, onProgress) {
   return async (items) => {

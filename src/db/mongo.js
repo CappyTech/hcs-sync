@@ -226,7 +226,23 @@ export async function ensureKashflowIndexes(db) {
       indexJobs.push(ensureUniqueKeyIndex(collectionName, 'uuid', 'string'));
     }
 
-    await Promise.all([...indexJobs, ...secondaryJobs]);
+    // Audit log indexes for the sync change-tracking collection.
+    const auditJobs = [
+      db.collection('audit_log').createIndex(
+        { collection: 1, documentId: 1, timestamp: -1 },
+        { name: 'audit_col_doc_ts', background: true }
+      ),
+      db.collection('audit_log').createIndex(
+        { runId: 1 },
+        { name: 'audit_runId', background: true }
+      ),
+      db.collection('audit_log').createIndex(
+        { timestamp: -1 },
+        { name: 'audit_ts', background: true }
+      ),
+    ];
+
+    await Promise.all([...indexJobs, ...secondaryJobs, ...auditJobs]);
   } catch (err) {
     if (isMongoAuthError(err)) {
       throw new Error(

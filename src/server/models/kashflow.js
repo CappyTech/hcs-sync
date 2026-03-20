@@ -291,8 +291,8 @@ const PurchaseSchema = new mongoose.Schema(
     VATAmount: Number,
     AdditionalFieldValue: String,
     IsWhtDeductionToBeApplied: Boolean,
-    // CIS submission fields added by hcs-app
     ReadableString: String,
+    // CIS submission fields added by hcs-app - not part of KashFlow's core purchase model.
     SubmissionDate: Date,
     TaxMonth: Number,
     TaxYear: Number,
