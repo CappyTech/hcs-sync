@@ -135,6 +135,20 @@ describe('computeCisTaxPeriod()', () => {
     expect(result.TaxYear).toBe(2025);
     expect(result.TaxMonth).toBe(4);
   });
+
+  // BST edge-cases: KashFlow sends UK local dates as UTC strings.
+  // 6 Apr 2026 00:00 BST = 2026-04-05T23:00:00Z — must land in tax year 2026.
+  it('BST: 6 Apr midnight BST (stored as 5 Apr 23:00 UTC) → TaxYear 2026, TaxMonth 1', () => {
+    expect(computeCisTaxPeriod(new Date('2026-04-05T23:00:00Z'))).toEqual({ TaxYear: 2026, TaxMonth: 1 });
+  });
+  // 6 Sep 2025 00:00 BST = 2025-09-05T23:00:00Z — must be tax month 6, not 5.
+  it('BST: 6 Sep midnight BST (stored as 5 Sep 23:00 UTC) → TaxYear 2025, TaxMonth 6', () => {
+    expect(computeCisTaxPeriod(new Date('2025-09-05T23:00:00Z'))).toEqual({ TaxYear: 2025, TaxMonth: 6 });
+  });
+  // GMT (winter): 6 Jan 2026 00:00 GMT = 2026-01-06T00:00:00Z — no offset, still correct.
+  it('GMT: 6 Jan midnight GMT (no BST offset) → TaxYear 2025, TaxMonth 10', () => {
+    expect(computeCisTaxPeriod(new Date('2026-01-06T00:00:00Z'))).toEqual({ TaxYear: 2025, TaxMonth: 10 });
+  });
 });
 
 // ── buildUpsertUpdate ──

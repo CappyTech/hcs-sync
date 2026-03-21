@@ -362,9 +362,19 @@ export function computeCisTaxPeriod(date) {
   const d = toDate(date);
   if (!d) return null;
 
-  const year  = d.getFullYear();
-  const month = d.getMonth();  // 0-based (0 = Jan, 3 = Apr)
-  const day   = d.getDate();
+  // KashFlow dates represent UK local time.  Extract date parts in
+  // Europe/London so that e.g. "2026-04-05T23:00:00Z" (6 Apr 2026 BST)
+  // is correctly treated as 6 April, not 5 April.
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Europe/London',
+    year: 'numeric',
+    month: 'numeric',
+    day: 'numeric',
+  }).formatToParts(d);
+
+  const year  = Number(parts.find(p => p.type === 'year').value);
+  const month = Number(parts.find(p => p.type === 'month').value) - 1; // 0-based
+  const day   = Number(parts.find(p => p.type === 'day').value);
 
   // Tax year that this date falls in (labelled by the starting calendar year).
   const taxYear = (month > 3 || (month === 3 && day >= 6)) ? year : year - 1;
@@ -418,7 +428,7 @@ export function preparePurchaseForUpsert(item) {
 
 PurchaseSchema.statics.syncConfig = {
   keyField: 'Id',
-  protectedFields: [],
+  protectedFields: ['SubmissionDate'],
   transform: preparePurchaseForUpsert,
 };
 
@@ -455,7 +465,7 @@ ProjectSchema.index({ Id: 1 }, { unique: true, sparse: true });
 ProjectSchema.statics.syncConfig = {
   keyField: 'Id',
   fallbackKeyField: 'Number',
-  protectedFields: [],
+  protectedFields: ['deletedAt'],
 };
 
 export const Project =
