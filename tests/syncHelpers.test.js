@@ -14,9 +14,11 @@ vi.mock('../src/kashflow/client.js', () => ({ default: vi.fn() }));
 vi.mock('../src/server/progress.js', () => ({
   default: { setStage: vi.fn(), setItemTotal: vi.fn(), setItemDone: vi.fn(), incItem: vi.fn() },
 }));
+vi.mock('../src/db/mongoose.js', () => ({
+  isMongooseEnabled: vi.fn(() => false),
+  connectMongoose: vi.fn(),
+}));
 vi.mock('../src/db/mongo.js', () => ({
-  isMongoEnabled: vi.fn(() => false),
-  getMongoDb: vi.fn(),
   ensureKashflowIndexes: vi.fn(),
 }));
 vi.mock('dotenv', () => ({ default: { config: () => ({}) }, config: () => ({}) }));
@@ -213,14 +215,14 @@ describe('buildUpsertUpdate()', () => {
     expect(result.$unset).toEqual({ data: '' });
   });
 
-  it('$setOnInsert includes uuid and createdAt', () => {
+  it('$setOnInsert includes uuid (createdAt handled by Mongoose timestamps)', () => {
     const now = new Date();
     const result = buildUpsertUpdate({
       keyField: 'Id', keyValue: 1, payload: {}, syncedAt: now,
     });
     expect(result.$setOnInsert.uuid).toBeDefined();
     expect(typeof result.$setOnInsert.uuid).toBe('string');
-    expect(result.$setOnInsert.createdAt).toBe(now);
+    expect(result.$setOnInsert.createdAt).toBeUndefined();
   });
 
   it('handles non-object payload gracefully', () => {

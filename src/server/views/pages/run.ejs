@@ -157,6 +157,81 @@
   <% } %>
 <% } %>
 
+<h2 class="text-xl font-semibold mb-2">Audit Trail</h2>
+<%
+  const collections = [...new Set((auditEntries || []).map(e => e.collection))].sort();
+  const auditUpdates = (auditEntries || []).filter(e => e.action === 'update');
+  const auditCreates = (auditEntries || []).filter(e => e.action === 'create');
+%>
+<% if (auditError) { %>
+  <p class="text-sm text-red-700 dark:text-red-400 mb-4"><%= auditError %></p>
+<% } else if (!auditEntries || auditEntries.length === 0) { %>
+  <p class="text-sm text-gray-500 dark:text-gray-400 mb-2">No field-level changes detected by the audit trail for this run.</p>
+  <p class="text-xs text-gray-400 dark:text-gray-500 mb-4">This means KashFlow data matched what was already in the database (only metadata like <code>syncedAt</code> was updated).</p>
+<% } else { %>
+  <div class="flex flex-wrap items-center gap-2 mb-3">
+    <span class="text-xs text-gray-500 dark:text-gray-400">
+      <%= auditUpdates.length %> update<%= auditUpdates.length !== 1 ? 's' : '' %>,
+      <%= auditCreates.length %> create<%= auditCreates.length !== 1 ? 's' : '' %>
+      <% if ((auditEntries || []).length >= 500) { %><span class="text-amber-600">(capped at 500)</span><% } %>
+    </span>
+    <% if (collections.length > 1) { %>
+      <span class="text-xs text-gray-400 mx-1">|</span>
+      <span class="text-xs text-gray-500 dark:text-gray-400">Filter:</span>
+      <a href="?<%= mongoCollection ? 'mongoCollection=' + encodeURIComponent(mongoCollection) + '&' : '' %><%= (typeof query !== 'undefined' && query?.logLimit) ? 'logLimit=' + encodeURIComponent(query.logLimit) + '&' : '' %>"
+         class="text-xs px-2 py-0.5 rounded <%= !auditCollection ? 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300' : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-400' %>">All</a>
+      <% collections.forEach(col => { %>
+        <a href="?<%= mongoCollection ? 'mongoCollection=' + encodeURIComponent(mongoCollection) + '&' : '' %><%= (typeof query !== 'undefined' && query?.logLimit) ? 'logLimit=' + encodeURIComponent(query.logLimit) + '&' : '' %>auditCollection=<%= encodeURIComponent(col) %>"
+           class="text-xs px-2 py-0.5 rounded <%= auditCollection === col ? 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300' : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-400' %>"><%= col %></a>
+      <% }) %>
+    <% } %>
+  </div>
+
+  <div class="space-y-3 mb-6">
+    <% (auditEntries || []).forEach((entry, idx) => { %>
+      <div id="audit-<%= idx %>" class="border border-gray-200 rounded-lg dark:border-gray-700 scroll-mt-24">
+        <div class="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-800 rounded-t-lg">
+          <div class="text-sm">
+            <span class="font-semibold"><%= entry.collection %></span>
+            <span class="ml-2 font-mono text-xs text-gray-500"><%= entry.documentId %></span>
+            <span class="ml-2 px-2 py-0.5 rounded text-xs <%= entry.action === 'create' ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300' : 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300' %>"><%= entry.action %></span>
+          </div>
+          <div class="text-xs text-gray-500 flex items-center gap-3">
+            <a class="text-blue-600 hover:underline" href="#audit-<%= idx %>">Link</a>
+            <span><%= formatDateTimeUK(entry.timestamp) %></span>
+          </div>
+        </div>
+        <% if (entry.action === 'update' && entry.changes && entry.changes.length > 0) { %>
+          <div class="p-3">
+            <table class="w-full text-xs text-left text-gray-500 dark:text-gray-400">
+              <thead class="text-xs text-gray-700 uppercase bg-gray-50 dark:bg-gray-700 dark:text-gray-400">
+                <tr>
+                  <th class="px-3 py-2">Field</th>
+                  <th class="px-3 py-2">Before</th>
+                  <th class="px-3 py-2">After</th>
+                </tr>
+              </thead>
+              <tbody>
+                <% entry.changes.forEach(ch => { %>
+                  <tr class="border-b dark:border-gray-700">
+                    <td class="px-3 py-2 font-mono whitespace-nowrap"><%= ch.path %></td>
+                    <td class="px-3 py-2"><pre class="inline bg-red-50 dark:bg-red-900/20 text-red-800 dark:text-red-300 px-1 rounded text-xs overflow-auto max-w-xs"><%= typeof ch.before === 'object' ? JSON.stringify(ch.before, null, 2) : String(ch.before ?? '—') %></pre></td>
+                    <td class="px-3 py-2"><pre class="inline bg-green-50 dark:bg-green-900/20 text-green-800 dark:text-green-300 px-1 rounded text-xs overflow-auto max-w-xs"><%= typeof ch.after === 'object' ? JSON.stringify(ch.after, null, 2) : String(ch.after ?? '—') %></pre></td>
+                  </tr>
+                <% }) %>
+              </tbody>
+            </table>
+          </div>
+        <% } else if (entry.action === 'create') { %>
+          <div class="p-3">
+            <p class="text-xs text-gray-500 dark:text-gray-400">New document inserted.</p>
+          </div>
+        <% } %>
+      </div>
+    <% }) %>
+  </div>
+<% } %>
+
 <h2 class="text-xl font-semibold mb-2">Changes</h2>
 <% if (!run.changes || run.changes.length === 0) { %>
   <p class="text-sm text-gray-500 dark:text-gray-400">No changes recorded for this run.</p>

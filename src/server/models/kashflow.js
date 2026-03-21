@@ -22,6 +22,15 @@ const syncOnlyFields = {
   createdByRunId: { type: String, default: null },
 };
 
+/**
+ * Fields managed internally by the sync engine — excluded from payload
+ * flattening (buildUpsertUpdate) and audit diffs (deepDiff).
+ */
+export const SYNC_INTERNAL_FIELDS = new Set([
+  '_id', '__v', 'data', 'uuid',
+  'syncedAt', 'createdAt', 'updatedAt', 'createdByRunId',
+]);
+
 // ── Customer ────────────────────────────────────────────────────────────
 
 const CustomerSchema = new mongoose.Schema(
@@ -88,6 +97,11 @@ const CustomerSchema = new mongoose.Schema(
 
 CustomerSchema.index({ Id: 1 }, { unique: true, sparse: true });
 
+CustomerSchema.statics.syncConfig = {
+  keyField: 'Id',
+  protectedFields: [],
+};
+
 export const Customer =
   mongoose.models.customer || mongoose.model('customer', CustomerSchema);
 
@@ -139,6 +153,11 @@ const SupplierSchema = new mongoose.Schema(
 );
 
 SupplierSchema.index({ Id: 1 }, { unique: true, sparse: true });
+
+SupplierSchema.statics.syncConfig = {
+  keyField: 'Id',
+  protectedFields: ['Subcontractor', 'IsSubcontractor', 'CISRate', 'CISNumber'],
+};
 
 export const Supplier =
   mongoose.models.supplier || mongoose.model('supplier', SupplierSchema);
@@ -197,6 +216,11 @@ const InvoiceSchema = new mongoose.Schema(
 
 InvoiceSchema.index({ Id: 1 }, { unique: true, sparse: true });
 
+InvoiceSchema.statics.syncConfig = {
+  keyField: 'Id',
+  protectedFields: [],
+};
+
 export const Invoice =
   mongoose.models.invoice || mongoose.model('invoice', InvoiceSchema);
 
@@ -233,6 +257,11 @@ const QuoteSchema = new mongoose.Schema(
 );
 
 QuoteSchema.index({ Id: 1 }, { unique: true, sparse: true });
+
+QuoteSchema.statics.syncConfig = {
+  keyField: 'Id',
+  protectedFields: [],
+};
 
 export const Quote =
   mongoose.models.quote || mongoose.model('quote', QuoteSchema);
@@ -307,6 +336,92 @@ const PurchaseSchema = new mongoose.Schema(
 
 PurchaseSchema.index({ Id: 1 }, { unique: true, sparse: true });
 
+// ── Purchase transform helpers ──────────────────────────────────────────
+
+/**
+ * Convert a KashFlow date string (e.g. "2025-12-10 12:00:00") to a JS Date.
+ * Returns null for null / undefined / empty / unparseable values.
+ */
+export function toDate(value) {
+  if (value == null || value === '') return null;
+  if (value instanceof Date) return isNaN(value.getTime()) ? null : value;
+  const d = new Date(value);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+/**
+ * Compute the CIS TaxYear and TaxMonth for a given date.
+ *
+ * Rules:
+ *   Tax year starts 6 April.  A date before 6 April belongs to the previous year.
+ *   Tax month 1 = 6 Apr \u2013 5 May, month 2 = 6 May \u2013 5 Jun, \u2026, month 12 = 6 Mar \u2013 5 Apr.
+ *
+ * Returns { TaxYear: Number, TaxMonth: Number } or null if the date is invalid.
+ */
+export function computeCisTaxPeriod(date) {
+  const d = toDate(date);
+  if (!d) return null;
+
+  const year  = d.getFullYear();
+  const month = d.getMonth();  // 0-based (0 = Jan, 3 = Apr)
+  const day   = d.getDate();
+
+  // Tax year that this date falls in (labelled by the starting calendar year).
+  const taxYear = (month > 3 || (month === 3 && day >= 6)) ? year : year - 1;
+
+  // Months elapsed since 6 April of the tax year.
+  let monthDiff = (month - 3) + (year - taxYear) * 12;
+  if (day < 6) monthDiff -= 1;
+  const taxMonth = monthDiff + 1; // 1-based
+
+  return { TaxYear: taxYear, TaxMonth: taxMonth };
+}
+
+/**
+ * Mutate a purchase item in-place:
+ *   1. Convert date-string fields to proper JS Date objects.
+ *   2. Compute and set TaxYear / TaxMonth from the earliest payment date.
+ */
+export function preparePurchaseForUpsert(item) {
+  // --- Convert top-level date fields --------------------------------
+  item.PaidDate   = toDate(item.PaidDate);
+  item.IssuedDate = toDate(item.IssuedDate);
+  item.DueDate    = toDate(item.DueDate);
+
+  // --- Convert PaymentLines date fields -----------------------------
+  if (Array.isArray(item.PaymentLines)) {
+    for (const pl of item.PaymentLines) {
+      pl.PayDate = toDate(pl.PayDate);
+      pl.Date    = toDate(pl.Date);
+    }
+  }
+
+  // --- Derive reference date (priority order) -----------------------
+  let refDate = null;
+  if (Array.isArray(item.PaymentLines)) {
+    for (const pl of item.PaymentLines) {
+      if (pl.PayDate) { refDate = pl.PayDate; break; }
+    }
+  }
+  if (!refDate && item.PaidDate)   refDate = item.PaidDate;
+  if (!refDate && item.IssuedDate) refDate = item.IssuedDate;
+
+  // --- Compute CIS tax period ---------------------------------------
+  const period = computeCisTaxPeriod(refDate);
+  if (period) {
+    item.TaxYear  = period.TaxYear;
+    item.TaxMonth = period.TaxMonth;
+  }
+
+  return item;
+}
+
+PurchaseSchema.statics.syncConfig = {
+  keyField: 'Id',
+  protectedFields: [],
+  transform: preparePurchaseForUpsert,
+};
+
 export const Purchase =
   mongoose.models.purchase || mongoose.model('purchase', PurchaseSchema);
 
@@ -336,6 +451,12 @@ const ProjectSchema = new mongoose.Schema(
 );
 
 ProjectSchema.index({ Id: 1 }, { unique: true, sparse: true });
+
+ProjectSchema.statics.syncConfig = {
+  keyField: 'Id',
+  fallbackKeyField: 'Number',
+  protectedFields: [],
+};
 
 export const Project =
   mongoose.models.project || mongoose.model('project', ProjectSchema);
@@ -385,6 +506,12 @@ const NominalSchema = new mongoose.Schema(
 );
 
 NominalSchema.index({ Id: 1 }, { unique: true, sparse: true });
+
+NominalSchema.statics.syncConfig = {
+  keyField: 'Id',
+  fallbackKeyField: 'Code',
+  protectedFields: [],
+};
 
 export const Nominal =
   mongoose.models.nominal || mongoose.model('nominal', NominalSchema);

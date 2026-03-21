@@ -1,9 +1,12 @@
 import crypto from 'node:crypto';
+import mongoose from 'mongoose';
 import logger from '../util/logger.js';
 import createClient from '../kashflow/client.js';
 import config from '../config.js';
 import progress from '../server/progress.js';
-import { ensureKashflowIndexes, getMongoDb, isMongoEnabled } from '../db/mongo.js';
+import { connectMongoose, isMongooseEnabled } from '../db/mongoose.js';
+import { ensureKashflowIndexes } from '../db/mongo.js';
+import { Customer, Supplier, Invoice, Quote, Purchase, Project, Nominal, SYNC_INTERNAL_FIELDS, toDate, computeCisTaxPeriod, preparePurchaseForUpsert } from '../server/models/kashflow.js';
 import deepDiff from '../util/deepDiff.js';
 
 function createPool(limit, label, handler, onProgress) {
@@ -29,18 +32,14 @@ function createPool(limit, label, handler, onProgress) {
   };
 }
 
-function buildUpsertUpdate({ keyField, keyValue, payload, syncedAt, runId, protectedFields }) {
+function buildUpsertUpdate({ keyField, keyValue, payload, syncedAt, runId, model, protectedFields }) {
   const source = payload && typeof payload === 'object' && !Array.isArray(payload) ? payload : {};
-  const protectedSet = new Set(protectedFields || []);
+  const syncConfig = model?.syncConfig || {};
+  const protectedSet = new Set(protectedFields || syncConfig.protectedFields || []);
   const flattened = {};
   for (const [k, v] of Object.entries(source)) {
     if (!k) continue;
-    if (k === '_id') continue;
-    if (k === 'data') continue;
-    if (k === 'uuid') continue;
-    if (k === 'syncedAt') continue;
-    if (k === 'createdAt') continue;
-    if (k === 'createdByRunId') continue;
+    if (SYNC_INTERNAL_FIELDS.has(k)) continue;
     if (k.startsWith('$')) continue;
     if (k.includes('.') || k.includes('\u0000')) continue;
     if (protectedSet.has(k)) continue;
@@ -51,9 +50,9 @@ function buildUpsertUpdate({ keyField, keyValue, payload, syncedAt, runId, prote
   // Preserve our normalized key field (e.g. `code`/`number`) and sync metadata.
   const $set = { ...flattened, [keyField]: keyValue, syncedAt };
   // Assign a v4 UUID on first insert; existing docs keep their uuid untouched.
+  // Mongoose timestamps handles createdAt/updatedAt automatically.
   const $setOnInsert = {
     uuid: crypto.randomUUID(),
-    createdAt: syncedAt,
     ...(runId ? { createdByRunId: runId } : {}),
   };
 
@@ -104,7 +103,9 @@ function createBulkUpserter(collection, batchSize = 250) {
     try {
       const filters = opsToWrite.map((op) => op?.updateOne?.filter).filter(Boolean);
       if (!filters.length) return null;
-      const existingDocs = await collection.find({ $or: filters }).toArray();
+      const existingDocs = typeof collection.lean === 'function'
+        ? await collection.find({ $or: filters }).lean()
+        : await collection.find({ $or: filters }).toArray();
       const docMap = new Map();
       for (const doc of existingDocs) {
         for (const f of filters) {
@@ -191,7 +192,7 @@ function createBulkUpserter(collection, batchSize = 250) {
       // Pre-read for audit before the write so we capture the "before" state.
       const preReadDocs = audit ? await preReadForAudit(opsToWrite) : null;
 
-      const out = await collection.bulkWrite(opsToWrite, { ordered: false });
+      const out = await collection.bulkWrite(opsToWrite, { ordered: false, timestamps: true });
       applyResult(out);
 
       const upsertedEntries = extractUpsertedEntries(out);
@@ -254,93 +255,13 @@ function pickId(x) {
   return x?.Id ?? x?.id ?? null;
 }
 
-// CIS fields managed by hcs-app – must not be overwritten by sync.
-const SUPPLIER_PROTECTED_FIELDS = ['Subcontractor', 'IsSubcontractor', 'CISRate', 'CISNumber'];
+// Re-exported from Supplier model syncConfig for backward compatibility.
+const SUPPLIER_PROTECTED_FIELDS = Supplier.syncConfig.protectedFields;
 
 function isMissingKey(value) {
   if (value === null || typeof value === 'undefined') return true;
   if (typeof value === 'string' && value.trim() === '') return true;
   return false;
-}
-
-// ── Purchase date / CIS tax-period helpers ──────────────────────────────
-
-/**
- * Convert a KashFlow date string (e.g. "2025-12-10 12:00:00") to a JS Date.
- * Returns null for null / undefined / empty / unparseable values.
- */
-function toDate(value) {
-  if (value == null || value === '') return null;
-  if (value instanceof Date) return isNaN(value.getTime()) ? null : value;
-  const d = new Date(value);
-  return isNaN(d.getTime()) ? null : d;
-}
-
-/**
- * Compute the CIS TaxYear and TaxMonth for a given date.
- *
- * Rules:
- *   Tax year starts 6 April.  A date before 6 April belongs to the previous year.
- *   Tax month 1 = 6 Apr – 5 May, month 2 = 6 May – 5 Jun, …, month 12 = 6 Mar – 5 Apr.
- *
- * Returns { TaxYear: Number, TaxMonth: Number } or null if the date is invalid.
- */
-function computeCisTaxPeriod(date) {
-  const d = toDate(date);
-  if (!d) return null;
-
-  const year  = d.getFullYear();
-  const month = d.getMonth();  // 0-based (0 = Jan, 3 = Apr)
-  const day   = d.getDate();
-
-  // Tax year that this date falls in (labelled by the starting calendar year).
-  const taxYear = (month > 3 || (month === 3 && day >= 6)) ? year : year - 1;
-
-  // Months elapsed since 6 April of the tax year.
-  let monthDiff = (month - 3) + (year - taxYear) * 12;
-  if (day < 6) monthDiff -= 1;
-  const taxMonth = monthDiff + 1; // 1-based
-
-  return { TaxYear: taxYear, TaxMonth: taxMonth };
-}
-
-/**
- * Mutate a purchase item in-place:
- *   1. Convert date-string fields to proper JS Date objects.
- *   2. Compute and set TaxYear / TaxMonth from the earliest payment date.
- */
-function preparePurchaseForUpsert(item) {
-  // --- Convert top-level date fields --------------------------------
-  item.PaidDate   = toDate(item.PaidDate);
-  item.IssuedDate = toDate(item.IssuedDate);
-  item.DueDate    = toDate(item.DueDate);
-
-  // --- Convert PaymentLines date fields -----------------------------
-  if (Array.isArray(item.PaymentLines)) {
-    for (const pl of item.PaymentLines) {
-      pl.PayDate = toDate(pl.PayDate);
-      pl.Date    = toDate(pl.Date);
-    }
-  }
-
-  // --- Derive reference date (priority order) -----------------------
-  let refDate = null;
-  if (Array.isArray(item.PaymentLines)) {
-    for (const pl of item.PaymentLines) {
-      if (pl.PayDate) { refDate = pl.PayDate; break; }
-    }
-  }
-  if (!refDate && item.PaidDate)   refDate = item.PaidDate;
-  if (!refDate && item.IssuedDate) refDate = item.IssuedDate;
-
-  // --- Compute CIS tax period ---------------------------------------
-  const period = computeCisTaxPeriod(refDate);
-  if (period) {
-    item.TaxYear  = period.TaxYear;
-    item.TaxMonth = period.TaxMonth;
-  }
-
-  return item;
 }
 
 function createSkipCounter() {
@@ -429,18 +350,20 @@ async function run(options = {}) {
     }
 
     // Optional MongoDB sink (skip if not configured).
-    let db = null;
-    if (isMongoEnabled()) {
+    let mongoEnabled = false;
+    if (isMongooseEnabled()) {
       setStage('mongo:connect');
-      db = await getMongoDb();
+      await connectMongoose();
+      const db = mongoose.connection.db;
       await ensureKashflowIndexes(db);
+      mongoEnabled = true;
       emitLog('info', 'Mongo connected');
     } else {
       logger.warn('MongoDB not configured; running in fetch-only mode (no upserts)');
       emitLog('warn', 'Mongo not configured; running in fetch-only mode');
     }
 
-    const auditCol = db ? db.collection('audit_log') : null;
+    const auditCol = mongoEnabled ? mongoose.connection.db.collection('audit_log') : null;
     const auditOpts = (collectionName) => auditCol ? { auditCollection: auditCol, runId, collectionName } : null;
 
     setStage('fetch:lists');
@@ -463,11 +386,11 @@ async function run(options = {}) {
     });
 
     // Upsert list payloads (fast path) + optionally fetch details (canonical).
-    if (db) {
+    if (mongoEnabled) {
       setStage('upsert:lists');
       const now = new Date();
       // List payload upserts
-      const upsertCustomers = createBulkUpserter(db.collection('customers'), { captureUpserts: true, audit: auditOpts('customers') });
+      const upsertCustomers = createBulkUpserter(Customer, { captureUpserts: true, audit: auditOpts('customers') });
       const customersSkip = createSkipCounter();
       for (const c of customers || []) {
         const id = pickId(c);
@@ -478,7 +401,7 @@ async function run(options = {}) {
         await upsertCustomers.push({
           updateOne: {
             filter: { Id: id },
-            update: buildUpsertUpdate({ keyField: 'Id', keyValue: id, payload: c, syncedAt: now, runId }),
+            update: buildUpsertUpdate({ keyField: 'Id', keyValue: id, payload: c, syncedAt: now, runId, model: Customer }),
             upsert: true,
           }
         });
@@ -493,7 +416,7 @@ async function run(options = {}) {
         emitLog('warn', 'Skipped customer upserts with missing Id', { count: customersSkip.getMissingKey() });
       }
 
-    const upsertSuppliers = createBulkUpserter(db.collection('suppliers'), { captureUpserts: true, audit: auditOpts('suppliers') });
+    const upsertSuppliers = createBulkUpserter(Supplier, { captureUpserts: true, audit: auditOpts('suppliers') });
     const suppliersSkip = createSkipCounter();
     for (const s of suppliers || []) {
       const id = pickId(s);
@@ -504,7 +427,7 @@ async function run(options = {}) {
       await upsertSuppliers.push({
         updateOne: {
           filter: { Id: id },
-          update: buildUpsertUpdate({ keyField: 'Id', keyValue: id, payload: s, syncedAt: now, runId, protectedFields: SUPPLIER_PROTECTED_FIELDS }),
+          update: buildUpsertUpdate({ keyField: 'Id', keyValue: id, payload: s, syncedAt: now, runId, model: Supplier }),
           upsert: true,
         }
       });
@@ -519,7 +442,7 @@ async function run(options = {}) {
       emitLog('warn', 'Skipped supplier upserts with missing Id', { count: suppliersSkip.getMissingKey() });
     }
 
-    const upsertProjects = createBulkUpserter(db.collection('projects'), { captureUpserts: true, audit: auditOpts('projects') });
+    const upsertProjects = createBulkUpserter(Project, { captureUpserts: true, audit: auditOpts('projects') });
     const projectsSkip = createSkipCounter();
     for (const p of projects || []) {
       const id = pickId(p);
@@ -533,7 +456,7 @@ async function run(options = {}) {
       await upsertProjects.push({
         updateOne: {
           filter: { [keyField]: keyValue },
-          update: buildUpsertUpdate({ keyField, keyValue, payload: p, syncedAt: now, runId }),
+          update: buildUpsertUpdate({ keyField, keyValue, payload: p, syncedAt: now, runId, model: Project }),
           upsert: true,
         }
       });
@@ -548,7 +471,7 @@ async function run(options = {}) {
       emitLog('warn', 'Skipped project upserts with missing Id/number', { count: projectsSkip.getMissingKey() });
     }
 
-      const upsertNominals = createBulkUpserter(db.collection('nominals'), { captureUpserts: true, audit: auditOpts('nominals') });
+      const upsertNominals = createBulkUpserter(Nominal, { captureUpserts: true, audit: auditOpts('nominals') });
       const nominalsSkip = createSkipCounter();
       for (const n of nominals || []) {
         const id = pickId(n);
@@ -562,7 +485,7 @@ async function run(options = {}) {
         await upsertNominals.push({
           updateOne: {
             filter: { [keyField]: keyValue },
-            update: buildUpsertUpdate({ keyField, keyValue, payload: n, syncedAt: now, runId }),
+            update: buildUpsertUpdate({ keyField, keyValue, payload: n, syncedAt: now, runId, model: Nominal }),
             upsert: true,
           }
         });
@@ -579,11 +502,11 @@ async function run(options = {}) {
     }
 
     // Fetch details for customers/suppliers to capture fields only present in single-item endpoints.
-    if (db && customerCodes.length > 0) {
+    if (mongoEnabled && customerCodes.length > 0) {
     setStage('customers:details');
     progress.setItemTotal('customers', customerCodes.length);
     progress.setItemDone('customers', 0);
-    const upserter = createBulkUpserter(db.collection('customers'), { captureUpserts: true, audit: auditOpts('customers') });
+    const upserter = createBulkUpserter(Customer, { captureUpserts: true, audit: auditOpts('customers') });
     const runNow = new Date();
     const fetchCustomer = createPool(
       config.concurrency || 4,
@@ -598,7 +521,7 @@ async function run(options = {}) {
         await upserter.push({
           updateOne: {
             filter: { Id: id },
-            update: buildUpsertUpdate({ keyField: 'Id', keyValue: id, payload: full, syncedAt: runNow, runId }),
+            update: buildUpsertUpdate({ keyField: 'Id', keyValue: id, payload: full, syncedAt: runNow, runId, model: Customer }),
             upsert: true,
           }
         });
@@ -627,11 +550,11 @@ async function run(options = {}) {
       progress.setItemDone('customers', customerCodes.length);
     }
 
-    if (db && supplierCodes.length > 0) {
+    if (mongoEnabled && supplierCodes.length > 0) {
     setStage('suppliers:details');
     progress.setItemTotal('suppliers', supplierCodes.length);
     progress.setItemDone('suppliers', 0);
-    const upserter = createBulkUpserter(db.collection('suppliers'), { captureUpserts: true, audit: auditOpts('suppliers') });
+    const upserter = createBulkUpserter(Supplier, { captureUpserts: true, audit: auditOpts('suppliers') });
     const runNow = new Date();
     const fetchSupplier = createPool(
       config.concurrency || 4,
@@ -646,7 +569,7 @@ async function run(options = {}) {
         await upserter.push({
           updateOne: {
             filter: { Id: id },
-            update: buildUpsertUpdate({ keyField: 'Id', keyValue: id, payload: full, syncedAt: runNow, runId, protectedFields: SUPPLIER_PROTECTED_FIELDS }),
+            update: buildUpsertUpdate({ keyField: 'Id', keyValue: id, payload: full, syncedAt: runNow, runId, model: Supplier }),
             upsert: true,
           }
         });
@@ -677,11 +600,11 @@ async function run(options = {}) {
     // Fetch full details for each project (list may omit some fields).
     const detailConcurrency = config.detailConcurrency || 8;
     const projectNumbers = (projects || []).map(pickNumber).filter((x) => x != null);
-    if (db && projectNumbers.length > 0) {
+    if (mongoEnabled && projectNumbers.length > 0) {
       setStage('projects:details');
       progress.setItemTotal('projects', projectNumbers.length);
       progress.setItemDone('projects', 0);
-      const projectDetailUpserter = createBulkUpserter(db.collection('projects'), { captureUpserts: true, audit: auditOpts('projects') });
+      const projectDetailUpserter = createBulkUpserter(Project, { captureUpserts: true, audit: auditOpts('projects') });
       const runNow = new Date();
       let projectsDetailFailed = 0;
       const fetchProject = createPool(
@@ -703,7 +626,7 @@ async function run(options = {}) {
           await projectDetailUpserter.push({
             updateOne: {
               filter: { [keyField]: keyValue },
-              update: buildUpsertUpdate({ keyField, keyValue, payload: full, syncedAt: runNow, runId }),
+              update: buildUpsertUpdate({ keyField, keyValue, payload: full, syncedAt: runNow, runId, model: Project }),
               upsert: true,
             }
           });
@@ -747,7 +670,7 @@ async function run(options = {}) {
     emitLog('info', 'Starting per-customer invoices list fetch', { customers: customerCodes.length, concurrency: config.concurrency || 4 });
     let invoicesSkippedMissingId = 0;
     const invoiceEntries = []; // { id, number } pairs for detail phase
-    const invoicesListUpserter = db ? createBulkUpserter(db.collection('invoices'), { captureUpserts: true, audit: auditOpts('invoices') }) : null;
+    const invoicesListUpserter = mongoEnabled ? createBulkUpserter(Invoice, { captureUpserts: true, audit: auditOpts('invoices') }) : null;
     const invoicesByCustomer = await createPool(
     config.concurrency || 4,
     'invoices',
@@ -764,7 +687,7 @@ async function run(options = {}) {
             await invoicesListUpserter.push({
               updateOne: {
                 filter: { Id: id },
-                update: buildUpsertUpdate({ keyField: 'Id', keyValue: id, payload: item, syncedAt: runNow, runId }),
+                update: buildUpsertUpdate({ keyField: 'Id', keyValue: id, payload: item, syncedAt: runNow, runId, model: Invoice }),
                 upsert: true,
               }
             });
@@ -789,13 +712,13 @@ async function run(options = {}) {
 
     // ── Invoices: Phase 2 — detail fanout with high concurrency ──
     let invoicesDetailFailed = 0;
-    if (db && invoiceEntries.length > 0) {
+    if (mongoEnabled && invoiceEntries.length > 0) {
       setStage('invoices:details');
       progress.setItemTotal('invoices', invoiceEntries.length);
       progress.setItemDone('invoices', 0);
       logger.info({ count: invoiceEntries.length, concurrency: detailConcurrency }, 'Starting invoice detail fanout');
       emitLog('info', 'Starting invoice detail fanout', { count: invoiceEntries.length, concurrency: detailConcurrency });
-      const invoiceDetailUpserter = createBulkUpserter(db.collection('invoices'), { captureUpserts: true, audit: auditOpts('invoices') });
+      const invoiceDetailUpserter = createBulkUpserter(Invoice, { captureUpserts: true, audit: auditOpts('invoices') });
       const runNow = new Date();
       await createPool(
         detailConcurrency,
@@ -813,7 +736,7 @@ async function run(options = {}) {
           await invoiceDetailUpserter.push({
             updateOne: {
               filter: { Id: id },
-              update: buildUpsertUpdate({ keyField: 'Id', keyValue: id, payload: full, syncedAt: runNow, runId }),
+              update: buildUpsertUpdate({ keyField: 'Id', keyValue: id, payload: full, syncedAt: runNow, runId, model: Invoice }),
               upsert: true,
             }
           });
@@ -852,7 +775,7 @@ async function run(options = {}) {
     emitLog('info', 'Starting per-customer quotes list fetch', { customers: customerCodes.length, concurrency: config.concurrency || 4 });
     let quotesSkippedMissingId = 0;
     const quoteEntries = []; // { id, number } pairs for detail phase
-    const quotesListUpserter = db ? createBulkUpserter(db.collection('quotes'), { captureUpserts: true, audit: auditOpts('quotes') }) : null;
+    const quotesListUpserter = mongoEnabled ? createBulkUpserter(Quote, { captureUpserts: true, audit: auditOpts('quotes') }) : null;
     const quotesByCustomer = await createPool(
     config.concurrency || 4,
     'quotes',
@@ -869,7 +792,7 @@ async function run(options = {}) {
             await quotesListUpserter.push({
               updateOne: {
                 filter: { Id: id },
-                update: buildUpsertUpdate({ keyField: 'Id', keyValue: id, payload: item, syncedAt: runNow, runId }),
+                update: buildUpsertUpdate({ keyField: 'Id', keyValue: id, payload: item, syncedAt: runNow, runId, model: Quote }),
                 upsert: true,
               }
             });
@@ -894,13 +817,13 @@ async function run(options = {}) {
 
     // ── Quotes: Phase 2 — detail fanout with high concurrency ──
     let quotesDetailFailed = 0;
-    if (db && quoteEntries.length > 0) {
+    if (mongoEnabled && quoteEntries.length > 0) {
       setStage('quotes:details');
       progress.setItemTotal('quotes', quoteEntries.length);
       progress.setItemDone('quotes', 0);
       logger.info({ count: quoteEntries.length, concurrency: detailConcurrency }, 'Starting quote detail fanout');
       emitLog('info', 'Starting quote detail fanout', { count: quoteEntries.length, concurrency: detailConcurrency });
-      const quoteDetailUpserter = createBulkUpserter(db.collection('quotes'), { captureUpserts: true, audit: auditOpts('quotes') });
+      const quoteDetailUpserter = createBulkUpserter(Quote, { captureUpserts: true, audit: auditOpts('quotes') });
       const runNow = new Date();
       await createPool(
         detailConcurrency,
@@ -918,7 +841,7 @@ async function run(options = {}) {
           await quoteDetailUpserter.push({
             updateOne: {
               filter: { Id: id },
-              update: buildUpsertUpdate({ keyField: 'Id', keyValue: id, payload: full, syncedAt: runNow, runId }),
+              update: buildUpsertUpdate({ keyField: 'Id', keyValue: id, payload: full, syncedAt: runNow, runId, model: Quote }),
               upsert: true,
             }
           });
@@ -957,7 +880,7 @@ async function run(options = {}) {
     emitLog('info', 'Starting per-supplier purchases list fetch', { suppliers: supplierCodes.length, concurrency: config.concurrency || 4 });
     let purchasesSkippedMissingId = 0;
     const purchaseEntries = []; // { id, number } pairs for detail phase
-    const purchasesListUpserter = db ? createBulkUpserter(db.collection('purchases'), { captureUpserts: true, audit: auditOpts('purchases') }) : null;
+    const purchasesListUpserter = mongoEnabled ? createBulkUpserter(Purchase, { captureUpserts: true, audit: auditOpts('purchases') }) : null;
     const purchasesBySupplier = await createPool(
     config.concurrency || 4,
     'purchases',
@@ -974,7 +897,7 @@ async function run(options = {}) {
             await purchasesListUpserter.push({
               updateOne: {
                 filter: { Id: id },
-                update: buildUpsertUpdate({ keyField: 'Id', keyValue: id, payload: item, syncedAt: runNow, runId }),
+                update: buildUpsertUpdate({ keyField: 'Id', keyValue: id, payload: item, syncedAt: runNow, runId, model: Purchase }),
                 upsert: true,
               }
             });
@@ -999,13 +922,13 @@ async function run(options = {}) {
 
     // ── Purchases: Phase 2 — detail fanout with high concurrency ──
     let purchasesDetailFailed = 0;
-    if (db && purchaseEntries.length > 0) {
+    if (mongoEnabled && purchaseEntries.length > 0) {
       setStage('purchases:details');
       progress.setItemTotal('purchases', purchaseEntries.length);
       progress.setItemDone('purchases', 0);
       logger.info({ count: purchaseEntries.length, concurrency: detailConcurrency }, 'Starting purchase detail fanout');
       emitLog('info', 'Starting purchase detail fanout', { count: purchaseEntries.length, concurrency: detailConcurrency });
-      const purchaseDetailUpserter = createBulkUpserter(db.collection('purchases'), { captureUpserts: true, audit: auditOpts('purchases') });
+      const purchaseDetailUpserter = createBulkUpserter(Purchase, { captureUpserts: true, audit: auditOpts('purchases') });
       const runNow = new Date();
       await createPool(
         detailConcurrency,
@@ -1020,11 +943,11 @@ async function run(options = {}) {
             progress.incItem('purchases', 1);
             return 0;
           }
-          preparePurchaseForUpsert(full);
+          Purchase.syncConfig.transform(full);
           await purchaseDetailUpserter.push({
             updateOne: {
               filter: { Id: id },
-              update: buildUpsertUpdate({ keyField: 'Id', keyValue: id, payload: full, syncedAt: runNow, runId }),
+              update: buildUpsertUpdate({ keyField: 'Id', keyValue: id, payload: full, syncedAt: runNow, runId, model: Purchase }),
               upsert: true,
             }
           });
@@ -1087,8 +1010,8 @@ async function run(options = {}) {
     emitLog('success', 'Sync finished', { counts, durationMs: Date.now() - start });
     // Provide previous counts hook for history delta tracking (if available via env or progress)
     const previousCounts = null; // placeholder for future persisted state
-    const mongo = db ? mongoSummary : null;
-    const mongoUpserts = db ? mongoDetails : null;
+    const mongo = mongoEnabled ? mongoSummary : null;
+    const mongoUpserts = mongoEnabled ? mongoDetails : null;
     return { counts, previousCounts, mongo, mongoUpserts };
   } catch (err) {
     emitLog('error', 'Sync runner failed', { message: err?.message || null, status: err?.response?.status || null });

@@ -833,6 +833,26 @@ app.get('/history/:id', (req, res) => {
         }
       }
 
+      // Fetch audit trail entries for this run from audit_log collection.
+      let auditEntries = [];
+      let auditError = null;
+      const auditCollection = String(req.query?.auditCollection || '');
+      if (isMongoEnabled()) {
+        try {
+          const db = await getMongoDb();
+          const filter = { runId: run.id };
+          if (auditCollection) filter.collection = auditCollection;
+          auditEntries = await db
+            .collection('audit_log')
+            .find(filter)
+            .sort({ timestamp: 1 })
+            .limit(500)
+            .toArray();
+        } catch (err) {
+          auditError = err?.message || 'Failed to load audit trail.';
+        }
+      }
+
       res.render('layout', {
         title: 'Run Details',
         content: 'pages/run',
@@ -847,6 +867,9 @@ app.get('/history/:id', (req, res) => {
         mongoDocsError,
         mongoDocsSource,
         mongoUpsertedCount,
+        auditEntries,
+        auditError,
+        auditCollection,
       });
     })
     .catch((err) => {

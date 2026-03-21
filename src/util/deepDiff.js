@@ -1,3 +1,5 @@
+import { SYNC_INTERNAL_FIELDS } from '../server/models/kashflow.js';
+
 /**
  * Deep recursive diff between two plain objects (e.g. Mongo document vs incoming payload).
  *
@@ -24,11 +26,6 @@ export const ARRAY_KEYS = {
 const DEFAULT_MAX_DEPTH = 3;
 const DEFAULT_MAX_CHANGES = 200;
 
-/** Fields that always change on every sync and are not interesting to audit. */
-const SKIP_FIELDS = new Set([
-  '_id', '__v', 'uuid', 'syncedAt', 'createdAt', 'updatedAt', 'createdByRunId',
-]);
-
 function isDate(v) {
   return v instanceof Date || (typeof v === 'string' && !Number.isNaN(Date.parse(v)) && /^\d{4}-\d{2}/.test(v));
 }
@@ -46,14 +43,14 @@ function toTime(v) {
  * @param {number}      [opts.maxDepth=3]
  * @param {number}      [opts.maxChanges=200]
  * @param {object}      [opts.arrayKeys=ARRAY_KEYS]
- * @param {Set<string>} [opts.skipFields=SKIP_FIELDS]
+ * @param {Set<string>} [opts.skipFields=SYNC_INTERNAL_FIELDS]
  * @returns {{ path: string, before: *, after: *, type: string }[]}
  */
 export default function deepDiff(before, after, opts = {}) {
   const maxDepth = opts.maxDepth ?? DEFAULT_MAX_DEPTH;
   const maxChanges = opts.maxChanges ?? DEFAULT_MAX_CHANGES;
   const arrayKeys = opts.arrayKeys ?? ARRAY_KEYS;
-  const skipFields = opts.skipFields ?? SKIP_FIELDS;
+  const skipFields = opts.skipFields ?? SYNC_INTERNAL_FIELDS;
   const changes = [];
 
   function diff(oldVal, newVal, path, depth) {
@@ -223,4 +220,4 @@ function stableStringify(val) {
   return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(val[k])}`).join(',')}}`;
 }
 
-export { SKIP_FIELDS, DEFAULT_MAX_DEPTH, DEFAULT_MAX_CHANGES, stableStringify };
+export { SYNC_INTERNAL_FIELDS as SKIP_FIELDS, DEFAULT_MAX_DEPTH, DEFAULT_MAX_CHANGES, stableStringify };
