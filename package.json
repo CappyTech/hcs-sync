@@ -4,6 +4,9 @@
   "description": "Backend-only KashFlow admin sync in Node.js",
   "type": "module",
   "private": true,
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "dev": "npm run build:css && nodemon --ignore data/runs.json --exec node src/server/index.js",
     "start": "npm run build:css && node src/server/index.js",
