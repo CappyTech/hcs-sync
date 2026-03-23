@@ -6,7 +6,7 @@ import config from '../config.js';
 import progress from '../server/progress.js';
 import { connectMongoose, isMongooseEnabled } from '../db/mongoose.js';
 import { ensureKashflowIndexes } from '../db/mongo.js';
-import { Customer, Supplier, Invoice, Quote, Purchase, Project, Nominal, SYNC_INTERNAL_FIELDS, toDate, computeCisTaxPeriod, preparePurchaseForUpsert } from '../server/models/kashflow.js';
+import { Customer, Supplier, Invoice, Quote, Purchase, Project, Nominal, VATRate, SYNC_INTERNAL_FIELDS, toDate, computeCisTaxPeriod, preparePurchaseForUpsert } from '../server/models/kashflow.js';
 import deepDiff from '../util/deepDiff.js';
 
 function createPool(limit, label, handler, onProgress) {
@@ -367,12 +367,12 @@ async function run(options = {}) {
     const auditOpts = (collectionName) => auditCol ? { auditCollection: auditCol, runId, collectionName } : null;
 
     setStage('fetch:lists');
-    const [customers, suppliers, projects, nominals] = await Promise.all([
+    const [customers, suppliers, projects, nominals, vatRatesRaw] = await Promise.all([
       kf.customers.listAll({ perpage: 200 }),
       kf.suppliers.listAll({ perpage: 200 }),
       kf.projects.listAll({ perpage: 200 }),
       kf.nominals.list(),
-
+      kf.vatRates.list().catch((e) => { logger.warn({ err: e.message }, 'Failed to fetch VAT rates'); return []; }),
     ]);
 
     const customerCodes = (customers || []).map(pickCode).filter((x) => !isMissingKey(x));
@@ -383,6 +383,7 @@ async function run(options = {}) {
       suppliers: suppliers?.length || 0,
       projects: projects?.length || 0,
       nominals: nominals?.length || 0,
+      vatRates: vatRatesRaw?.length || 0,
     });
 
     // Upsert list payloads (fast path) + optionally fetch details (canonical).
@@ -498,6 +499,35 @@ async function run(options = {}) {
       if (nominalsSkip.getMissingKey() > 0) {
         logger.warn({ skippedMissingId: nominalsSkip.getMissingKey() }, 'Skipped nominal upserts with missing Id/code');
         emitLog('warn', 'Skipped nominal upserts with missing Id/code', { count: nominalsSkip.getMissingKey() });
+      }
+
+      // VAT rates (from /vat/settings/vatrates → [{ VATId, VATRate, VATText }])
+      if (vatRatesRaw && vatRatesRaw.length > 0) {
+        const upsertVatRates = createBulkUpserter(VATRate, { captureUpserts: true, audit: auditOpts('vatrates') });
+        for (const row of vatRatesRaw) {
+          if (typeof row !== 'object' || row == null) continue;
+          const vatId = row.VATId;
+          if (vatId == null) continue;
+          const vatRate = typeof row.VATRate === 'number' ? row.VATRate : parseFloat(row.VATRate);
+          const payload = {
+            ...row,
+            VATId: vatId,
+            VATRate: Number.isFinite(vatRate) ? vatRate : null,
+            Rate: Number.isFinite(vatRate) ? vatRate : null,
+            CountryCode: 'GB',
+          };
+          await upsertVatRates.push({
+            updateOne: {
+              filter: { VATId: vatId },
+              update: buildUpsertUpdate({ keyField: 'VATId', keyValue: vatId, payload, syncedAt: now, runId, model: VATRate }),
+              upsert: true,
+            }
+          });
+        }
+        await upsertVatRates.flush();
+        mongoSummary.vatRates = addMongoStats(mongoSummary.vatRates || {}, upsertVatRates.getStats());
+        logger.info({ mongo: { vatRates: upsertVatRates.getStats() } }, 'Mongo upsert summary (vatRates)');
+        emitLog('info', 'Mongo upsert summary (vatRates)', { stats: upsertVatRates.getStats() });
       }
     }
 

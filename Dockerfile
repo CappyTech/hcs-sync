@@ -1,9 +1,11 @@
+# syntax=docker/dockerfile:1
 FROM node:20-alpine
 WORKDIR /app
 
 # Install dependencies
 COPY package.json package-lock.json* ./
-RUN npm ci --only=production || npm ci
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci --omit=dev || npm ci
 
 # Copy source
 COPY src ./src

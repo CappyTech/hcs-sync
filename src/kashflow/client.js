@@ -193,6 +193,9 @@ async function createClient() {
       update: (objectType, objectNumber, number, text) => http.put(`/${objectType}/${objectNumber}/notes/${number}`, { Number: number, Text: text }).then((r) => r.data),
       delete: (objectType, objectNumber, number) => http.delete(`/${objectType}/${objectNumber}/notes/${number}`).then((r) => r.status === 204),
     },
+    vatRates: {
+      list: () => http.get('/vat/settings/vatrates').then((r) => normalizeList(r.data)),
+    },
   };
 }
 
