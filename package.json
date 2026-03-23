@@ -1,6 +1,6 @@
 {
   "name": "hcs-sync",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Backend-only KashFlow admin sync in Node.js",
   "type": "module",
   "private": true,
@@ -29,6 +29,7 @@
     "vitest": "^4.0.18"
   },
   "dependencies": {
+    "@cappytech/hcs-schemas": "^1.0.0",
     "@tailwindcss/typography": "^0.5.14",
     "axios": "^1.11.0",
     "cookie-parser": "^1.4.7",
