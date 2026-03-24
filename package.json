@@ -29,7 +29,7 @@
     "vitest": "^4.0.18"
   },
   "dependencies": {
-    "@cappytech/hcs-schemas": "github:CappyTech/hcs-schemas#v1.0.0",
+    "@cappytech/hcs-schemas": "github:CappyTech/hcs-schemas",
     "@tailwindcss/typography": "^0.5.14",
     "axios": "^1.11.0",
     "cookie-parser": "^1.4.7",
