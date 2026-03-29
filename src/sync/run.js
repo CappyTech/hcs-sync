@@ -84,9 +84,14 @@ function createBulkUpserter(collection, batchSize = 250) {
 
   const extractUpsertedEntries = (out) => {
     if (!out) return [];
-    if (typeof out.getUpsertedIds === 'function') return out.getUpsertedIds() || [];
+    // Mongoose 8 / mongodb driver 6: upsertedIds is a plain object keyed by op index
+    // e.g. { "0": ObjectId(...), "5": ObjectId(...) }
+    if (out.upsertedIds && typeof out.upsertedIds === 'object' && !Array.isArray(out.upsertedIds)) {
+      return Object.entries(out.upsertedIds).map(([idx, _id]) => ({ index: Number(idx), _id }));
+    }
+    // Fallback: some drivers return an array of { index, _id } directly
     if (Array.isArray(out.upsertedIds)) return out.upsertedIds;
-    if (out.upsertedIds && typeof out.upsertedIds === 'object') return Object.values(out.upsertedIds);
+    if (typeof out.getUpsertedIds === 'function') return out.getUpsertedIds() || [];
     return [];
   };
 
@@ -277,11 +282,12 @@ function createSkipCounter() {
 function addMongoStats(target, stats) {
   if (!stats) return target;
   if (!target) target = { attemptedOps: 0, affected: 0, upserted: 0, matched: 0, modified: 0 };
-  target.attemptedOps += Number(stats.attemptedOps || 0);
-  target.affected += Number(stats.affected || 0);
-  target.upserted += Number(stats.upserted || 0);
-  target.matched += Number(stats.matched || 0);
-  target.modified += Number(stats.modified || 0);
+  const n = (v) => Number(v) || 0;
+  target.attemptedOps = n(target.attemptedOps) + n(stats.attemptedOps);
+  target.affected = n(target.affected) + n(stats.affected);
+  target.upserted = n(target.upserted) + n(stats.upserted);
+  target.matched = n(target.matched) + n(stats.matched);
+  target.modified = n(target.modified) + n(stats.modified);
   return target;
 }
 
@@ -525,7 +531,8 @@ async function run(options = {}) {
           });
         }
         await upsertVatRates.flush();
-        mongoSummary.vatRates = addMongoStats(mongoSummary.vatRates || {}, upsertVatRates.getStats());
+        mongoSummary.vatRates = addMongoStats(mongoSummary.vatRates, upsertVatRates.getStats());
+        mongoDetails.vatRates = upsertVatRates.getUpsertedFilters();
         logger.info({ mongo: { vatRates: upsertVatRates.getStats() } }, 'Mongo upsert summary (vatRates)');
         emitLog('info', 'Mongo upsert summary (vatRates)', { stats: upsertVatRates.getStats() });
       }
@@ -1031,6 +1038,7 @@ async function run(options = {}) {
       suppliers: suppliers?.length || 0,
       projects: projects?.length || 0,
       nominals: nominals?.length || 0,
+      vatRates: vatRatesRaw?.length || 0,
       invoices: invoicesTotal,
       quotes: quotesTotal,
       purchases: purchasesTotal,

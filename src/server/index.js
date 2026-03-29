@@ -470,7 +470,7 @@ async function triggerSync({ requestedBy }) {
       try {
         const prev = result?.previousCounts ?? countsBeforeRun;
         const curr = lastCounts || {};
-        const resources = ['customers','suppliers','projects','nominals','invoices','quotes','purchases'];
+        const resources = ['customers','suppliers','projects','nominals','vatRates','invoices','quotes','purchases'];
         resources.forEach((name) => {
           const before = prev ? prev[name] ?? null : null;
           const after = curr[name] ?? null;

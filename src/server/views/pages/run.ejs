@@ -93,19 +93,19 @@
             <th scope="row" class="px-6 py-4 font-medium text-gray-900 whitespace-nowrap dark:text-white"><%= name %></th>
             <td class="px-6 py-4">
               <% const hasUpsertDocs = (run?.summary?.mongoUpserts?.[name]?.filters || []).length > 0; %>
-              <% if ((s?.upserted ?? 0) > 0) { %>
-                <a class="text-blue-600 hover:underline" href="/history/<%= run.id %>?mongoCollection=<%= encodeURIComponent(name) %>&mongoType=upserted#mongo-upserted"><%= s?.upserted ?? 0 %></a>
+              <% if ((s?.upserted || 0) > 0) { %>
+                <a class="text-blue-600 hover:underline" href="/history/<%= run.id %>?mongoCollection=<%= encodeURIComponent(name) %>&mongoType=upserted#mongo-upserted"><%= s?.upserted || 0 %></a>
                 <% if (!hasUpsertDocs) { %>
                   <span class="ml-2 text-xs text-gray-500 dark:text-gray-400">(drilldown may require a newer run)</span>
                 <% } %>
               <% } else { %>
-                <%= s?.upserted ?? 0 %>
+                <%= s?.upserted || 0 %>
               <% } %>
             </td>
-            <td class="px-6 py-4"><%= s?.matched ?? 0 %></td>
-            <td class="px-6 py-4"><%= s?.modified ?? 0 %></td>
-            <td class="px-6 py-4"><%= s?.attemptedOps ?? 0 %></td>
-            <td class="px-6 py-4"><%= s?.affected ?? 0 %></td>
+            <td class="px-6 py-4"><%= s?.matched || 0 %></td>
+            <td class="px-6 py-4"><%= s?.modified || 0 %></td>
+            <td class="px-6 py-4"><%= s?.attemptedOps || 0 %></td>
+            <td class="px-6 py-4"><%= s?.affected || 0 %></td>
           </tr>
         <% }) %>
       </tbody>

@@ -374,7 +374,7 @@ describe('createBulkUpserter()', () => {
       upsertedCount: 1,
       modifiedCount: 0,
       matchedCount: 0,
-      getUpsertedIds: () => [{ index: 0, _id: 'abc' }],
+      upsertedIds: { '0': 'abc' },
     });
     const upserter = createBulkUpserter(mockCollection, { batchSize: 1, captureUpserts: true });
     await upserter.push({ updateOne: { filter: { Id: 99 }, update: {}, upsert: true } });
@@ -391,7 +391,7 @@ describe('createBulkUpserter()', () => {
         upsertedCount: 1,
         modifiedCount: 0,
         matchedCount: 0,
-        getUpsertedIds: () => [{ index: 0, _id: `id-${callIndex}` }],
+        upsertedIds: { '0': `id-${callIndex}` },
       };
     });
     const upserter = createBulkUpserter(mockCollection, { batchSize: 1, captureUpserts: true, maxCapturedUpserts: 2 });
