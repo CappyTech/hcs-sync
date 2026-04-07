@@ -82,10 +82,15 @@ export async function pullSingleEntity(entityType, entityId) {
       update,
       upsert: true,
     },
-  }], { ordered: false, timestamps: true });
+  }], { ordered: false });
+
+  // Verify the write took effect
+  const after = await model.findOne({ [keyField]: id }).lean();
+  const afterLineItems = Array.isArray(after?.LineItems) ? after.LineItems.length : 0;
+  const afterPaymentLines = Array.isArray(after?.PaymentLines) ? after.PaymentLines.length : 0;
 
   const action = existing ? 'updated' : 'created';
-  logger.info({ entityType, entityId, id, action }, 'Manual pull: upsert complete');
+  logger.info({ entityType, entityId, id, action, afterLineItems, afterPaymentLines }, 'Manual pull: upsert complete');
 
   return {
     ok: true,
@@ -95,6 +100,16 @@ export async function pullSingleEntity(entityType, entityId) {
     [keyField]: id,
     [lookupField]: full[lookupField],
     detailSyncedAt: now.toISOString(),
+    debug: {
+      kashflowLineItems: Array.isArray(full.LineItems) ? full.LineItems.length : 0,
+      kashflowPaymentLines: Array.isArray(full.PaymentLines) ? full.PaymentLines.length : 0,
+      kashflowGrossAmount: full.GrossAmount ?? null,
+      setFields: Object.keys(update.$set).sort(),
+      afterLineItems,
+      afterPaymentLines,
+      afterGrossAmount: after?.GrossAmount ?? null,
+      afterDetailSyncedAt: after?.detailSyncedAt ?? null,
+    },
   };
 }
 
