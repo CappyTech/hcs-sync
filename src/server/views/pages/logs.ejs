@@ -45,6 +45,23 @@
                 </div>
               <% } else if (entry.meta && entry.meta.error) { %>
                 <span class="text-red-700"><%= entry.meta.error %></span>
+                <% const errorRest = Object.assign({}, entry.meta); delete errorRest.error; %>
+                <% if (Object.keys(errorRest).length > 0) { %>
+                  <details class="mt-1 text-xs">
+                    <summary class="cursor-pointer text-red-500 dark:text-red-400">Full details</summary>
+                    <pre class="mt-1 p-2 bg-red-50 dark:bg-gray-900 text-red-800 dark:text-red-300 rounded overflow-auto max-h-48"><%= JSON.stringify(errorRest, null, 2) %></pre>
+                  </details>
+                <% } %>
+              <% } else if (entry.meta && entry.meta.debug) { %>
+                <details class="text-xs">
+                  <summary class="cursor-pointer text-blue-600 dark:text-blue-400">Debug info</summary>
+                  <pre class="mt-1 p-2 bg-gray-50 dark:bg-gray-900 rounded overflow-auto max-h-48"><%= JSON.stringify(entry.meta.debug, null, 2) %></pre>
+                </details>
+              <% } else if (entry.meta && Object.keys(entry.meta).length > 0) { %>
+                <details class="text-xs">
+                  <summary class="cursor-pointer text-gray-500 dark:text-gray-400">Details</summary>
+                  <pre class="mt-1 p-2 bg-gray-50 dark:bg-gray-900 rounded overflow-auto max-h-48"><%= JSON.stringify(entry.meta, null, 2) %></pre>
+                </details>
               <% } else { %>
                 <span class="text-gray-400">—</span>
               <% } %>
