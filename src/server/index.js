@@ -10,6 +10,7 @@ import helmet from 'helmet';
 import CsrfTokens from 'csrf';
 import logger from '../util/logger.js';
 import runSync from '../sync/run.js';
+import { pullSingleEntity, debugEntity, ENTITY_CONFIG } from '../sync/pull.js';
 import progress from './progress.js';
 import runStore from './runStore.js';
 import { getMongoDb, isMongoEnabled } from '../db/mongo.js';
@@ -891,11 +892,44 @@ app.post('/history/:id/revert/:changeId', (req, res) => {
       res.status(500).send(msg);
     });
 });
-app.post('/pull', (req, res) => {
+app.get('/debug', (req, res) => {
+  const entityTypes = Object.entries(ENTITY_CONFIG).map(([type, cfg]) => ({
+    type,
+    label: type.charAt(0).toUpperCase() + type.slice(1),
+    lookupField: cfg.lookupField,
+  }));
+  res.render('layout', {
+    title: 'Debug – HCS Sync',
+    content: 'pages/debug',
+    entityTypes,
+    query: req.query || {},
+  });
+});
+app.post('/debug', async (req, res) => {
   const { entityType, entityId } = req.body || {};
-  const out = runStore.requestPull(entityType, entityId);
-  if (!out.ok) return res.status(400).send('Pull request failed');
-  res.json(out);
+  if (!entityType || entityId == null) {
+    return res.status(400).json({ ok: false, message: 'entityType and entityId are required' });
+  }
+  try {
+    const report = await debugEntity(entityType, entityId);
+    res.json(report);
+  } catch (err) {
+    logger.error({ entityType, entityId, err: err.message }, 'Debug failed');
+    res.status(500).json({ ok: false, message: err.message || 'Debug failed' });
+  }
+});
+app.post('/pull', async (req, res) => {
+  const { entityType, entityId } = req.body || {};
+  if (!entityType || entityId == null) {
+    return res.status(400).json({ ok: false, message: 'entityType and entityId are required' });
+  }
+  try {
+    const result = await pullSingleEntity(entityType, entityId);
+    res.json(result);
+  } catch (err) {
+    logger.error({ entityType, entityId, err: err.message }, 'Manual pull failed');
+    res.status(500).json({ ok: false, message: err.message || 'Pull failed' });
+  }
 });
 
 // Final error handler (logs uncaught route errors)

@@ -28,6 +28,32 @@ vi.mock('../src/sync/run.js', () => ({
   default: vi.fn().mockResolvedValue({ counts: { customers: 5 } }),
 }));
 
+vi.mock('../src/sync/pull.js', () => ({
+  pullSingleEntity: vi.fn().mockResolvedValue({
+    ok: true,
+    action: 'updated',
+    entityType: 'invoice',
+    entityId: 'INV-1',
+    Id: 123,
+    detailSyncedAt: new Date().toISOString(),
+  }),
+  debugEntity: vi.fn().mockResolvedValue({
+    entityType: 'invoice',
+    entityId: 'INV-1',
+    mongo: null,
+    kashflow: null,
+    diagnosis: ['NOT_IN_MONGO: Document not found in MongoDB.'],
+  }),
+  ENTITY_CONFIG: {
+    purchase: { lookupField: 'Number' },
+    invoice:  { lookupField: 'Number' },
+    quote:    { lookupField: 'Number' },
+    customer: { lookupField: 'Code' },
+    supplier: { lookupField: 'Code' },
+    project:  { lookupField: 'Number' },
+  },
+}));
+
 vi.mock('../src/db/mongoose.js', () => ({
   isMongooseEnabled: vi.fn(() => false),
   connectMongoose: vi.fn(),
@@ -293,18 +319,17 @@ describe('Express server routes', () => {
   // ── POST /pull ─────────────────────────────────────────────────────────
 
   describe('POST /pull', () => {
-    it('returns a plan JSON object', async () => {
+    it('returns pull result JSON', async () => {
       const csrf = makeCsrf();
       const res = await supertest(app)
         .post('/pull')
         .set('Cookie', authCookies(csrf))
         .set('x-csrf-token', csrf.token)
-        .send({ entityType: 'invoices', entityId: 'INV-1' });
+        .send({ entityType: 'invoice', entityId: 'INV-1' });
 
       expect(res.status).toBe(200);
       expect(res.body.ok).toBe(true);
-      expect(res.body.plan.entityType).toBe('invoices');
-      expect(res.body.plan.entityId).toBe('INV-1');
+      expect(res.body.entityType).toBe('invoice');
     });
   });
 

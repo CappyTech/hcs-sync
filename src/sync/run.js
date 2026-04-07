@@ -960,9 +960,22 @@ async function run(options = {}) {
       logger.info({ mongo: { purchases: purchasesListUpserter.getStats() } }, 'Mongo upsert summary (purchases list)');
       emitLog('info', 'Mongo upsert summary (purchases list)', { stats: purchasesListUpserter.getStats() });
     }
+    const purchasesTotal_ = purchasesBySupplier.reduce((s, c) => s + (c || 0), 0);
+    logger.info({
+      purchasesListTotal: purchasesTotal_,
+      purchasesWithNumber: purchaseEntries.length,
+      purchasesSkippedMissingId,
+      purchasesMissingNumber: purchasesTotal_ - purchaseEntries.length - purchasesSkippedMissingId,
+    }, 'Purchase Phase 1 summary');
+    emitLog('info', 'Purchase Phase 1 summary', {
+      listed: purchasesTotal_,
+      withNumber: purchaseEntries.length,
+      missingId: purchasesSkippedMissingId,
+    });
 
     // ── Purchases: Phase 2 — detail fanout with high concurrency ──
     let purchasesDetailFailed = 0;
+    let purchasesDetailNoLineItems = 0;
     if (mongoEnabled && purchaseEntries.length > 0) {
       setStage('purchases:details');
       progress.setItemTotal('purchases', purchaseEntries.length);
@@ -980,9 +993,15 @@ async function run(options = {}) {
             full = await kf.purchases.get(number);
           } catch (err) {
             purchasesDetailFailed += 1;
-            logger.warn({ purchaseNumber: number, err: err.message }, 'Failed to fetch purchase detail');
+            logger.warn({ purchaseNumber: number, purchaseId: id, err: err.message }, 'Failed to fetch purchase detail');
             progress.incItem('purchases', 1);
             return 0;
+          }
+          const lineItemsCount = Array.isArray(full.LineItems) ? full.LineItems.length : 0;
+          const paymentLinesCount = Array.isArray(full.PaymentLines) ? full.PaymentLines.length : 0;
+          if (lineItemsCount === 0) {
+            purchasesDetailNoLineItems += 1;
+            logger.warn({ purchaseNumber: number, purchaseId: id, paymentLinesCount }, 'Purchase detail returned 0 LineItems');
           }
           Purchase.syncConfig.transform(full);
           const update = buildUpsertUpdate({ keyField: 'Id', keyValue: id, payload: full, syncedAt: runNow, runId, model: Purchase });
@@ -1019,6 +1038,10 @@ async function run(options = {}) {
     if (purchasesDetailFailed > 0) {
       logger.warn({ purchasesDetailFailed }, 'Some purchase detail fetches failed; those documents used summary data');
       emitLog('warn', 'Some purchase detail fetches failed', { purchasesDetailFailed });
+    }
+    if (purchasesDetailNoLineItems > 0) {
+      logger.warn({ purchasesDetailNoLineItems, total: purchaseEntries.length }, 'Some purchase detail responses had 0 LineItems');
+      emitLog('warn', 'Some purchase detail responses had 0 LineItems', { purchasesDetailNoLineItems });
     }
 
     const invoicesTotal = invoicesByCustomer.reduce((a, b) => a + (Number(b) || 0), 0);

@@ -1,0 +1,265 @@
+<h1 class="text-2xl font-semibold mb-2">Debug</h1>
+<p class="text-sm text-gray-500 dark:text-gray-400 mb-6">Compare a single entity between MongoDB and KashFlow to diagnose sync issues.</p>
+
+<!-- ── Lookup form ──────────────────────────────────────────────────── -->
+<section class="mb-6">
+  <div class="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
+    <div>
+      <label for="entityType" class="block mb-1 text-sm font-medium text-gray-900 dark:text-gray-100">Entity Type</label>
+      <select id="entityType" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:text-white">
+        <% entityTypes.forEach(function(et) { %>
+          <option value="<%= et.type %>" <%= et.type === (query?.entityType || 'purchase') ? 'selected' : '' %>><%= et.label %></option>
+        <% }); %>
+      </select>
+    </div>
+    <div>
+      <label for="entityId" class="block mb-1 text-sm font-medium text-gray-900 dark:text-gray-100">Number / Code</label>
+      <input id="entityId" type="text" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:text-white" placeholder="e.g. 2344375" value="<%= query?.entityId || '' %>" />
+    </div>
+    <div>
+      <button id="btn-debug" type="button" class="text-white bg-blue-700 hover:bg-blue-800 focus:ring-4 focus:outline-none focus:ring-blue-300 font-medium rounded-lg text-sm px-5 py-2.5 dark:bg-blue-600 dark:hover:bg-blue-700 dark:focus:ring-blue-800 w-full">
+        Diagnose
+      </button>
+    </div>
+    <div>
+      <button id="btn-pull" type="button" class="text-white bg-green-700 hover:bg-green-800 focus:ring-4 focus:outline-none focus:ring-green-300 font-medium rounded-lg text-sm px-5 py-2.5 dark:bg-green-600 dark:hover:bg-green-700 dark:focus:ring-green-800 w-full" disabled>
+        Pull &amp; Sync
+      </button>
+    </div>
+  </div>
+</section>
+
+<!-- ── Loading indicator ────────────────────────────────────────────── -->
+<div id="loading" class="hidden mb-4">
+  <div class="flex items-center gap-2 text-sm text-blue-600 dark:text-blue-400">
+    <svg class="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+    <span id="loading-text">Fetching...</span>
+  </div>
+</div>
+
+<!-- ── Error banner ─────────────────────────────────────────────────── -->
+<div id="error-banner" class="hidden p-4 mb-4 text-sm text-red-800 rounded-lg bg-red-50 dark:bg-gray-800 dark:text-red-400" role="alert"></div>
+
+<!-- ── Pull success banner ──────────────────────────────────────────── -->
+<div id="pull-banner" class="hidden p-4 mb-4 text-sm text-green-800 rounded-lg bg-green-50 dark:bg-gray-800 dark:text-green-400" role="alert"></div>
+
+<!-- ── Results ──────────────────────────────────────────────────────── -->
+<div id="results" class="hidden space-y-6">
+
+  <!-- Diagnosis -->
+  <section>
+    <h2 class="text-xl font-semibold mb-3">Diagnosis</h2>
+    <div id="diagnosis-list" class="space-y-2"></div>
+  </section>
+
+  <!-- Side-by-side comparison -->
+  <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+
+    <!-- MongoDB -->
+    <section>
+      <h2 class="text-xl font-semibold mb-3">MongoDB</h2>
+      <div id="mongo-card" class="p-4 bg-white border border-gray-200 rounded-lg shadow dark:bg-gray-800 dark:border-gray-700">
+        <p class="text-sm text-gray-500 dark:text-gray-400">Run a diagnosis to see results.</p>
+      </div>
+    </section>
+
+    <!-- KashFlow -->
+    <section>
+      <h2 class="text-xl font-semibold mb-3">KashFlow</h2>
+      <div id="kashflow-card" class="p-4 bg-white border border-gray-200 rounded-lg shadow dark:bg-gray-800 dark:border-gray-700">
+        <p class="text-sm text-gray-500 dark:text-gray-400">Run a diagnosis to see results.</p>
+      </div>
+    </section>
+  </div>
+
+</div>
+
+<script>
+(function () {
+  const csrfToken = (document.querySelector('meta[name="csrf-token"]') || {}).content || '';
+  const btnDebug = document.getElementById('btn-debug');
+  const btnPull = document.getElementById('btn-pull');
+  const inputType = document.getElementById('entityType');
+  const inputId = document.getElementById('entityId');
+  const loading = document.getElementById('loading');
+  const loadingText = document.getElementById('loading-text');
+  const errorBanner = document.getElementById('error-banner');
+  const pullBanner = document.getElementById('pull-banner');
+  const results = document.getElementById('results');
+  const diagnosisList = document.getElementById('diagnosis-list');
+  const mongoCard = document.getElementById('mongo-card');
+  const kashflowCard = document.getElementById('kashflow-card');
+
+  let lastReport = null;
+
+  function showError(msg) {
+    errorBanner.textContent = msg;
+    errorBanner.classList.remove('hidden');
+  }
+  function hideError() { errorBanner.classList.add('hidden'); }
+  function hidePull() { pullBanner.classList.add('hidden'); }
+
+  function setLoading(on, text) {
+    if (on) {
+      loadingText.textContent = text || 'Fetching...';
+      loading.classList.remove('hidden');
+    } else {
+      loading.classList.add('hidden');
+    }
+  }
+
+  function diagBadge(code) {
+    if (code.startsWith('OK')) return 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300';
+    if (code.includes('MISMATCH') || code.includes('STALE')) return 'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-300';
+    return 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-300';
+  }
+
+  function formatDate(v) {
+    if (!v) return '<span class="text-gray-400">null</span>';
+    try {
+      return new Date(v).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' });
+    } catch { return String(v); }
+  }
+
+  function renderDataCard(container, data, label) {
+    if (!data) {
+      container.innerHTML = '<p class="text-sm text-gray-400">Not found in ' + label + '.</p>';
+      return;
+    }
+
+    const rows = [];
+    const fieldOrder = ['Id', 'Number', 'Code', 'syncedAt', 'detailSyncedAt', 'createdAt', 'updatedAt',
+                        'Status', 'NetAmount', 'VATAmount', 'GrossAmount',
+                        'hasLineItems', 'lineItemsCount', 'hasPaymentLines', 'paymentLinesCount', 'fieldCount'];
+    const shown = new Set();
+
+    fieldOrder.forEach(function (key) {
+      if (data[key] !== undefined) {
+        shown.add(key);
+        rows.push(renderRow(key, data[key]));
+      }
+    });
+
+    // Remaining keys
+    Object.keys(data).forEach(function (key) {
+      if (shown.has(key) || key === 'fields') return;
+      rows.push(renderRow(key, data[key]));
+    });
+
+    var html = '<table class="w-full text-sm text-left">';
+    html += '<tbody>' + rows.join('') + '</tbody></table>';
+
+    // Collapsible field list
+    if (data.fields && data.fields.length) {
+      html += '<details class="mt-3"><summary class="text-xs text-gray-500 dark:text-gray-400 cursor-pointer">All fields (' + data.fields.length + ')</summary>';
+      html += '<p class="mt-1 text-xs font-mono text-gray-600 dark:text-gray-300 break-all">' + data.fields.join(', ') + '</p></details>';
+    }
+
+    container.innerHTML = html;
+  }
+
+  function renderRow(key, value) {
+    var display;
+    if (key.includes('At') || key.includes('Date') || key === 'syncedAt' || key === 'detailSyncedAt' || key === 'createdAt' || key === 'updatedAt') {
+      display = formatDate(value);
+    } else if (typeof value === 'boolean') {
+      display = value
+        ? '<span class="text-green-600 font-medium">Yes</span>'
+        : '<span class="text-red-600 font-medium">No</span>';
+    } else if (value === null || value === undefined) {
+      display = '<span class="text-gray-400">null</span>';
+    } else {
+      display = String(value);
+    }
+
+    return '<tr class="border-b border-gray-100 dark:border-gray-700">'
+      + '<td class="py-1.5 pr-3 font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap">' + key + '</td>'
+      + '<td class="py-1.5 text-gray-900 dark:text-gray-100">' + display + '</td>'
+      + '</tr>';
+  }
+
+  function renderDiagnosis(items) {
+    diagnosisList.innerHTML = '';
+    items.forEach(function (d) {
+      var code = d.split(':')[0] || d;
+      var div = document.createElement('div');
+      div.className = 'flex items-start gap-2 p-3 rounded-lg ' + diagBadge(code);
+      div.innerHTML = '<span class="font-mono font-semibold text-xs whitespace-nowrap">' + code + '</span>'
+        + '<span class="text-sm">' + d.substring(d.indexOf(':') + 1).trim() + '</span>';
+      diagnosisList.appendChild(div);
+    });
+  }
+
+  function renderReport(report) {
+    lastReport = report;
+    results.classList.remove('hidden');
+    renderDiagnosis(report.diagnosis || []);
+    renderDataCard(mongoCard, report.mongo, 'MongoDB');
+    renderDataCard(kashflowCard, report.kashflow, 'KashFlow');
+
+    // Enable pull button if we have data
+    btnPull.disabled = false;
+  }
+
+  async function doDebug() {
+    var entityType = inputType.value;
+    var entityId = inputId.value.trim();
+    if (!entityId) { showError('Enter a Number or Code.'); return; }
+
+    hideError(); hidePull();
+    results.classList.add('hidden');
+    btnPull.disabled = true;
+    setLoading(true, 'Diagnosing ' + entityType + ' ' + entityId + '...');
+
+    try {
+      var r = await fetch('/debug', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-csrf-token': csrfToken },
+        body: JSON.stringify({ entityType: entityType, entityId: entityId }),
+      });
+      var data = await r.json();
+      setLoading(false);
+      if (!r.ok) { showError(data.message || 'Debug request failed'); return; }
+      renderReport(data);
+    } catch (err) {
+      setLoading(false);
+      showError('Request failed: ' + err.message);
+    }
+  }
+
+  async function doPull() {
+    var entityType = inputType.value;
+    var entityId = inputId.value.trim();
+    if (!entityId) { showError('Enter a Number or Code.'); return; }
+
+    hideError(); hidePull();
+    setLoading(true, 'Pulling ' + entityType + ' ' + entityId + ' from KashFlow...');
+    btnPull.disabled = true;
+
+    try {
+      var r = await fetch('/pull', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-csrf-token': csrfToken },
+        body: JSON.stringify({ entityType: entityType, entityId: entityId }),
+      });
+      var data = await r.json();
+      setLoading(false);
+      if (!r.ok) { showError(data.message || 'Pull failed'); return; }
+      pullBanner.innerHTML = '<span class="font-medium">Pull complete:</span> '
+        + entityType + ' ' + entityId + ' was <strong>' + (data.action || 'synced') + '</strong>.'
+        + ' detailSyncedAt: ' + formatDate(data.detailSyncedAt);
+      pullBanner.classList.remove('hidden');
+      if (typeof window.showToast === 'function') window.showToast('success', 'Pull complete');
+      // Re-run diagnosis to show updated state
+      setTimeout(doDebug, 500);
+    } catch (err) {
+      setLoading(false);
+      showError('Pull request failed: ' + err.message);
+    }
+  }
+
+  btnDebug.addEventListener('click', doDebug);
+  btnPull.addEventListener('click', doPull);
+  inputId.addEventListener('keydown', function (e) { if (e.key === 'Enter') doDebug(); });
+})();
+</script>
