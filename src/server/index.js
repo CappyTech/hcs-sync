@@ -291,6 +291,8 @@ function makeRequestId() {
 
 // Log every request/response (GET/POST/etc) including dashboard routes like /pull.
 // Keep logs low-risk: do not log headers/cookies/body.
+// Skip noisy polling endpoints.
+const QUIET_PATHS = new Set(['/status', '/health', '/cron/health']);
 app.use((req, res, next) => {
   const startNs = process.hrtime.bigint();
   const requestId = String(req.headers['x-request-id'] || '').trim() || makeRequestId();
@@ -301,6 +303,8 @@ app.use((req, res, next) => {
   } catch {
     // ignore
   }
+
+  if (QUIET_PATHS.has(req.path)) return next();
 
   const logFinished = () => {
     const durationMs = Number(process.hrtime.bigint() - startNs) / 1e6;
