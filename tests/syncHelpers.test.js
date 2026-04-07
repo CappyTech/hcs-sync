@@ -323,32 +323,34 @@ describe('createBulkUpserter()', () => {
 
   beforeEach(() => {
     mockCollection = {
-      bulkWrite: vi.fn().mockResolvedValue({
-        upsertedCount: 1,
-        modifiedCount: 0,
-        matchedCount: 0,
-      }),
+      collection: {
+        bulkWrite: vi.fn().mockResolvedValue({
+          upsertedCount: 1,
+          modifiedCount: 0,
+          matchedCount: 0,
+        }),
+      },
     };
   });
 
   it('batches writes by batchSize', async () => {
     const upserter = createBulkUpserter(mockCollection, 2);
     await upserter.push({ updateOne: { filter: { Id: 1 }, update: {}, upsert: true } });
-    expect(mockCollection.bulkWrite).not.toHaveBeenCalled();
+    expect(mockCollection.collection.bulkWrite).not.toHaveBeenCalled();
     await upserter.push({ updateOne: { filter: { Id: 2 }, update: {}, upsert: true } });
-    expect(mockCollection.bulkWrite).toHaveBeenCalledTimes(1);
+    expect(mockCollection.collection.bulkWrite).toHaveBeenCalledTimes(1);
   });
 
   it('flush writes remaining ops', async () => {
     const upserter = createBulkUpserter(mockCollection, 100);
     await upserter.push({ updateOne: { filter: { Id: 1 }, update: {}, upsert: true } });
-    expect(mockCollection.bulkWrite).not.toHaveBeenCalled();
+    expect(mockCollection.collection.bulkWrite).not.toHaveBeenCalled();
     await upserter.flush();
-    expect(mockCollection.bulkWrite).toHaveBeenCalledTimes(1);
+    expect(mockCollection.collection.bulkWrite).toHaveBeenCalledTimes(1);
   });
 
   it('getStats returns accumulated statistics', async () => {
-    mockCollection.bulkWrite.mockResolvedValue({
+    mockCollection.collection.bulkWrite.mockResolvedValue({
       upsertedCount: 2,
       modifiedCount: 1,
       matchedCount: 3,
@@ -366,11 +368,11 @@ describe('createBulkUpserter()', () => {
   it('accepts options object with batchSize', async () => {
     const upserter = createBulkUpserter(mockCollection, { batchSize: 1 });
     await upserter.push({ updateOne: { filter: { Id: 1 }, update: {}, upsert: true } });
-    expect(mockCollection.bulkWrite).toHaveBeenCalledTimes(1);
+    expect(mockCollection.collection.bulkWrite).toHaveBeenCalledTimes(1);
   });
 
   it('captures upserted filters when captureUpserts is true', async () => {
-    mockCollection.bulkWrite.mockResolvedValue({
+    mockCollection.collection.bulkWrite.mockResolvedValue({
       upsertedCount: 1,
       modifiedCount: 0,
       matchedCount: 0,
@@ -385,7 +387,7 @@ describe('createBulkUpserter()', () => {
 
   it('truncates upserted filters at maxCapturedUpserts', async () => {
     let callIndex = 0;
-    mockCollection.bulkWrite.mockImplementation(async () => {
+    mockCollection.collection.bulkWrite.mockImplementation(async () => {
       callIndex++;
       return {
         upsertedCount: 1,
@@ -406,7 +408,7 @@ describe('createBulkUpserter()', () => {
   it('flush on empty does not call bulkWrite', async () => {
     const upserter = createBulkUpserter(mockCollection, 100);
     await upserter.flush();
-    expect(mockCollection.bulkWrite).not.toHaveBeenCalled();
+    expect(mockCollection.collection.bulkWrite).not.toHaveBeenCalled();
   });
 });
 

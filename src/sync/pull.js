@@ -76,13 +76,13 @@ export async function pullSingleEntity(entityType, entityId) {
   });
   update.$set.detailSyncedAt = now;
 
-  const writeResult = await model.bulkWrite([{
-    updateOne: {
-      filter: { [keyField]: id },
-      update,
-      upsert: true,
-    },
-  }], { ordered: false });
+  // Use native MongoDB driver — Mongoose 8's bulkWrite casting silently
+  // drops complex array sub-documents (LineItems, PaymentLines) during cast.
+  const writeResult = await model.collection.updateOne(
+    { [keyField]: id },
+    update,
+    { upsert: true },
+  );
 
   // Verify the write took effect
   const after = await model.findOne({ [keyField]: id }).lean();

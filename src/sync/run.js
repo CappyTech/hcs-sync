@@ -197,7 +197,20 @@ function createBulkUpserter(collection, batchSize = 250) {
       // Pre-read for audit before the write so we capture the "before" state.
       const preReadDocs = audit ? await preReadForAudit(opsToWrite) : null;
 
-      const out = await collection.bulkWrite(opsToWrite, { ordered: false, timestamps: true });
+      // Add timestamps manually since we bypass Mongoose.
+      const tsNow = new Date();
+      for (const op of opsToWrite) {
+        const u = op?.updateOne?.update;
+        if (u) {
+          if (u.$set) u.$set.updatedAt = tsNow;
+          if (!u.$setOnInsert) u.$setOnInsert = {};
+          u.$setOnInsert.createdAt = tsNow;
+        }
+      }
+
+      // Use native MongoDB driver — Mongoose 8's bulkWrite casting silently
+      // drops complex array sub-documents (LineItems, PaymentLines) during cast.
+      const out = await collection.collection.bulkWrite(opsToWrite, { ordered: false });
       applyResult(out);
 
       const upsertedEntries = extractUpsertedEntries(out);
