@@ -245,13 +245,15 @@
       var data = await r.json();
       setLoading(false);
       if (!r.ok) { showError(data.message || 'Pull failed'); return; }
+      var debugInfo = data.debug ? '<pre class="mt-2 text-xs bg-gray-50 dark:bg-gray-900 p-2 rounded overflow-auto">' + JSON.stringify(data.debug, null, 2) + '</pre>' : '';
       pullBanner.innerHTML = '<span class="font-medium">Pull complete:</span> '
         + entityType + ' ' + entityId + ' was <strong>' + (data.action || 'synced') + '</strong>.'
-        + ' detailSyncedAt: ' + formatDate(data.detailSyncedAt);
+        + ' detailSyncedAt: ' + formatDate(data.detailSyncedAt)
+        + debugInfo;
       pullBanner.classList.remove('hidden');
       if (typeof window.showToast === 'function') window.showToast('success', 'Pull complete');
       // Re-run diagnosis to show updated state
-      setTimeout(doDebug, 500);
+      setTimeout(doDebug, 2000);
     } catch (err) {
       setLoading(false);
       showError('Pull request failed: ' + err.message);
