@@ -648,27 +648,32 @@ async function run(options = {}) {
         detailConcurrency,
         'projects',
         async (number) => {
-          let full;
           try {
-            full = await kf.projects.get(number);
+            const full = await kf.projects.get(number);
+            if (!full || typeof full !== 'object') {
+              projectsDetailFailed += 1;
+              logger.warn({ projectNumber: number }, 'Project detail returned empty response');
+              progress.incItem('projects', 1);
+              return 0;
+            }
+            const id = pickId(full);
+            const keyField = id != null ? 'Id' : 'Number';
+            const keyValue = id != null ? id : number;
+            await projectDetailUpserter.push({
+              updateOne: {
+                filter: { [keyField]: keyValue },
+                update: buildUpsertUpdate({ keyField, keyValue, payload: full, syncedAt: runNow, runId, model: Project }),
+                upsert: true,
+              }
+            });
+            progress.incItem('projects', 1);
+            return 1;
           } catch (err) {
             projectsDetailFailed += 1;
-            logger.warn({ projectNumber: number, err: err.message }, 'Failed to fetch project detail, skipping');
+            logger.warn({ projectNumber: number, err: err.message }, 'Failed to process project detail');
             progress.incItem('projects', 1);
             return 0;
           }
-          const id = pickId(full);
-          const keyField = id != null ? 'Id' : 'Number';
-          const keyValue = id != null ? id : number;
-          await projectDetailUpserter.push({
-            updateOne: {
-              filter: { [keyField]: keyValue },
-              update: buildUpsertUpdate({ keyField, keyValue, payload: full, syncedAt: runNow, runId, model: Project }),
-              upsert: true,
-            }
-          });
-          progress.incItem('projects', 1);
-          return 1;
         },
         undefined
       );
@@ -761,26 +766,31 @@ async function run(options = {}) {
         detailConcurrency,
         'invoices',
         async ({ id, number }) => {
-          let full;
           try {
-            full = await kf.invoices.get(number);
+            const full = await kf.invoices.get(number);
+            if (!full || typeof full !== 'object') {
+              invoicesDetailFailed += 1;
+              logger.warn({ invoiceNumber: number, invoiceId: id }, 'Invoice detail returned empty response');
+              progress.incItem('invoices', 1);
+              return 0;
+            }
+            const update = buildUpsertUpdate({ keyField: 'Id', keyValue: id, payload: full, syncedAt: runNow, runId, model: Invoice });
+            update.$set.detailSyncedAt = runNow;
+            await invoiceDetailUpserter.push({
+              updateOne: {
+                filter: { Id: id },
+                update,
+                upsert: true,
+              }
+            });
+            progress.incItem('invoices', 1);
+            return 1;
           } catch (err) {
             invoicesDetailFailed += 1;
-            logger.warn({ invoiceNumber: number, err: err.message }, 'Failed to fetch invoice detail');
+            logger.warn({ invoiceNumber: number, invoiceId: id, err: err.message }, 'Failed to process invoice detail');
             progress.incItem('invoices', 1);
             return 0;
           }
-          const update = buildUpsertUpdate({ keyField: 'Id', keyValue: id, payload: full, syncedAt: runNow, runId, model: Invoice });
-          update.$set.detailSyncedAt = runNow;
-          await invoiceDetailUpserter.push({
-            updateOne: {
-              filter: { Id: id },
-              update,
-              upsert: true,
-            }
-          });
-          progress.incItem('invoices', 1);
-          return 1;
         },
         ({ done, total }) => {
           const step = Math.max(1, Math.ceil(total / 20));
@@ -868,26 +878,31 @@ async function run(options = {}) {
         detailConcurrency,
         'quotes',
         async ({ id, number }) => {
-          let full;
           try {
-            full = await kf.quotes.get(number);
+            const full = await kf.quotes.get(number);
+            if (!full || typeof full !== 'object') {
+              quotesDetailFailed += 1;
+              logger.warn({ quoteNumber: number, quoteId: id }, 'Quote detail returned empty response');
+              progress.incItem('quotes', 1);
+              return 0;
+            }
+            const update = buildUpsertUpdate({ keyField: 'Id', keyValue: id, payload: full, syncedAt: runNow, runId, model: Quote });
+            update.$set.detailSyncedAt = runNow;
+            await quoteDetailUpserter.push({
+              updateOne: {
+                filter: { Id: id },
+                update,
+                upsert: true,
+              }
+            });
+            progress.incItem('quotes', 1);
+            return 1;
           } catch (err) {
             quotesDetailFailed += 1;
-            logger.warn({ quoteNumber: number, err: err.message }, 'Failed to fetch quote detail');
+            logger.warn({ quoteNumber: number, quoteId: id, err: err.message }, 'Failed to process quote detail');
             progress.incItem('quotes', 1);
             return 0;
           }
-          const update = buildUpsertUpdate({ keyField: 'Id', keyValue: id, payload: full, syncedAt: runNow, runId, model: Quote });
-          update.$set.detailSyncedAt = runNow;
-          await quoteDetailUpserter.push({
-            updateOne: {
-              filter: { Id: id },
-              update,
-              upsert: true,
-            }
-          });
-          progress.incItem('quotes', 1);
-          return 1;
         },
         ({ done, total }) => {
           const step = Math.max(1, Math.ceil(total / 20));
@@ -988,33 +1003,38 @@ async function run(options = {}) {
         detailConcurrency,
         'purchases',
         async ({ id, number }) => {
-          let full;
           try {
-            full = await kf.purchases.get(number);
+            const full = await kf.purchases.get(number);
+            if (!full || typeof full !== 'object') {
+              purchasesDetailFailed += 1;
+              logger.warn({ purchaseNumber: number, purchaseId: id }, 'Purchase detail returned empty response');
+              progress.incItem('purchases', 1);
+              return 0;
+            }
+            const lineItemsCount = Array.isArray(full.LineItems) ? full.LineItems.length : 0;
+            const paymentLinesCount = Array.isArray(full.PaymentLines) ? full.PaymentLines.length : 0;
+            if (lineItemsCount === 0) {
+              purchasesDetailNoLineItems += 1;
+              logger.warn({ purchaseNumber: number, purchaseId: id, paymentLinesCount }, 'Purchase detail returned 0 LineItems');
+            }
+            Purchase.syncConfig.transform(full);
+            const update = buildUpsertUpdate({ keyField: 'Id', keyValue: id, payload: full, syncedAt: runNow, runId, model: Purchase });
+            update.$set.detailSyncedAt = runNow;
+            await purchaseDetailUpserter.push({
+              updateOne: {
+                filter: { Id: id },
+                update,
+                upsert: true,
+              }
+            });
+            progress.incItem('purchases', 1);
+            return 1;
           } catch (err) {
             purchasesDetailFailed += 1;
-            logger.warn({ purchaseNumber: number, purchaseId: id, err: err.message }, 'Failed to fetch purchase detail');
+            logger.warn({ purchaseNumber: number, purchaseId: id, err: err.message }, 'Failed to process purchase detail');
             progress.incItem('purchases', 1);
             return 0;
           }
-          const lineItemsCount = Array.isArray(full.LineItems) ? full.LineItems.length : 0;
-          const paymentLinesCount = Array.isArray(full.PaymentLines) ? full.PaymentLines.length : 0;
-          if (lineItemsCount === 0) {
-            purchasesDetailNoLineItems += 1;
-            logger.warn({ purchaseNumber: number, purchaseId: id, paymentLinesCount }, 'Purchase detail returned 0 LineItems');
-          }
-          Purchase.syncConfig.transform(full);
-          const update = buildUpsertUpdate({ keyField: 'Id', keyValue: id, payload: full, syncedAt: runNow, runId, model: Purchase });
-          update.$set.detailSyncedAt = runNow;
-          await purchaseDetailUpserter.push({
-            updateOne: {
-              filter: { Id: id },
-              update,
-              upsert: true,
-            }
-          });
-          progress.incItem('purchases', 1);
-          return 1;
         },
         ({ done, total }) => {
           const step = Math.max(1, Math.ceil(total / 20));
