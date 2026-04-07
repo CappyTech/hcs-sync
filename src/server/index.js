@@ -927,11 +927,14 @@ app.post('/pull', async (req, res) => {
   if (!entityType || entityId == null) {
     return res.status(400).json({ ok: false, message: 'entityType and entityId are required' });
   }
+  logs.unshift({ time: Date.now(), level: 'info', message: `Manual pull started: ${entityType} ${entityId}`, meta: { entityType, entityId } });
   try {
     const result = await pullSingleEntity(entityType, entityId);
+    logs.unshift({ time: Date.now(), level: 'success', message: `Manual pull complete: ${entityType} ${entityId} — ${result.action}`, meta: { entityType, entityId, action: result.action, debug: result.debug } });
     res.json(result);
   } catch (err) {
     logger.error({ entityType, entityId, err: err.message }, 'Manual pull failed');
+    logs.unshift({ time: Date.now(), level: 'error', message: `Manual pull failed: ${entityType} ${entityId} — ${err.message}`, meta: { entityType, entityId, error: err.message } });
     res.status(500).json({ ok: false, message: err.message || 'Pull failed' });
   }
 });
