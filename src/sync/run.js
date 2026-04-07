@@ -770,10 +770,12 @@ async function run(options = {}) {
             progress.incItem('invoices', 1);
             return 0;
           }
+          const update = buildUpsertUpdate({ keyField: 'Id', keyValue: id, payload: full, syncedAt: runNow, runId, model: Invoice });
+          update.$set.detailSyncedAt = runNow;
           await invoiceDetailUpserter.push({
             updateOne: {
               filter: { Id: id },
-              update: buildUpsertUpdate({ keyField: 'Id', keyValue: id, payload: full, syncedAt: runNow, runId, model: Invoice }),
+              update,
               upsert: true,
             }
           });
@@ -875,10 +877,12 @@ async function run(options = {}) {
             progress.incItem('quotes', 1);
             return 0;
           }
+          const update = buildUpsertUpdate({ keyField: 'Id', keyValue: id, payload: full, syncedAt: runNow, runId, model: Quote });
+          update.$set.detailSyncedAt = runNow;
           await quoteDetailUpserter.push({
             updateOne: {
               filter: { Id: id },
-              update: buildUpsertUpdate({ keyField: 'Id', keyValue: id, payload: full, syncedAt: runNow, runId, model: Quote }),
+              update,
               upsert: true,
             }
           });
@@ -981,10 +985,12 @@ async function run(options = {}) {
             return 0;
           }
           Purchase.syncConfig.transform(full);
+          const update = buildUpsertUpdate({ keyField: 'Id', keyValue: id, payload: full, syncedAt: runNow, runId, model: Purchase });
+          update.$set.detailSyncedAt = runNow;
           await purchaseDetailUpserter.push({
             updateOne: {
               filter: { Id: id },
-              update: buildUpsertUpdate({ keyField: 'Id', keyValue: id, payload: full, syncedAt: runNow, runId, model: Purchase }),
+              update,
               upsert: true,
             }
           });

@@ -14,6 +14,7 @@ const { uuidField } = schemas;
 // Fields that only hcs-sync writes; kept separate from the shared schema.
 const syncOnlyFields = {
   syncedAt: { type: Date, default: null },
+  detailSyncedAt: { type: Date, default: null },
   createdByRunId: { type: String, default: null },
 };
 
@@ -23,7 +24,7 @@ const syncOnlyFields = {
  */
 export const SYNC_INTERNAL_FIELDS = new Set([
   '_id', '__v', 'data', 'uuid',
-  'syncedAt', 'createdAt', 'updatedAt', 'createdByRunId',
+  'syncedAt', 'detailSyncedAt', 'createdAt', 'updatedAt', 'createdByRunId',
 ]);
 
 /** Build a Mongoose schema from shared entity definition + sync extras. */
