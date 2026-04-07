@@ -76,7 +76,7 @@ export async function pullSingleEntity(entityType, entityId) {
   });
   update.$set.detailSyncedAt = now;
 
-  await model.bulkWrite([{
+  const writeResult = await model.bulkWrite([{
     updateOne: {
       filter: { [keyField]: id },
       update,
@@ -90,7 +90,7 @@ export async function pullSingleEntity(entityType, entityId) {
   const afterPaymentLines = Array.isArray(after?.PaymentLines) ? after.PaymentLines.length : 0;
 
   const action = existing ? 'updated' : 'created';
-  logger.info({ entityType, entityId, id, action, afterLineItems, afterPaymentLines }, 'Manual pull: upsert complete');
+  logger.info({ entityType, entityId, id, action, afterLineItems, afterPaymentLines, writeResult: { matchedCount: writeResult.matchedCount, modifiedCount: writeResult.modifiedCount, upsertedCount: writeResult.upsertedCount } }, 'Manual pull: upsert complete');
 
   return {
     ok: true,
@@ -101,6 +101,15 @@ export async function pullSingleEntity(entityType, entityId) {
     [lookupField]: full[lookupField],
     detailSyncedAt: now.toISOString(),
     debug: {
+      filterId: id,
+      filterIdType: typeof id,
+      existingId: existing?.[keyField] ?? null,
+      existingIdType: existing ? typeof existing[keyField] : null,
+      writeResult: {
+        matchedCount: writeResult.matchedCount,
+        modifiedCount: writeResult.modifiedCount,
+        upsertedCount: writeResult.upsertedCount,
+      },
       kashflowLineItems: Array.isArray(full.LineItems) ? full.LineItems.length : 0,
       kashflowPaymentLines: Array.isArray(full.PaymentLines) ? full.PaymentLines.length : 0,
       kashflowGrossAmount: full.GrossAmount ?? null,
