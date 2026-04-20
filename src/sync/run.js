@@ -7,7 +7,11 @@ import progress from '../server/progress.js';
 import { connectMongoose, isMongooseEnabled } from '../db/mongoose.js';
 import { ensureKashflowIndexes } from '../db/mongo.js';
 import { Customer, Supplier, Invoice, Quote, Purchase, Project, Nominal, VATRate, SYNC_INTERNAL_FIELDS, toDate, computeCisTaxPeriod, preparePurchaseForUpsert } from '../server/models/kashflow.js';
-import deepDiff from '../util/deepDiff.js';
+import deepDiff, { stableStringify } from '../util/deepDiff.js';
+
+function computePayloadHash(data) {
+  return crypto.createHash('sha256').update(stableStringify(data)).digest('hex').slice(0, 16);
+}
 
 function createPool(limit, label, handler, onProgress) {
   return async (items) => {
@@ -46,19 +50,40 @@ function buildUpsertUpdate({ keyField, keyValue, payload, syncedAt, runId, model
     flattened[k] = v;
   }
 
-  // Store KashFlow fields at the document root so list views show real fields.
-  // Preserve our normalized key field (e.g. `code`/`number`) and sync metadata.
-  const $set = { ...flattened, [keyField]: keyValue, syncedAt };
-  // Assign a v4 UUID on first insert; existing docs keep their uuid untouched.
-  // Mongoose timestamps handles createdAt/updatedAt automatically.
-  const $setOnInsert = {
-    uuid: crypto.randomUUID(),
-    ...(runId ? { createdByRunId: runId } : {}),
+  // Compute a stable content hash so we can detect unchanged documents.
+  const newHash = computePayloadHash({ ...flattened, [keyField]: keyValue });
+  const newUuid = crypto.randomUUID();
+
+  // Build an aggregation pipeline update (MongoDB 4.2+) so that timestamps
+  // are only written when data actually changes:
+  //   syncedAt / createdAt / uuid / createdByRunId  → insert-only via $ifNull
+  //   updatedAt                                     → only when _kfHash changes
+  //   _kfHash                                       → content hash for change detection
+  // This means modifiedCount only increments when KashFlow data changed.
+  // Data fields are wrapped in $literal to prevent misinterpretation by the
+  // aggregation engine (e.g. strings starting with '$', operator-shaped objects).
+  const pipelineSet = {
+    ...Object.fromEntries(Object.entries(flattened).map(([k, v]) => [k, { $literal: v }])),
+    [keyField]: { $literal: keyValue },
+    _kfHash: { $literal: newHash },
+    syncedAt:        { $ifNull: ['$syncedAt',        '$$NOW'] },
+    createdAt:       { $ifNull: ['$createdAt',       '$$NOW'] },
+    uuid:            { $ifNull: ['$uuid',            { $literal: newUuid }] },
+    ...(runId ? { createdByRunId: { $ifNull: ['$createdByRunId', { $literal: String(runId) }] } } : {}),
+    updatedAt: {
+      $cond: {
+        if:   { $ne: ['$_kfHash', { $literal: newHash }] },
+        then: '$$NOW',
+        else: { $ifNull: ['$updatedAt', '$$NOW'] },
+      },
+    },
   };
 
-  // Clean up legacy envelope docs that stored the payload under `data`.
-  const $unset = { data: '' };
-  return { $set, $setOnInsert, $unset };
+  // pipeline._rawSet is a JS-only property (not serialised to BSON) that
+  // the audit engine reads for deepDiff comparisons.
+  const pipeline = [{ $set: pipelineSet }, { $unset: 'data' }];
+  pipeline._rawSet = { ...flattened, [keyField]: keyValue };
+  return pipeline;
 }
 
 function createBulkUpserter(collection, batchSize = 250) {
@@ -141,7 +166,10 @@ function createBulkUpserter(collection, batchSize = 250) {
         const op = opsToWrite[i];
         const filter = op?.updateOne?.filter;
         if (!filter) continue;
-        const setFields = op?.updateOne?.update?.$set;
+        // Pipeline updates store raw payload on _rawSet (not serialised to BSON);
+        // legacy updates use $set directly.
+        const update = op?.updateOne?.update;
+        const setFields = Array.isArray(update) ? update._rawSet : update?.$set;
         if (!setFields) continue;
 
         const filterKey = JSON.stringify(filter);
@@ -197,11 +225,12 @@ function createBulkUpserter(collection, batchSize = 250) {
       // Pre-read for audit before the write so we capture the "before" state.
       const preReadDocs = audit ? await preReadForAudit(opsToWrite) : null;
 
-      // Add timestamps manually since we bypass Mongoose.
+      // Pipeline updates handle timestamps internally via $ifNull / $cond.
+      // Only inject timestamps for legacy non-pipeline updates.
       const tsNow = new Date();
       for (const op of opsToWrite) {
         const u = op?.updateOne?.update;
-        if (u) {
+        if (u && !Array.isArray(u)) {
           if (u.$set) u.$set.updatedAt = tsNow;
           if (!u.$setOnInsert) u.$setOnInsert = {};
           u.$setOnInsert.createdAt = tsNow;
@@ -788,7 +817,8 @@ async function run(options = {}) {
               return 0;
             }
             const update = buildUpsertUpdate({ keyField: 'Id', keyValue: id, payload: full, syncedAt: runNow, runId, model: Invoice });
-            update.$set.detailSyncedAt = runNow;
+            update[0].$set.detailSyncedAt = { $literal: runNow };
+            update._rawSet.detailSyncedAt = runNow;
             await invoiceDetailUpserter.push({
               updateOne: {
                 filter: { Id: id },
@@ -900,7 +930,8 @@ async function run(options = {}) {
               return 0;
             }
             const update = buildUpsertUpdate({ keyField: 'Id', keyValue: id, payload: full, syncedAt: runNow, runId, model: Quote });
-            update.$set.detailSyncedAt = runNow;
+            update[0].$set.detailSyncedAt = { $literal: runNow };
+            update._rawSet.detailSyncedAt = runNow;
             await quoteDetailUpserter.push({
               updateOne: {
                 filter: { Id: id },
@@ -1032,7 +1063,8 @@ async function run(options = {}) {
             }
             Purchase.syncConfig.transform(full);
             const update = buildUpsertUpdate({ keyField: 'Id', keyValue: id, payload: full, syncedAt: runNow, runId, model: Purchase });
-            update.$set.detailSyncedAt = runNow;
+            update[0].$set.detailSyncedAt = { $literal: runNow };
+            update._rawSet.detailSyncedAt = runNow;
             await purchaseDetailUpserter.push({
               updateOne: {
                 filter: { Id: id },

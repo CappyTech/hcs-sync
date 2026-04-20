@@ -74,7 +74,8 @@ export async function pullSingleEntity(entityType, entityId) {
     syncedAt: now,
     model,
   });
-  update.$set.detailSyncedAt = now;
+  update[0].$set.detailSyncedAt = { $literal: now };
+  update._rawSet.detailSyncedAt = now;
 
   // Use native MongoDB driver — Mongoose 8's bulkWrite casting silently
   // drops complex array sub-documents (LineItems, PaymentLines) during cast.

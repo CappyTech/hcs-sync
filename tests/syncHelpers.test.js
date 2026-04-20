@@ -152,31 +152,58 @@ describe('computeCisTaxPeriod()', () => {
 });
 
 // ── buildUpsertUpdate ──
+// buildUpsertUpdate now returns a MongoDB aggregation pipeline array:
+//   [0] = { $set: { ...fields wrapped in $literal, conditional timestamp expressions } }
+//   [1] = { $unset: 'data' }  (legacy envelope cleanup)
+// pipeline._rawSet  = plain JS object with raw payload values (for audit diffing)
+// Timestamps use $ifNull (insert-only) or $cond on _kfHash (changed-only).
 
 describe('buildUpsertUpdate()', () => {
-  it('flattens payload into $set', () => {
-    const now = new Date();
+  it('returns a pipeline array and exposes _rawSet', () => {
     const result = buildUpsertUpdate({
       keyField: 'Code', keyValue: 'C001',
-      payload: { Name: 'Test', Email: 'a@b.com' }, syncedAt: now,
+      payload: { Name: 'Test', Email: 'a@b.com' }, syncedAt: new Date(),
     });
-    expect(result.$set.Name).toBe('Test');
-    expect(result.$set.Email).toBe('a@b.com');
-    expect(result.$set.Code).toBe('C001');
-    expect(result.$set.syncedAt).toBe(now);
+    expect(Array.isArray(result)).toBe(true);
+    expect(result[0]).toHaveProperty('$set');
+    expect(result._rawSet).toBeDefined();
   });
 
-  it('excludes reserved keys (_id, data, uuid, syncedAt, createdAt)', () => {
+  it('flattens payload into pipeline $set as $literal values', () => {
+    const result = buildUpsertUpdate({
+      keyField: 'Code', keyValue: 'C001',
+      payload: { Name: 'Test', Email: 'a@b.com' }, syncedAt: new Date(),
+    });
+    const $set = result[0].$set;
+    expect($set.Name).toEqual({ $literal: 'Test' });
+    expect($set.Email).toEqual({ $literal: 'a@b.com' });
+    expect($set.Code).toEqual({ $literal: 'C001' });
+  });
+
+  it('exposes raw values on _rawSet for audit diffing', () => {
+    const result = buildUpsertUpdate({
+      keyField: 'Code', keyValue: 'C001',
+      payload: { Name: 'Test', Email: 'a@b.com' }, syncedAt: new Date(),
+    });
+    expect(result._rawSet.Name).toBe('Test');
+    expect(result._rawSet.Code).toBe('C001');
+  });
+
+  it('excludes reserved keys (_id, data, uuid, syncedAt, createdAt) from payload flattening', () => {
     const result = buildUpsertUpdate({
       keyField: 'Id', keyValue: 1,
       payload: { _id: 'x', data: {}, uuid: 'x', syncedAt: 'x', createdAt: 'x', Name: 'yes' },
       syncedAt: new Date(),
     });
-    expect(result.$set).not.toHaveProperty('_id');
-    expect(result.$set).not.toHaveProperty('data');
-    expect(result.$set).not.toHaveProperty('uuid');
-    expect(result.$set.syncedAt).toBeInstanceOf(Date);
-    expect(result.$set.Name).toBe('yes');
+    const $set = result[0].$set;
+    expect($set).not.toHaveProperty('_id');
+    // syncedAt is managed by the pipeline (insert-only $ifNull)
+    expect($set.syncedAt).toEqual({ $ifNull: ['$syncedAt', '$$NOW'] });
+    // data is removed via the $unset stage, not present in $set
+    expect($set).not.toHaveProperty('data');
+    // uuid is managed by the pipeline (insert-only $ifNull)
+    expect($set.uuid).toBeDefined();
+    expect($set.Name).toEqual({ $literal: 'yes' });
   });
 
   it('excludes keys starting with $', () => {
@@ -184,8 +211,9 @@ describe('buildUpsertUpdate()', () => {
       keyField: 'Id', keyValue: 1,
       payload: { $set: 'bad', Name: 'ok' }, syncedAt: new Date(),
     });
-    expect(result.$set).not.toHaveProperty('$set');
-    expect(result.$set.Name).toBe('ok');
+    const $set = result[0].$set;
+    expect($set).not.toHaveProperty('$set');
+    expect($set.Name).toEqual({ $literal: 'ok' });
   });
 
   it('excludes keys with dots or null bytes', () => {
@@ -193,8 +221,9 @@ describe('buildUpsertUpdate()', () => {
       keyField: 'Id', keyValue: 1,
       payload: { 'a.b': 1, 'c\0d': 2, Name: 'ok' }, syncedAt: new Date(),
     });
-    expect(result.$set).not.toHaveProperty('a.b');
-    expect(result.$set).not.toHaveProperty('c\0d');
+    const $set = result[0].$set;
+    expect($set).not.toHaveProperty('a.b');
+    expect($set).not.toHaveProperty('c\0d');
   });
 
   it('respects protectedFields', () => {
@@ -203,54 +232,83 @@ describe('buildUpsertUpdate()', () => {
       payload: { Name: 'Test', CISRate: 0.2, Subcontractor: true },
       syncedAt: new Date(), protectedFields: ['CISRate', 'Subcontractor'],
     });
-    expect(result.$set.Name).toBe('Test');
-    expect(result.$set).not.toHaveProperty('CISRate');
-    expect(result.$set).not.toHaveProperty('Subcontractor');
+    const $set = result[0].$set;
+    expect($set.Name).toEqual({ $literal: 'Test' });
+    expect($set).not.toHaveProperty('CISRate');
+    expect($set).not.toHaveProperty('Subcontractor');
   });
 
-  it('includes createdByRunId in $setOnInsert when runId provided', () => {
+  it('includes createdByRunId as insert-only $ifNull when runId provided', () => {
     const result = buildUpsertUpdate({
       keyField: 'Id', keyValue: 1, payload: {}, syncedAt: new Date(), runId: 'run-123',
     });
-    expect(result.$setOnInsert.createdByRunId).toBe('run-123');
+    expect(result[0].$set.createdByRunId).toEqual({
+      $ifNull: ['$createdByRunId', { $literal: 'run-123' }],
+    });
   });
 
   it('does not include createdByRunId when runId is absent', () => {
     const result = buildUpsertUpdate({
       keyField: 'Id', keyValue: 1, payload: {}, syncedAt: new Date(),
     });
-    expect(result.$setOnInsert).not.toHaveProperty('createdByRunId');
+    expect(result[0].$set).not.toHaveProperty('createdByRunId');
   });
 
-  it('$unset removes legacy data field', () => {
+  it('second pipeline stage removes legacy data field', () => {
     const result = buildUpsertUpdate({
       keyField: 'Id', keyValue: 1, payload: {}, syncedAt: new Date(),
     });
-    expect(result.$unset).toEqual({ data: '' });
+    expect(result[1]).toEqual({ $unset: 'data' });
   });
 
-  it('$setOnInsert includes uuid (createdAt handled by Mongoose timestamps)', () => {
-    const now = new Date();
+  it('uuid is insert-only via $ifNull', () => {
     const result = buildUpsertUpdate({
-      keyField: 'Id', keyValue: 1, payload: {}, syncedAt: now,
+      keyField: 'Id', keyValue: 1, payload: {}, syncedAt: new Date(),
     });
-    expect(result.$setOnInsert.uuid).toBeDefined();
-    expect(typeof result.$setOnInsert.uuid).toBe('string');
-    expect(result.$setOnInsert.createdAt).toBeUndefined();
+    const uuidExpr = result[0].$set.uuid;
+    expect(uuidExpr).toHaveProperty('$ifNull');
+    expect(uuidExpr.$ifNull[0]).toBe('$uuid');
+    expect(typeof uuidExpr.$ifNull[1].$literal).toBe('string');
+  });
+
+  it('syncedAt is insert-only via $ifNull', () => {
+    const result = buildUpsertUpdate({
+      keyField: 'Id', keyValue: 1, payload: {}, syncedAt: new Date(),
+    });
+    expect(result[0].$set.syncedAt).toEqual({ $ifNull: ['$syncedAt', '$$NOW'] });
+  });
+
+  it('updatedAt uses $cond based on _kfHash change', () => {
+    const result = buildUpsertUpdate({
+      keyField: 'Id', keyValue: 1, payload: { Name: 'X' }, syncedAt: new Date(),
+    });
+    const updatedAt = result[0].$set.updatedAt;
+    expect(updatedAt).toHaveProperty('$cond');
+    expect(updatedAt.$cond.if).toHaveProperty('$ne');
+    expect(updatedAt.$cond.then).toBe('$$NOW');
+  });
+
+  it('_kfHash is a 16-char hex string', () => {
+    const result = buildUpsertUpdate({
+      keyField: 'Id', keyValue: 1, payload: { Name: 'X' }, syncedAt: new Date(),
+    });
+    const hash = result[0].$set._kfHash?.$literal;
+    expect(typeof hash).toBe('string');
+    expect(hash).toHaveLength(16);
   });
 
   it('handles non-object payload gracefully', () => {
     const result = buildUpsertUpdate({
       keyField: 'Id', keyValue: 1, payload: null, syncedAt: new Date(),
     });
-    expect(result.$set.Id).toBe(1);
+    expect(result[0].$set.Id).toEqual({ $literal: 1 });
   });
 
   it('handles array payload gracefully', () => {
     const result = buildUpsertUpdate({
       keyField: 'Id', keyValue: 1, payload: [1, 2, 3], syncedAt: new Date(),
     });
-    expect(result.$set.Id).toBe(1);
+    expect(result[0].$set.Id).toEqual({ $literal: 1 });
   });
 });
 
