@@ -420,59 +420,15 @@ async function run(options = {}) {
       vatRates: vatRatesRaw?.length || 0,
     });
 
-    // Upsert list payloads concurrently across independent collections.
+    // Upsert list payloads for collections that have no detail phase.
+    // Customers, suppliers and projects are intentionally excluded here — they are always
+    // written via the detail phase immediately below, with a more complete payload.
+    // Writing them twice per run would cause _kfHash to oscillate between the list-field
+    // hash and the detail-field hash, producing spurious Modified counts every sync.
     if (mongoEnabled) {
       setStage('upsert:lists');
       const now = new Date();
       await Promise.all([
-        (async () => {
-          const up = createBulkUpserter(Customer, { captureUpserts: true, audit: auditOpts('customers') });
-          const skip = createSkipCounter();
-          for (const c of customers || []) {
-            const id = pickId(c);
-            if (id == null) { skip.incMissingKey(); continue; }
-            await up.push({ updateOne: { filter: { Id: id }, update: buildUpsertUpdate({ keyField: 'Id', keyValue: id, payload: c, syncedAt: now, runId, model: Customer }), upsert: true } });
-          }
-          await up.flush();
-          mongoSummary.customers = addMongoStats(mongoSummary.customers, up.getStats());
-          mongoDetails.customers = up.getUpsertedFilters();
-          logger.info({ mongo: { customers: up.getStats() } }, 'Mongo upsert summary (customers list)');
-          emitLog('info', 'Mongo upsert summary (customers list)', { stats: up.getStats() });
-          if (skip.getMissingKey() > 0) { logger.warn({ skippedMissingId: skip.getMissingKey() }, 'Skipped customer upserts with missing Id'); emitLog('warn', 'Skipped customer upserts with missing Id', { count: skip.getMissingKey() }); }
-        })(),
-        (async () => {
-          const up = createBulkUpserter(Supplier, { captureUpserts: true, audit: auditOpts('suppliers') });
-          const skip = createSkipCounter();
-          for (const s of suppliers || []) {
-            const id = pickId(s);
-            if (id == null) { skip.incMissingKey(); continue; }
-            await up.push({ updateOne: { filter: { Id: id }, update: buildUpsertUpdate({ keyField: 'Id', keyValue: id, payload: s, syncedAt: now, runId, model: Supplier }), upsert: true } });
-          }
-          await up.flush();
-          mongoSummary.suppliers = addMongoStats(mongoSummary.suppliers, up.getStats());
-          mongoDetails.suppliers = up.getUpsertedFilters();
-          logger.info({ mongo: { suppliers: up.getStats() } }, 'Mongo upsert summary (suppliers list)');
-          emitLog('info', 'Mongo upsert summary (suppliers list)', { stats: up.getStats() });
-          if (skip.getMissingKey() > 0) { logger.warn({ skippedMissingId: skip.getMissingKey() }, 'Skipped supplier upserts with missing Id'); emitLog('warn', 'Skipped supplier upserts with missing Id', { count: skip.getMissingKey() }); }
-        })(),
-        (async () => {
-          const up = createBulkUpserter(Project, { captureUpserts: true, audit: auditOpts('projects') });
-          const skip = createSkipCounter();
-          for (const p of projects || []) {
-            const id = pickId(p);
-            const number = pickNumber(p);
-            const keyField = id != null ? 'Id' : 'Number';
-            const keyValue = id != null ? id : number;
-            if (keyValue == null) { skip.incMissingKey(); continue; }
-            await up.push({ updateOne: { filter: { [keyField]: keyValue }, update: buildUpsertUpdate({ keyField, keyValue, payload: p, syncedAt: now, runId, model: Project }), upsert: true } });
-          }
-          await up.flush();
-          mongoSummary.projects = addMongoStats(mongoSummary.projects, up.getStats());
-          mongoDetails.projects = up.getUpsertedFilters();
-          logger.info({ mongo: { projects: up.getStats() } }, 'Mongo upsert summary (projects list)');
-          emitLog('info', 'Mongo upsert summary (projects list)', { stats: up.getStats() });
-          if (skip.getMissingKey() > 0) { logger.warn({ skippedMissingId: skip.getMissingKey() }, 'Skipped project upserts with missing Id/number'); emitLog('warn', 'Skipped project upserts with missing Id/number', { count: skip.getMissingKey() }); }
-        })(),
         (async () => {
           const up = createBulkUpserter(Nominal, { captureUpserts: true, audit: auditOpts('nominals') });
           const skip = createSkipCounter();
@@ -660,7 +616,7 @@ async function run(options = {}) {
               const full = await kf.invoices.get(number);
               if (!full || typeof full !== 'object') { invoicesDetailFailed += 1; logger.warn({ invoiceNumber: number, invoiceId: id }, 'Invoice detail returned empty response'); progress.incItem('invoices', 1); return 0; }
               const update = buildUpsertUpdate({ keyField: 'Id', keyValue: id, payload: full, syncedAt: runNow, runId, model: Invoice });
-              update[0].$set.detailSyncedAt = { $literal: runNow };
+              update[0].$set.detailSyncedAt = { $cond: { if: { $ne: ['$_kfHash', update[0].$set._kfHash] }, then: { $literal: runNow }, else: { $ifNull: ['$detailSyncedAt', { $literal: runNow }] } } };
               update._rawSet.detailSyncedAt = runNow;
               await invoiceDetailUpserter.push({ updateOne: { filter: { Id: id }, update, upsert: true } });
               progress.incItem('invoices', 1);
@@ -720,7 +676,7 @@ async function run(options = {}) {
               const full = await kf.quotes.get(number);
               if (!full || typeof full !== 'object') { quotesDetailFailed += 1; logger.warn({ quoteNumber: number, quoteId: id }, 'Quote detail returned empty response'); progress.incItem('quotes', 1); return 0; }
               const update = buildUpsertUpdate({ keyField: 'Id', keyValue: id, payload: full, syncedAt: runNow, runId, model: Quote });
-              update[0].$set.detailSyncedAt = { $literal: runNow };
+              update[0].$set.detailSyncedAt = { $cond: { if: { $ne: ['$_kfHash', update[0].$set._kfHash] }, then: { $literal: runNow }, else: { $ifNull: ['$detailSyncedAt', { $literal: runNow }] } } };
               update._rawSet.detailSyncedAt = runNow;
               await quoteDetailUpserter.push({ updateOne: { filter: { Id: id }, update, upsert: true } });
               progress.incItem('quotes', 1);
@@ -787,7 +743,7 @@ async function run(options = {}) {
               if (lineItemsCount === 0) { purchasesDetailNoLineItems += 1; logger.warn({ purchaseNumber: number, purchaseId: id, paymentLinesCount }, 'Purchase detail returned 0 LineItems'); }
               Purchase.syncConfig.transform(full);
               const update = buildUpsertUpdate({ keyField: 'Id', keyValue: id, payload: full, syncedAt: runNow, runId, model: Purchase });
-              update[0].$set.detailSyncedAt = { $literal: runNow };
+              update[0].$set.detailSyncedAt = { $cond: { if: { $ne: ['$_kfHash', update[0].$set._kfHash] }, then: { $literal: runNow }, else: { $ifNull: ['$detailSyncedAt', { $literal: runNow }] } } };
               update._rawSet.detailSyncedAt = runNow;
               await purchaseDetailUpserter.push({ updateOne: { filter: { Id: id }, update, upsert: true } });
               progress.incItem('purchases', 1);
