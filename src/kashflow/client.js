@@ -87,17 +87,6 @@ async function createClient() {
     return normalizeList(res.data);
   };
 
-  const listWithFallback = async (primaryPath, fallbackPath, params = {}) => {
-    try {
-      return await listInternal(primaryPath, params);
-    } catch (err) {
-      if (err?.response?.status === 404 && fallbackPath) {
-        return await listInternal(fallbackPath, params);
-      }
-      throw err;
-    }
-  };
-
   const listAllInternal = async (path, params = {}) => {
     let items = [];
     let url = path;
@@ -108,8 +97,8 @@ async function createClient() {
       items = items.concat(normalizeList(data));
       const next = data?.MetaData?.NextPageUrl || data?.MetaData?.NextPageURL;
       if (next) {
-        url = next; // absolute URL supported by axios; if relative, baseURL will apply
-        query = undefined; // subsequent pages already encoded in next URL
+        url = next;
+        query = undefined;
       } else {
         break;
       }
@@ -117,64 +106,45 @@ async function createClient() {
     return items;
   };
 
-  const listAllWithFallback = async (primaryPath, fallbackPath, params = {}) => {
-    try {
-      return await listAllInternal(primaryPath, params);
-    } catch (err) {
-      if (err?.response?.status === 404 && fallbackPath) {
-        return await listAllInternal(fallbackPath, params);
-      }
-      throw err;
-    }
-  };
-
-  const getPaged = async (path, params = {}) => {
-    const res = await http.get(path, { params });
-    return res.data;
-  };
-
   return {
-    metadata: {
-      get: () => http.get('/metadata').then((r) => r.data),
-    },
     customers: {
-      list: (params = {}) => listWithFallback('/customers', '/customers/list', params),
-      listAll: (params = {}) => listAllWithFallback('/customers', '/customers/list', params),
+      list: (params = {}) => listInternal('/customers', params),
+      listAll: (params = {}) => listAllInternal('/customers', params),
       get: (code) => http.get(`/customers/${encodeURIComponent(code)}`).then((r) => r.data),
       create: (body) => http.post('/customers', body).then((r) => r.data),
       update: (code, body) => http.put(`/customers/${encodeURIComponent(code)}`, body).then((r) => r.data),
     },
     suppliers: {
-      list: (params = {}) => listWithFallback('/suppliers', '/suppliers/list', params),
-      listAll: (params = {}) => listAllWithFallback('/suppliers', '/suppliers/list', params),
+      list: (params = {}) => listInternal('/suppliers', params),
+      listAll: (params = {}) => listAllInternal('/suppliers', params),
       get: (code) => http.get(`/suppliers/${encodeURIComponent(code)}`).then((r) => r.data),
       create: (body) => http.post('/suppliers', body).then((r) => r.data),
       update: (code, body) => http.put(`/suppliers/${encodeURIComponent(code)}`, body).then((r) => r.data),
     },
     invoices: {
-      list: (params = {}) => listWithFallback('/invoices', '/invoices/list', params),
-      listAll: (params = {}) => listAllWithFallback('/invoices', '/invoices/list', params),
+      list: (params = {}) => listInternal('/invoices', params),
+      listAll: (params = {}) => listAllInternal('/invoices', params),
       get: (number) => http.get(`/invoices/${number}`).then((r) => r.data),
       create: (body) => http.post('/invoices', body).then((r) => r.data),
       update: (number, body) => http.put(`/invoices/${number}`, body).then((r) => r.data),
     },
     purchases: {
-      list: (params = {}) => listWithFallback('/purchases', '/purchases/list', params),
-      listAll: (params = {}) => listAllWithFallback('/purchases', '/purchases/list', params),
+      list: (params = {}) => listInternal('/purchases', params),
+      listAll: (params = {}) => listAllInternal('/purchases', params),
       get: (number) => http.get(`/purchases/${number}`).then((r) => r.data),
       create: (body) => http.post('/purchases', body).then((r) => r.data),
       update: (number, body) => http.put(`/purchases/${number}`, body).then((r) => r.data),
     },
     projects: {
-      list: (params = {}) => listWithFallback('/projects', '/projects/list', params),
-      listAll: (params = {}) => listAllWithFallback('/projects', '/projects/list', params),
+      list: (params = {}) => listInternal('/projects', params),
+      listAll: (params = {}) => listAllInternal('/projects', params),
       get: (number) => http.get(`/projects/${number}`).then((r) => r.data),
       create: (body) => http.post('/projects', body).then((r) => r.data),
       update: (number, body) => http.put(`/projects/${number}`, body).then((r) => r.data),
     },
     quotes: {
-      list: (params = {}) => listWithFallback('/quotes', '/quotes/list', params),
-      listAll: (params = {}) => listAllWithFallback('/quotes', '/quotes/list', params),
+      list: (params = {}) => listInternal('/quotes', params),
+      listAll: (params = {}) => listAllInternal('/quotes', params),
       get: (number) => http.get(`/quotes/${number}`).then((r) => r.data),
       create: (body) => http.post('/quotes', body).then((r) => r.data),
       update: (number, body) => http.put(`/quotes/${number}`, body).then((r) => r.data),
