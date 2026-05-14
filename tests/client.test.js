@@ -52,7 +52,6 @@ describe('src/kashflow/client.js', () => {
     expect(kf).toHaveProperty('quotes');
     expect(kf).toHaveProperty('nominals');
     expect(kf).toHaveProperty('notes');
-    expect(kf).toHaveProperty('metadata');
   });
 
   it('registers a response interceptor for 401 retry', async () => {
@@ -261,20 +260,15 @@ describe('src/kashflow/client.js', () => {
     });
   });
 
-  // ── listWithFallback 404 ──────────────────────────────────────────────
+  // ── list error propagation ─────────────────────────────────────────────
 
-  describe('listWithFallback', () => {
-    it('falls back to /customers/list on 404', async () => {
+  describe('list error propagation', () => {
+    it('throws on 404 without falling back', async () => {
       const err404 = new Error('Not Found');
       err404.response = { status: 404 };
-      mockHttp.get
-        .mockRejectedValueOnce(err404) // primary fails
-        .mockResolvedValueOnce({ data: [{ Code: 'FB' }] }); // fallback
-
+      mockHttp.get.mockRejectedValueOnce(err404);
       const kf = await createClient();
-      const result = await kf.customers.list();
-      expect(result).toEqual([{ Code: 'FB' }]);
-      expect(mockHttp.get).toHaveBeenCalledTimes(2);
+      await expect(kf.customers.list()).rejects.toThrow('Not Found');
     });
 
     it('throws non-404 errors without falling back', async () => {
@@ -455,13 +449,4 @@ describe('src/kashflow/client.js', () => {
     });
   });
 
-  // ── metadata ──────────────────────────────────────────────────────────
-
-  describe('metadata', () => {
-    it('get calls GET /metadata', async () => {
-      mockHttp.get.mockResolvedValueOnce({ data: { OrganisationName: 'Test' } });
-      const kf = await createClient();
-      expect(await kf.metadata.get()).toEqual({ OrganisationName: 'Test' });
-    });
-  });
 });
