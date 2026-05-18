@@ -133,9 +133,10 @@ function createBulkUpserter(collection, batchSize = 250) {
     try {
       const filters = opsToWrite.map((op) => op?.updateOne?.filter).filter(Boolean);
       if (!filters.length) return null;
-      const existingDocs = typeof collection.lean === 'function'
-        ? await collection.find({ $or: filters }).lean()
-        : await collection.find({ $or: filters }).toArray();
+      const query = collection.find({ $or: filters });
+      const existingDocs = typeof query.lean === 'function'
+        ? await query.lean()
+        : await query.toArray();
       const docMap = new Map();
       for (const doc of existingDocs) {
         for (const f of filters) {
