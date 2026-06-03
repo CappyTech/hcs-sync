@@ -202,7 +202,7 @@ describe('Express server routes', () => {
     it('renders the login page when unauthenticated', async () => {
       const res = await supertest(app).get('/login');
       expect(res.status).toBe(200);
-      expect(res.text).toContain('Sign in');
+      expect(res.text).toContain('Log in');
     });
 
     it('redirects to next when already authenticated', async () => {

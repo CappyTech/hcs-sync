@@ -294,9 +294,9 @@ app.use(helmet({
       // 'unsafe-inline' required for existing inline event handlers and the
       // dark-mode theme script in layout.ejs.  Refactor those to remove it.
       scriptSrc: ["'self'", "'unsafe-inline'", 'https://challenges.cloudflare.com'],
-      styleSrc: ["'self'", "'unsafe-inline'"],
+      styleSrc: ["'self'", "'unsafe-inline'", 'https://cdn.jsdelivr.net'],
       imgSrc: ["'self'", 'data:'],
-      fontSrc: ["'self'"],
+      fontSrc: ["'self'", 'https://cdn.jsdelivr.net'],
       connectSrc: ["'self'"],
       objectSrc: ["'none'"],
       frameAncestors: ["'none'"],
