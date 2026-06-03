@@ -7,6 +7,7 @@ import { execSync } from 'child_process';
 import cookieParser from 'cookie-parser';
 import jwt from 'jsonwebtoken';
 import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
 import CsrfTokens from 'csrf';
 import logger from '../util/logger.js';
 import runSync from '../sync/run.js';
@@ -103,15 +104,23 @@ const APP_BUILD = (() => {
   };
 })();
 
-// Behind reverse proxies (Caddy/FRP): trust loopback and private IPv4 ranges
-// so req.secure works correctly.
-app.set('trust proxy', ['loopback', '127.0.0.1', '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16']);
+// Behind reverse proxies (Caddy/FRP): trust loopback and Docker bridge range only.
+// Avoid trusting the full private-IP space to prevent X-Forwarded-For spoofing
+// from arbitrary hosts on 10.x / 192.168.x networks.
+app.set('trust proxy', ['loopback', '172.16.0.0/12']);
 
 let lastRun = null;
 let isRunning = false;
 let lastCounts = null;
 let lastError = null;
 const logs = [];
+const LOGS_CAP = 500;
+
+// Allowlist of MongoDB collection names reachable via dashboard query params.
+// Any mongoCollection / auditCollection query value not in this set is rejected.
+const ALLOWED_MONGO_COLLECTIONS = new Set([
+  'customers', 'suppliers', 'invoices', 'quotes', 'purchases', 'projects', 'nominals', 'vatRates',
+]);
 let currentRunId = null;
 
 let cachedSettings = null;
@@ -278,8 +287,24 @@ app.use((req, res, next) => {
 });
 
 app.use(helmet({
-  // Default Helmet policy is fine here; HSTS is assumed to be handled at the edge (Caddy/Cloudflare).
-  contentSecurityPolicy: false,
+  // HSTS is handled at the edge (Caddy); CSP is enforced here.
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      // 'unsafe-inline' required for existing inline event handlers and the
+      // dark-mode theme script in layout.ejs.  Refactor those to remove it.
+      scriptSrc: ["'self'", "'unsafe-inline'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      imgSrc: ["'self'", 'data:'],
+      fontSrc: ["'self'"],
+      connectSrc: ["'self'"],
+      objectSrc: ["'none'"],
+      frameAncestors: ["'none'"],
+      baseUri: ["'self'"],
+      formAction: ["'self'"],
+    },
+  },
+  crossOriginEmbedderPolicy: false,
 }));
 
 app.use(cookieParser());
@@ -295,7 +320,9 @@ function makeRequestId() {
 const QUIET_PATHS = new Set(['/status', '/health', '/cron/health']);
 app.use((req, res, next) => {
   const startNs = process.hrtime.bigint();
-  const requestId = String(req.headers['x-request-id'] || '').trim() || makeRequestId();
+  // Sanitise the inbound request ID to prevent log injection via crafted headers.
+  const rawRequestId = String(req.headers['x-request-id'] || '').replace(/[^a-zA-Z0-9\-]/g, '').slice(0, 64);
+  const requestId = rawRequestId || makeRequestId();
 
   req.requestId = requestId;
   try {
@@ -443,6 +470,7 @@ async function triggerSync({ requestedBy }) {
 
   const recordRunLog = (level, message, meta) => {
     logs.unshift({ time: Date.now(), level, message, meta: { ...(meta || {}), runId } });
+    if (logs.length > LOGS_CAP) logs.length = LOGS_CAP;
     Promise.resolve(
       runStore.recordLog(runId, {
         level,
@@ -535,7 +563,8 @@ app.use(express.urlencoded({ extended: true }));
 // This avoids server-side sessions while still protecting POST routes.
 const csrfTokens = new CsrfTokens();
 const csrfCookieName = 'hcs_sync_csrf_secret';
-const csrfCookieSecure = String(process.env.COOKIE_SECURE || '').toLowerCase() === 'true';
+// Default to secure cookies; set COOKIE_SECURE=false only for local HTTP dev.
+const csrfCookieSecure = String(process.env.COOKIE_SECURE || 'true').toLowerCase() !== 'false';
 
 app.use((req, res, next) => {
   // Ensure a stable secret per client.
@@ -698,7 +727,12 @@ app.post('/settings/cron', async (req, res) => {
   }
 });
 
-app.post('/run', async (_req, res) => {
+// Rate limiters for expensive / state-changing endpoints.
+const syncLimiter = rateLimit({ windowMs: 60_000, max: 5, standardHeaders: true, legacyHeaders: false, message: 'Too many requests, please slow down.' });
+const pullLimiter = rateLimit({ windowMs: 60_000, max: 20, standardHeaders: true, legacyHeaders: false, message: 'Too many pull requests, please slow down.' });
+const dedupLimiter = rateLimit({ windowMs: 300_000, max: 3, standardHeaders: true, legacyHeaders: false, message: 'Too many dedup requests, please slow down.' });
+
+app.post('/run', syncLimiter, async (_req, res) => {
   if (getEffectiveCronConfig().enabled) {
     return res.status(409).send('Manual runs are disabled when CRON is enabled.');
   }
@@ -719,7 +753,7 @@ app.post('/run', async (_req, res) => {
 let dedupRunning = false;
 let lastDedupResult = null;
 
-app.post('/dedup', async (_req, res) => {
+app.post('/dedup', dedupLimiter, async (_req, res) => {
   if (!isMongoEnabled()) {
     return res.status(400).send('MongoDB is not configured.');
   }
@@ -782,12 +816,17 @@ app.get('/history/:id', (req, res) => {
     .then(async (run) => {
       if (!run) return res.status(404).send('Run not found');
 
-      const mongoCollection = String(req.query?.mongoCollection || '');
+      const mongoCollectionRaw = String(req.query?.mongoCollection || '');
+      const mongoCollection = ALLOWED_MONGO_COLLECTIONS.has(mongoCollectionRaw) ? mongoCollectionRaw : '';
       const mongoType = String(req.query?.mongoType || '');
       let mongoDocs = null;
       let mongoDocsError = null;
       let mongoDocsSource = null;
       const mongoUpsertedCount = Number(run?.summary?.mongo?.[mongoCollection]?.upserted ?? 0);
+
+      if (mongoCollectionRaw && !mongoCollection) {
+        mongoDocsError = 'Invalid collection name.';
+      }
 
       if (mongoCollection && mongoType === 'upserted') {
         const upserts = run?.summary?.mongoUpserts?.[mongoCollection] || null;
@@ -841,7 +880,8 @@ app.get('/history/:id', (req, res) => {
       // Fetch audit trail entries for this run from audit_log collection.
       let auditEntries = [];
       let auditError = null;
-      const auditCollection = String(req.query?.auditCollection || '');
+      const auditCollectionRaw = String(req.query?.auditCollection || '');
+      const auditCollection = (auditCollectionRaw && ALLOWED_MONGO_COLLECTIONS.has(auditCollectionRaw)) ? auditCollectionRaw : '';
       if (isMongoEnabled()) {
         try {
           const db = await getMongoDb();
@@ -909,7 +949,7 @@ app.get('/debug', (req, res) => {
     query: req.query || {},
   });
 });
-app.post('/debug', async (req, res) => {
+app.post('/debug', pullLimiter, async (req, res) => {
   const { entityType, entityId } = req.body || {};
   if (!entityType || entityId == null) {
     return res.status(400).json({ ok: false, message: 'entityType and entityId are required' });
@@ -922,19 +962,23 @@ app.post('/debug', async (req, res) => {
     res.status(500).json({ ok: false, message: err.message || 'Debug failed' });
   }
 });
-app.post('/pull', async (req, res) => {
+app.post('/pull', pullLimiter, async (req, res) => {
   const { entityType, entityId } = req.body || {};
   if (!entityType || entityId == null) {
     return res.status(400).json({ ok: false, message: 'entityType and entityId are required' });
   }
-  logs.unshift({ time: Date.now(), level: 'info', message: `Manual pull started: ${entityType} ${entityId}`, meta: { entityType, entityId } });
+  const pushLog = (entry) => {
+    logs.unshift(entry);
+    if (logs.length > LOGS_CAP) logs.length = LOGS_CAP;
+  };
+  pushLog({ time: Date.now(), level: 'info', message: `Manual pull started: ${entityType} ${entityId}`, meta: { entityType, entityId } });
   try {
     const result = await pullSingleEntity(entityType, entityId);
-    logs.unshift({ time: Date.now(), level: 'success', message: `Manual pull complete: ${entityType} ${entityId} — ${result.action}`, meta: { entityType, entityId, action: result.action, debug: result.debug } });
+    pushLog({ time: Date.now(), level: 'success', message: `Manual pull complete: ${entityType} ${entityId} — ${result.action}`, meta: { entityType, entityId, action: result.action, debug: result.debug } });
     res.json(result);
   } catch (err) {
     logger.error({ entityType, entityId, err: err.message }, 'Manual pull failed');
-    logs.unshift({ time: Date.now(), level: 'error', message: `Manual pull failed: ${entityType} ${entityId} — ${err.message}`, meta: { entityType, entityId, error: err.message } });
+    pushLog({ time: Date.now(), level: 'error', message: `Manual pull failed: ${entityType} ${entityId} — ${err.message}`, meta: { entityType, entityId, error: err.message } });
     res.status(500).json({ ok: false, message: err.message || 'Pull failed' });
   }
 });
