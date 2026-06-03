@@ -252,7 +252,7 @@ describe('Express server routes', () => {
         .set('Cookie', `hcs_sso=${sso}`);
 
       expect(res.status).toBe(200);
-      expect(res.text).toContain('Synchronisation');
+      expect(res.text).toContain('Dashboard');
     });
   });
 

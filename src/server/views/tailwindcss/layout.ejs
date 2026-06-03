@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>
+    <%= typeof title !== 'undefined' ? title : 'HCS Sync' %>
+  </title>
+
+  <!-- CSRF token for fetch/AJAX calls -->
+  <meta name="csrf-token" content="<%= typeof csrfToken !== 'undefined' ? csrfToken : '' %>">
+
+  <!-- Prevent theme flash: set initial theme class before CSS loads -->
+  <script>
+    (function () {
+      try {
+        var stored = localStorage.getItem('theme');
+        var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+        var enableDark = stored ? (stored === 'dark') : prefersDark;
+        var root = document.documentElement;
+        if (enableDark) {
+          root.classList.add('dark');
+        } else {
+          root.classList.remove('dark');
+        }
+      } catch (e) {
+        // noop
+      }
+    })();
+  </script>
+  <style>
+    /* Base background to avoid white flash before Tailwind loads */
+    html { background-color: #f9fafb; }
+    html.dark { background-color: #111827; }
+
+    /* Global, consistent scrollbars (light and dark) */
+    /* Firefox */
+    * { scrollbar-width: thin; scrollbar-color: #9ca3af transparent; }
+    html.dark * { scrollbar-color: #4b5563 transparent; }
+    /* WebKit/Blink */
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background-color: #9ca3af; border-radius: 9999px; }
+    html.dark ::-webkit-scrollbar-thumb { background-color: #4b5563; }
+    ::-webkit-scrollbar-thumb:hover { background-color: #6b7280; }
+  </style>
+
+  <!-- Compiled Tailwind CSS -->
+  <link rel="stylesheet" href="/static/styles.css">
+
+  <!-- Bootstrap Icons -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css" rel="stylesheet">
+</head>
+
+<body class="bg-gray-50 text-gray-900 dark:bg-gray-900 dark:text-gray-100 min-h-screen flex flex-col">
+
+  <% if (user) { %>
+    <!-- Top Nav -->
+    <nav class="fixed top-0 w-full bg-white/80 dark:bg-gray-800/80 backdrop-blur-md border-b border-gray-200 dark:border-gray-700 shadow-sm z-50 print:hidden">
+      <div class="max-w-7xl mx-auto flex items-center justify-center gap-1 sm:gap-2 px-2 py-2 overflow-x-auto">
+        <% const _navCls = (href) => navActive(href)
+             ? 'text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/30 font-medium'
+             : 'text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 hover:text-blue-600 dark:hover:text-blue-400'; %>
+        <a href="/" class="inline-flex flex-col items-center gap-0.5 px-2 py-1 rounded-lg text-xs transition <%= _navCls('/') %>">
+          <i class="bi bi-house text-base"></i>
+          <span class="hidden sm:inline">Dashboard</span>
+        </a>
+        <a href="/history" class="inline-flex flex-col items-center gap-0.5 px-2 py-1 rounded-lg text-xs transition <%= _navCls('/history') %>">
+          <i class="bi bi-clock-history text-base"></i>
+          <span class="hidden sm:inline">History</span>
+        </a>
+        <a href="/logs" class="inline-flex flex-col items-center gap-0.5 px-2 py-1 rounded-lg text-xs transition <%= _navCls('/logs') %>">
+          <i class="bi bi-journal-text text-base"></i>
+          <span class="hidden sm:inline">Logs</span>
+        </a>
+        <a href="/settings" class="inline-flex flex-col items-center gap-0.5 px-2 py-1 rounded-lg text-xs transition <%= _navCls('/settings') %>">
+          <i class="bi bi-gear text-base"></i>
+          <span class="hidden sm:inline">Settings</span>
+        </a>
+        <a href="/debug" class="inline-flex flex-col items-center gap-0.5 px-2 py-1 rounded-lg text-xs transition <%= _navCls('/debug') %>">
+          <i class="bi bi-bug text-base"></i>
+          <span class="hidden sm:inline">Debug</span>
+        </a>
+        <a href="/logout" class="inline-flex flex-col items-center gap-0.5 px-2 py-1 rounded-lg text-xs transition text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 hover:text-blue-600 dark:hover:text-blue-400">
+          <i class="bi bi-box-arrow-right text-base"></i>
+          <span class="hidden sm:inline">Logout</span>
+        </a>
+        <button id="theme-toggle" class="inline-flex flex-col items-center gap-0.5 px-2 py-1 rounded-lg text-xs text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 hover:text-blue-600 dark:hover:text-blue-400 transition cursor-pointer">
+          <i id="theme-icon" class="bi bi-moon-stars text-base"></i>
+          <span class="hidden sm:inline">Theme</span>
+        </button>
+      </div>
+    </nav>
+  <% } %>
+
+  <main id="main-content" class="flex-grow w-full pt-16 pb-6 px-4 sm:px-6 lg:px-8">
+    <%- include('./partials/successAlert.ejs') %>
+    <%- include('./partials/errorAlert.ejs') %>
+    <%- include(content, locals) %>
+  </main>
+  <br>
+
+  <% if (user) { %>
+    <!-- Footer -->
+    <div class="w-full print:hidden">
+      <%- include('./partials/footer.ejs') %>
+    </div>
+  <% } else { %>
+    <!-- Bottom Nav (unauthenticated) -->
+    <nav class="fixed bottom-0 w-full bg-white/80 dark:bg-gray-800/80 backdrop-blur-md border-t border-gray-200 dark:border-gray-700 z-50 print:hidden">
+      <div class="max-w-7xl mx-auto flex items-center justify-center px-2 py-1.5">
+        <button id="theme-toggle" class="inline-flex flex-col items-center gap-0.5 px-2 py-1 rounded-lg text-xs text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 hover:text-blue-600 dark:hover:text-blue-400 transition cursor-pointer">
+          <i id="theme-icon" class="bi bi-moon-stars text-base"></i>
+          <span>Theme</span>
+        </button>
+      </div>
+      <%- include('./partials/footer.ejs') %>
+    </nav>
+  <% } %>
+
+  <!-- Flowbite (accordions, dropdowns, etc.) -->
+  <script src="/static/vendor/flowbite/flowbite.min.js"></script>
+  <!-- Theme toggle -->
+  <script src="/static/js/theme-toggle.js" defer></script>
+  <!-- Global UI helpers: data-confirm, data-dismiss-target, data-modal-open/close, data-submit-once -->
+  <script src="/static/js/ui-helpers.js" defer></script>
+  <!-- App JS (modals, toasts) -->
+  <script src="/static/app.js"></script>
+
+</body>
+
+</html>

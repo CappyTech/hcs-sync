@@ -229,8 +229,10 @@ function warnIfMongoPointsToLocalhost() {
   }
 }
 
-// Make cron config available to templates.
+// Make cron config and nav helpers available to templates.
 app.use((req, res, next) => {
+  res.locals.navActive = (href) =>
+    req.path === href || (href !== '/' && req.path.startsWith(href));
   res.locals.cronConfig = getEffectiveCronConfig();
   res.locals.query = req.query || {};
   res.locals.appBuild = APP_BUILD;
@@ -558,7 +560,7 @@ async function triggerSync({ requestedBy }) {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 app.set('view engine', 'ejs');
-app.set('views', path.join(__dirname, 'views'));
+app.set('views', path.join(__dirname, 'views/tailwindcss'));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 

@@ -2,5 +2,13 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Custom tweaks if needed */
+/* Custom brand colors */
+@layer base {
+  :root {
+    --brand: #1d4ed8;
+    --brand-light: #3b82f6;
+    --brand-dark: #1e40af;
+  }
+}
+
 @import "flowbite";
