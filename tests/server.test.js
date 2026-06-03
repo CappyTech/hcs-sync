@@ -9,6 +9,7 @@ import CsrfTokens from 'csrf';
 
 process.env.PORT = '0';               // random port so tests don't clash
 process.env.HCS_SSO_JWT_SECRET = 'test-server-jwt-secret';
+process.env.SKIP_TURNSTILE = 'true';  // disable CAPTCHA in tests
 
 // ---------------------------------------------------------------------------
 // Mocks – hoisted before imports

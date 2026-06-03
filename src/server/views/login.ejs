@@ -4,6 +4,7 @@
     <meta charset="utf-8" />
     <title>Sign In — HCS Sync</title>
     <link rel="stylesheet" href="/static/styles.css" />
+    <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
     <script>
       if (localStorage.getItem('color-theme') === 'dark' || (!('color-theme' in localStorage) && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
         document.documentElement.classList.add('dark');
@@ -19,6 +20,12 @@
           <h1 class="text-2xl font-bold text-gray-900 dark:text-white">HCS Sync</h1>
           <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">Sign in to continue</p>
         </div>
+
+        <% if (skipTurnstile) { %>
+        <div class="mb-4 p-3 rounded-xl bg-amber-50 dark:bg-amber-900/30 text-amber-800 dark:text-amber-300 text-sm border border-amber-200 dark:border-amber-800">
+          CAPTCHA bypass is active (SKIP_TURNSTILE=true). Do not enable this in production.
+        </div>
+        <% } %>
 
         <% if (error) { %>
         <div class="mb-4 p-3 rounded-lg bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 text-sm text-red-700 dark:text-red-400" role="alert">
@@ -60,6 +67,15 @@
               placeholder="••••••••"
             />
           </div>
+
+          <!-- Turnstile -->
+          <% if (skipTurnstile) { %>
+          <input type="hidden" name="cf-turnstile-response" value="bypassed" />
+          <% } else if (siteKey) { %>
+          <div>
+            <div class="cf-turnstile" data-sitekey="<%= siteKey %>"></div>
+          </div>
+          <% } %>
 
           <button
             type="submit"

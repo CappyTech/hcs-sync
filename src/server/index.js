@@ -293,13 +293,14 @@ app.use(helmet({
       defaultSrc: ["'self'"],
       // 'unsafe-inline' required for existing inline event handlers and the
       // dark-mode theme script in layout.ejs.  Refactor those to remove it.
-      scriptSrc: ["'self'", "'unsafe-inline'"],
+      scriptSrc: ["'self'", "'unsafe-inline'", 'https://challenges.cloudflare.com'],
       styleSrc: ["'self'", "'unsafe-inline'"],
       imgSrc: ["'self'", 'data:'],
       fontSrc: ["'self'"],
       connectSrc: ["'self'"],
       objectSrc: ["'none'"],
       frameAncestors: ["'none'"],
+      frameSrc: ["'self'", 'https://challenges.cloudflare.com'],
       baseUri: ["'self'"],
       formAction: ["'self'"],
     },
@@ -745,13 +746,46 @@ app.get('/login', (req, res) => {
   }
   const next = sanitiseNext(req.query.next);
   const error = typeof req.query.error === 'string' ? req.query.error : null;
-  res.render('login', { next, error, csrfToken: res.locals.csrfToken });
+  const skipTurnstile = process.env.SKIP_TURNSTILE === 'true';
+  const siteKey = String(process.env.TURNSTILE_SITE_KEY || '');
+  res.render('login', { next, error, csrfToken: res.locals.csrfToken, skipTurnstile, siteKey });
 });
 
 app.post('/login', loginLimiter, async (req, res) => {
   const next = sanitiseNext(req.body?.next);
   const username = String(req.body?.username || '').trim();
   const password = String(req.body?.password || '');
+  const skipTurnstile = process.env.SKIP_TURNSTILE === 'true';
+
+  // Turnstile verification
+  if (!skipTurnstile) {
+    const tsToken = String(req.body?.['cf-turnstile-response'] || '');
+    const tsSecret = String(process.env.TURNSTILE_SECRET_KEY || '');
+    if (!tsToken || !tsSecret) {
+      return res.redirect(`/login?next=${encodeURIComponent(next)}&error=${encodeURIComponent('CAPTCHA token missing.')}`);
+    }
+    try {
+      const ip = req.headers['x-forwarded-for']
+        ? String(req.headers['x-forwarded-for']).split(',')[0].trim()
+        : req.socket?.remoteAddress || '';
+      const tsRes = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ secret: tsSecret, response: tsToken, remoteip: ip }),
+        signal: AbortSignal.timeout(10_000),
+      });
+      const tsData = await tsRes.json();
+      if (!tsData.success) {
+        logger.info('[login] CAPTCHA verification failed');
+        return res.redirect(`/login?next=${encodeURIComponent(next)}&error=${encodeURIComponent('CAPTCHA verification failed.')}`);
+      }
+    } catch (err) {
+      logger.error('[login] Turnstile check error: %s', err.message);
+      return res.redirect(`/login?next=${encodeURIComponent(next)}&error=${encodeURIComponent('CAPTCHA check failed. Please try again.')}`);
+    }
+  } else {
+    logger.info('[login] CAPTCHA bypass active (SKIP_TURNSTILE=true)');
+  }
 
   if (!username || !password) {
     return res.redirect(`/login?next=${encodeURIComponent(next)}&error=${encodeURIComponent('Username and password are required.')}`);
