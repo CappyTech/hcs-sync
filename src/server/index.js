@@ -391,6 +391,7 @@ app.use((req, res, next) => {
 
 function buildLoginRedirect(req) {
   const returnTo = req.originalUrl || req.url || '/';
+  if (returnTo === '/') return '/login';
   return `/login?next=${encodeURIComponent(returnTo)}`;
 }
 
