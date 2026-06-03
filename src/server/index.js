@@ -388,16 +388,16 @@ app.use((req, res, next) => {
   next();
 });
 
-function getFullUrl(req) {
-  const proto = req.headers['x-forwarded-proto'] ? String(req.headers['x-forwarded-proto']).split(',')[0].trim() : req.protocol;
-  const host = req.headers['x-forwarded-host'] ? String(req.headers['x-forwarded-host']).split(',')[0].trim() : req.get('host');
-  return `${proto}://${host}${req.originalUrl || req.url || '/'}`;
+function buildLoginRedirect(req) {
+  const returnTo = req.originalUrl || req.url || '/';
+  return `/login?next=${encodeURIComponent(returnTo)}`;
 }
 
-function buildSsoRedirect(req) {
-  const base = String(process.env.HCS_APP_BASE_URL || 'https://app.heroncs.co.uk').replace(/\/$/, '');
-  const returnTo = getFullUrl(req);
-  return `${base}/sso/hcs-sync?return_to=${encodeURIComponent(returnTo)}`;
+// Only allow relative paths for the post-login redirect to prevent open redirects.
+function sanitiseNext(raw) {
+  const v = String(raw || '/').trim();
+  if (v.startsWith('/') && !v.startsWith('//')) return v;
+  return '/';
 }
 
 function verifySsoCookie(req) {
@@ -418,16 +418,17 @@ function verifySsoCookie(req) {
   }
 }
 
-// Auth guard: require valid SSO cookie for all non-health endpoints.
+// Auth guard: require valid SSO cookie for all non-health/login endpoints.
 app.use((req, res, next) => {
   const p = req.path || '';
   if (p === '/health' || p === '/cron/health') return next();
   if (p === '/favicon.ico' || p === '/robots.txt') return next();
   if (p === '/static' || p.startsWith('/static/')) return next();
+  if (p === '/login') return next();
 
   const user = verifySsoCookie(req);
   if (!user) {
-    return res.redirect(buildSsoRedirect(req));
+    return res.redirect(buildLoginRedirect(req));
   }
 
   req.user = user;
@@ -728,9 +729,82 @@ app.post('/settings/cron', async (req, res) => {
 });
 
 // Rate limiters for expensive / state-changing endpoints.
+const loginLimiter = rateLimit({ windowMs: 15 * 60_000, max: 20, standardHeaders: true, legacyHeaders: false, message: 'Too many login attempts, please try again later.' });
 const syncLimiter = rateLimit({ windowMs: 60_000, max: 5, standardHeaders: true, legacyHeaders: false, message: 'Too many requests, please slow down.' });
 const pullLimiter = rateLimit({ windowMs: 60_000, max: 20, standardHeaders: true, legacyHeaders: false, message: 'Too many pull requests, please slow down.' });
 const dedupLimiter = rateLimit({ windowMs: 300_000, max: 3, standardHeaders: true, legacyHeaders: false, message: 'Too many dedup requests, please slow down.' });
+
+// ── Login routes (unauthenticated) ────────────────────────────────────────────
+
+app.get('/login', (req, res) => {
+  // If already authenticated, redirect to next or dashboard.
+  const user = verifySsoCookie(req);
+  if (user) {
+    const safeNext = sanitiseNext(req.query.next);
+    return res.redirect(safeNext);
+  }
+  const next = sanitiseNext(req.query.next);
+  const error = typeof req.query.error === 'string' ? req.query.error : null;
+  res.render('login', { next, error, csrfToken: res.locals.csrfToken });
+});
+
+app.post('/login', loginLimiter, async (req, res) => {
+  const next = sanitiseNext(req.body?.next);
+  const username = String(req.body?.username || '').trim();
+  const password = String(req.body?.password || '');
+
+  if (!username || !password) {
+    return res.redirect(`/login?next=${encodeURIComponent(next)}&error=${encodeURIComponent('Username and password are required.')}`);
+  }
+
+  const appBase = String(process.env.HCS_APP_BASE_URL || 'https://app.heroncs.co.uk').replace(/\/$/, '');
+  const apiKey = String(process.env.HCS_SYNC_API_KEY || '');
+  if (!apiKey) {
+    logger.error('[login] HCS_SYNC_API_KEY is not set — cannot validate credentials');
+    return res.redirect(`/login?next=${encodeURIComponent(next)}&error=${encodeURIComponent('Login service is not configured.')}`);
+  }
+
+  let tokenData;
+  try {
+    const response = await fetch(`${appBase}/api/sso/token`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Sync-Api-Key': apiKey,
+      },
+      body: JSON.stringify({ username, password }),
+      signal: AbortSignal.timeout(10_000),
+    });
+
+    if (response.status === 401) {
+      return res.redirect(`/login?next=${encodeURIComponent(next)}&error=${encodeURIComponent('Invalid username or password.')}`);
+    }
+    if (!response.ok) {
+      logger.warn('[login] Unexpected status %d from hcs-app token endpoint', response.status);
+      return res.redirect(`/login?next=${encodeURIComponent(next)}&error=${encodeURIComponent('Login service unavailable. Please try again.')}`);
+    }
+
+    tokenData = await response.json();
+  } catch (err) {
+    logger.error('[login] Failed to reach hcs-app token endpoint: %s', err.message);
+    return res.redirect(`/login?next=${encodeURIComponent(next)}&error=${encodeURIComponent('Could not reach login service. Please try again.')}`);
+  }
+
+  const ttlSec = Number(tokenData.expiresIn || 60 * 60 * 8);
+  const cookieSecure = String(process.env.COOKIE_SECURE || 'true').toLowerCase() !== 'false';
+
+  res.cookie('hcs_sso', tokenData.token, {
+    httpOnly: true,
+    secure: cookieSecure,
+    sameSite: 'lax',
+    path: '/',
+    maxAge: ttlSec * 1000,
+  });
+
+  return res.redirect(next);
+});
+
+
 
 app.post('/run', syncLimiter, async (_req, res) => {
   if (getEffectiveCronConfig().enabled) {

@@ -182,10 +182,10 @@ describe('Express server routes', () => {
   // ── Auth redirect behaviour ────────────────────────────────────────────
 
   describe('SSO auth guard', () => {
-    it('redirects unauthenticated requests to SSO login', async () => {
+    it('redirects unauthenticated requests to /login', async () => {
       const res = await supertest(app).get('/');
       expect(res.status).toBe(302);
-      expect(res.headers.location).toMatch(/\/sso\/hcs-sync/);
+      expect(res.headers.location).toMatch(/^\/login/);
     });
 
     it('allows access with a valid SSO cookie', async () => {
@@ -194,6 +194,23 @@ describe('Express server routes', () => {
         .get('/status')
         .set('Cookie', `hcs_sso=${sso}`);
       expect(res.status).toBe(200);
+    });
+  });
+
+  describe('GET /login', () => {
+    it('renders the login page when unauthenticated', async () => {
+      const res = await supertest(app).get('/login');
+      expect(res.status).toBe(200);
+      expect(res.text).toContain('Sign in');
+    });
+
+    it('redirects to next when already authenticated', async () => {
+      const sso = makeSsoToken();
+      const res = await supertest(app)
+        .get('/login?next=/')
+        .set('Cookie', `hcs_sso=${sso}`);
+      expect(res.status).toBe(302);
+      expect(res.headers.location).toBe('/');
     });
   });
 
