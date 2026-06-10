@@ -114,7 +114,7 @@ export async function pullSingleEntity(entityType, entityId) {
       kashflowLineItems: Array.isArray(full.LineItems) ? full.LineItems.length : 0,
       kashflowPaymentLines: Array.isArray(full.PaymentLines) ? full.PaymentLines.length : 0,
       kashflowGrossAmount: full.GrossAmount ?? null,
-      setFields: Object.keys(update.$set).sort(),
+      setFields: Object.keys(update[0].$set).sort(),
       afterLineItems,
       afterPaymentLines,
       afterGrossAmount: after?.GrossAmount ?? null,
