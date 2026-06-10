@@ -849,7 +849,11 @@ app.post('/login', loginLimiter, async (req, res) => {
   return res.redirect(next);
 });
 
-
+app.get('/logout', (req, res) => {
+  const cookieSecure = String(process.env.COOKIE_SECURE || 'true').toLowerCase() !== 'false';
+  res.clearCookie('hcs_sso', { httpOnly: true, secure: cookieSecure, sameSite: 'lax', path: '/' });
+  return res.redirect('/login');
+});
 
 app.post('/run', syncLimiter, async (_req, res) => {
   if (getEffectiveCronConfig().enabled) {

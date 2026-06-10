@@ -2,6 +2,11 @@
 
 All notable changes to hcs-sync will be documented here. Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [0.2.8] - 2026-06-10
+
+### Fixed
+- Added missing `GET /logout` route — clears the `hcs_sso` cookie and redirects to `/login`.
+
 ## [0.2.7] - 2026-06-10
 
 ### Changed
