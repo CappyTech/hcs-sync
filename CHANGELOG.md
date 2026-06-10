@@ -2,6 +2,11 @@
 
 All notable changes to hcs-sync will be documented here. Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [0.3.0] - 2026-06-10
+
+### Changed
+- Footer: aligned with hcs-app structure — added VAT number, copyright year range (2024–present), Privacy/Cookies/Terms links (pointing to `app.heroncs.co.uk/legal/...`). Blue link colour retained.
+
 ## [0.2.9] - 2026-06-10
 
 ### Fixed
