@@ -2,6 +2,11 @@
 
 All notable changes to hcs-sync will be documented here. Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [0.2.9] - 2026-06-10
+
+### Fixed
+- Increased `<main>` top padding from `pt-16` (64px) to `pt-20` (80px) so the fixed navbar no longer overlaps page content.
+
 ## [0.2.8] - 2026-06-10
 
 ### Fixed
