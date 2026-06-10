@@ -299,10 +299,11 @@ app.use(helmet({
     directives: {
       defaultSrc: ["'self'"],
       scriptSrc: ["'self'", (_req, res) => `'nonce-${res.locals.cspNonce}'`, 'https://challenges.cloudflare.com'],
-      styleSrc: ["'self'", (_req, res) => `'nonce-${res.locals.cspNonce}'`, 'https://cdn.jsdelivr.net'],
-      imgSrc: ["'self'", 'data:'],
+      styleSrc: ["'self'", "'unsafe-inline'", (_req, res) => `'nonce-${res.locals.cspNonce}'`, 'https://cdn.jsdelivr.net'],
+      imgSrc: ["'self'", 'data:', 'https://app.heroncs.co.uk'],
       fontSrc: ["'self'", 'https://cdn.jsdelivr.net'],
       connectSrc: ["'self'"],
+      manifestSrc: ["'self'", 'https://app.heroncs.co.uk'],
       objectSrc: ["'none'"],
       frameAncestors: ["'none'"],
       frameSrc: ["'self'", 'https://challenges.cloudflare.com'],

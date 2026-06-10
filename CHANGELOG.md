@@ -2,6 +2,12 @@
 
 All notable changes to hcs-sync will be documented here. Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [0.3.2] - 2026-06-10
+
+### Fixed
+- CSP: added `https://app.heroncs.co.uk` to `imgSrc` and `manifestSrc` — fixes blocked favicon, logo image, and manifest load from hcs-app.
+- CSP: added `'unsafe-inline'` to `styleSrc` — fixes blocked inline `style=` attribute on progress bars (nonces do not apply to style attributes).
+
 ## [0.3.1] - 2026-06-10
 
 ### Changed
