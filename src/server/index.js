@@ -440,6 +440,7 @@ app.use((req, res, next) => {
 
   req.user = user;
   res.locals.user = user;
+  res.locals.isAuthenticated = true;
   next();
 });
 
@@ -629,9 +630,6 @@ app.use('/static', express.static(path.join(__dirname, 'public'), {
     res.set('Cache-Control', 'no-store');
   },
 }));
-// Serve Flowbite JS from node_modules
-app.use('/static/vendor/flowbite', express.static(path.join(__dirname, '../../node_modules/flowbite/dist')));
-
 app.get('/health', (_req, res) => {
   const eff = getEffectiveCronConfig();
   const cronHealth = getCronHealth({

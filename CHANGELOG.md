@@ -2,6 +2,29 @@
 
 All notable changes to hcs-sync will be documented here. Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [0.2.7] - 2026-06-10
+
+### Changed
+- Layout: replaced `user` check with `isAuthenticated` in `layout.ejs` (top nav + footer conditions) — matches hcs-app pattern.
+- Server: `res.locals.isAuthenticated = true` now set in the auth middleware alongside `res.locals.user`.
+
+### Removed
+- Deleted legacy view tree (`src/server/views/history.ejs`, `index.ejs`, `layout.ejs`, `login.ejs`, `logs.ejs`, `run.ejs`, `pages/`, `partials/`) — the views engine has pointed to `views/tailwindcss/` for all routes; these files were unreachable dead code.
+
+## [0.2.6] - 2026-06-10
+
+### Changed
+- CI: added `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true` env — opts into Node.js 24 for all actions ahead of the June 16th deadline.
+- CI: added `timeout-minutes: 40` to prevent runaway jobs.
+- CI: renamed job from `build-and-push` to `build`.
+- CI: added `npm audit --omit=dev --audit-level=high` step (3-min timeout).
+- CI: removed `setup-qemu-action` and dropped `linux/arm64` platform — amd64 only, matching hcs-app and halving Docker build time.
+
+## [0.2.5] - 2026-06-10
+
+### Removed
+- Flowbite dependency — the active tailwindcss layout never used Flowbite JS (modals already handled by custom `openModal`/`closeModal` in `app.js`). Removed from `package.json`, `tailwind.config.js` content/plugins, the static route in `index.js`, and the `<script>` tag in `layout.ejs`.
+
 ## [0.2.4] - 2026-06-10
 
 ### Fixed

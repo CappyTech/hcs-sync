@@ -64,7 +64,7 @@
 
 ## UI conventions (keep consistent)
 - EJS renders `layout.ejs` and includes a page via `content: 'pages/...'`.
-- Uses Tailwind + Flowbite (Flowbite JS served from `node_modules` at `/static/vendor/flowbite`).
+- Uses Tailwind CSS (no Flowbite). Modals use custom `openModal`/`closeModal` helpers in `src/server/public/app.js`.
 - Tailwind config: see `tailwind.config.js` (includes a safelist for dynamic toast/progress classes).
 
 ## When changing sync behavior

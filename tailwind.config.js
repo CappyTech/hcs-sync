@@ -1,7 +1,6 @@
 /* eslint-disable */
 const forms = require('@tailwindcss/forms');
 const typography = require('@tailwindcss/typography');
-const flowbitePlugin = require('flowbite/plugin');
 
 const staticSafelist = [
   // Progress bar color variants
@@ -31,7 +30,6 @@ module.exports = {
     './src/server/views/**/*.ejs',
     './src/server/public/**/*.js',
     './src/**/*.js',
-    './node_modules/flowbite/**/*.js',
   ],
   safelist: Array.from(new Set([...(staticSafelist || []), ...(generatedSafelist || [])])),
   theme: {
@@ -45,5 +43,5 @@ module.exports = {
       },
     },
   },
-  plugins: [forms, typography, flowbitePlugin],
+  plugins: [forms, typography],
 };

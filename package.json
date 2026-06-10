@@ -1,6 +1,6 @@
 {
   "name": "hcs-sync",
-  "version": "0.2.4",
+  "version": "0.2.7",
   "description": "Backend-only KashFlow admin sync in Node.js",
   "type": "module",
   "private": true,
@@ -40,7 +40,6 @@
     "ejs": "^3.1.10",
     "express": "^4.19.2",
     "express-rate-limit": "^8.5.2",
-    "flowbite": "^4.0.1",
     "helmet": "^7.2.0",
     "jsonwebtoken": "^9.0.2",
     "mongodb": "^6.19.0",

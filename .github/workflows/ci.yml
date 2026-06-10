@@ -11,10 +11,14 @@ permissions:
   contents: read
   packages: write
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
-  build-and-push:
+  build:
     name: Build & Publish
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
 
@@ -24,6 +28,11 @@ jobs:
           cache: npm
 
       - run: npm ci --no-audit --no-fund
+
+      - name: Security audit (prod deps)
+        timeout-minutes: 3
+        run: npm audit --omit=dev --audit-level=high
+
       - run: npm test
 
       - name: Derive tags
@@ -39,7 +48,6 @@ jobs:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
 
       - name: Build and push
@@ -47,7 +55,7 @@ jobs:
         with:
           context: .
           push: true
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
           tags: |
             ${{ env.IMAGE }}:${{ env.EXTRA_TAG }}
             ${{ env.IMAGE }}:sha-${{ env.SHORT_SHA }}
