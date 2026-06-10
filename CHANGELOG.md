@@ -2,6 +2,11 @@
 
 All notable changes to hcs-sync will be documented here. Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [0.3.1] - 2026-06-10
+
+### Changed
+- Footer: added HCS logo image (sourced from `app.heroncs.co.uk`) alongside the company name.
+
 ## [0.3.0] - 2026-06-10
 
 ### Changed
