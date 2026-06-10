@@ -134,7 +134,7 @@ const JWT_SECRET = 'test-server-jwt-secret';
 
 function makeSsoToken(payload = {}) {
   return jwt.sign(
-    { sub: 'test-user', email: 'test@example.com', ...payload },
+    { sub: 'test-user', email: 'test@example.com', role: 'admin', ...payload },
     JWT_SECRET,
     { audience: 'hcs-sync', issuer: 'hcs-app', expiresIn: '1h' }
   );
@@ -265,6 +265,16 @@ describe('Express server routes', () => {
 
       expect(res.status).toBe(200);
       expect(res.text).toContain('History');
+    });
+
+    it('returns 403 for authenticated non-admin users', async () => {
+      const sso = makeSsoToken({ role: 'viewer' });
+      const res = await supertest(app)
+        .get('/history')
+        .set('Cookie', `hcs_sso=${sso}`);
+
+      expect(res.status).toBe(403);
+      expect(res.text).toContain('admin access required');
     });
   });
 
