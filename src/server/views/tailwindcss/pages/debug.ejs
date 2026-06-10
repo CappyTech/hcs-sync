@@ -74,7 +74,7 @@
 
 </div>
 
-<script>
+<script nonce="<%= locals.cspNonce %>">
 (function () {
   const csrfToken = (document.querySelector('meta[name="csrf-token"]') || {}).content || '';
   const btnDebug = document.getElementById('btn-debug');

@@ -12,7 +12,7 @@
   <meta name="csrf-token" content="<%= typeof csrfToken !== 'undefined' ? csrfToken : '' %>">
 
   <!-- Prevent theme flash: set initial theme class before CSS loads -->
-  <script>
+  <script nonce="<%= locals.cspNonce %>">
     (function () {
       try {
         var stored = localStorage.getItem('theme');
@@ -29,7 +29,7 @@
       }
     })();
   </script>
-  <style>
+  <style nonce="<%= locals.cspNonce %>">
     /* Base background to avoid white flash before Tailwind loads */
     html { background-color: #f9fafb; }
     html.dark { background-color: #111827; }

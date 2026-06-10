@@ -21,7 +21,7 @@
     </div>
   <% }); %>
 
-  <script>
+  <script nonce="<%= locals.cspNonce %>">
     window.addEventListener('load', function () {
       document.querySelectorAll('[id^="successToast"]').forEach(toast => {
         setTimeout(() => { toast.remove(); }, 4000);

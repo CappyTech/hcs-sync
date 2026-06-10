@@ -9,7 +9,7 @@
     <% if (!skipTurnstile) { %>
     <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
     <% } %>
-    <script>
+    <script nonce="<%= locals.cspNonce %>">
       (function () {
         try {
           var stored = localStorage.getItem('theme');
@@ -23,7 +23,7 @@
         } catch (e) {}
       })();
     </script>
-    <style>
+    <style nonce="<%= locals.cspNonce %>">
       html { background-color: #f9fafb; }
       html.dark { background-color: #111827; }
     </style>

@@ -288,15 +288,18 @@ app.use((req, res, next) => {
   next();
 });
 
+app.use((_req, res, next) => {
+  res.locals.cspNonce = crypto.randomBytes(16).toString('base64');
+  next();
+});
+
 app.use(helmet({
   // HSTS is handled at the edge (Caddy); CSP is enforced here.
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
-      // 'unsafe-inline' required for existing inline event handlers and the
-      // dark-mode theme script in layout.ejs.  Refactor those to remove it.
-      scriptSrc: ["'self'", "'unsafe-inline'", 'https://challenges.cloudflare.com'],
-      styleSrc: ["'self'", "'unsafe-inline'", 'https://cdn.jsdelivr.net'],
+      scriptSrc: ["'self'", (_req, res) => `'nonce-${res.locals.cspNonce}'`, 'https://challenges.cloudflare.com'],
+      styleSrc: ["'self'", (_req, res) => `'nonce-${res.locals.cspNonce}'`, 'https://cdn.jsdelivr.net'],
       imgSrc: ["'self'", 'data:'],
       fontSrc: ["'self'", 'https://cdn.jsdelivr.net'],
       connectSrc: ["'self'"],
@@ -439,6 +442,13 @@ app.use((req, res, next) => {
   res.locals.user = user;
   next();
 });
+
+function requireAdmin(req, res, next) {
+  if (req.user?.role !== 'admin') {
+    return res.status(403).send('Forbidden: admin access required');
+  }
+  next();
+}
 
 async function triggerSync({ requestedBy }) {
   if (isRunning) {
@@ -910,7 +920,7 @@ app.get('/dedup/status', (_req, res) => {
 });
 
 // History pages
-app.get('/history', (_req, res) => {
+app.get('/history', requireAdmin, (_req, res) => {
   runStore
     .listRuns()
     .then((runs) => {
@@ -921,7 +931,7 @@ app.get('/history', (_req, res) => {
       res.status(500).send(msg);
     });
 });
-app.get('/history/:id', (req, res) => {
+app.get('/history/:id', requireAdmin, (req, res) => {
   runStore
     .getRun(req.params.id)
     .then(async (run) => {
@@ -1034,7 +1044,7 @@ app.get('/history/:id', (req, res) => {
     });
 });
 // Revert and manual pull endpoints (no DB writes yet)
-app.post('/history/:id/revert/:changeId', (req, res) => {
+app.post('/history/:id/revert/:changeId', requireAdmin, (req, res) => {
   const note = req.body?.note || '';
   runStore
     .revertChange(req.params.id, req.params.changeId, note)
