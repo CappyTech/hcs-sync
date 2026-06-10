@@ -1,0 +1,25 @@
+{
+  "name": "HCS Sync",
+  "short_name": "HCS Sync",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#818181",
+  "theme_color": "#4e4e4e",
+  "icons": [
+    {
+      "src": "https://app.heroncs.co.uk/resources/images/HCS-Logo-v4-Icon32.png",
+      "sizes": "32x32",
+      "type": "image/png"
+    },
+    {
+      "src": "https://app.heroncs.co.uk/resources/images/HCS-Logo-v4-Icon64.png",
+      "sizes": "64x64",
+      "type": "image/png"
+    },
+    {
+      "src": "https://app.heroncs.co.uk/resources/images/HCS-Logo-v4-Icon256.png",
+      "sizes": "256x256",
+      "type": "image/png"
+    }
+  ]
+}

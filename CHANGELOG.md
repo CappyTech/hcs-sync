@@ -2,6 +2,15 @@
 
 All notable changes to hcs-sync will be documented here. Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [0.3.3] - 2026-06-10
+
+### Added
+- `src/server/public/manifest.json` — hcs-sync now has its own PWA manifest (name: "HCS Sync") served at `/static/manifest.json`.
+
+### Fixed
+- CSP: restored `manifest-src 'self'` directive; removed cross-origin reference to hcs-app's manifest.
+- Layout: `<link rel="manifest">` now points to `/static/manifest.json` (local) instead of `app.heroncs.co.uk`.
+
 ## [0.3.2] - 2026-06-10
 
 ### Fixed
