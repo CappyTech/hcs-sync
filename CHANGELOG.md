@@ -2,6 +2,15 @@
 
 All notable changes to hcs-sync will be documented here. Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [0.4.0] - 2026-06-11
+
+### Security
+- Admin-only access enforced on all state-changing and sensitive routes: `POST /run`, `POST /dedup`, `GET /dedup/status`, `POST /pull`, `GET/POST /debug`, `GET /settings`, `POST /settings/cron`, `GET /logs`, `GET /logs.json`. Previously any authenticated SSO user could trigger syncs, run dedup (which deletes documents), or change cron settings.
+
+### Added
+- Login form: optional two-factor code field, forwarded to hcs-app's token endpoint — required for 2FA-enrolled accounts (hcs-app ≥ 6.3.0).
+- Login: structured error messages from hcs-app (account locked, 2FA required/invalid, role not permitted) are now shown instead of a generic "invalid credentials".
+
 ## [0.3.3] - 2026-06-10
 
 ### Added

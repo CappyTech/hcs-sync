@@ -654,11 +654,12 @@ app.get('/cron/health', (_req, res) => {
   const isOk = cronHealth.status === 'ok' || cronHealth.status === 'disabled';
   res.status(isOk ? 200 : 503).json(cronHealth);
 });
-// Simple logs stub (extend later)
-app.get('/logs', (_req, res) => {
+// Simple logs stub (extend later) — admin only: log lines can contain
+// supplier/customer details from sync runs.
+app.get('/logs', requireAdmin, (_req, res) => {
   res.render('layout', { title: 'HCS Sync Logs', content: 'pages/logs', logs, isRunning, lastRun, counts: lastCounts, lastError });
 });
-app.get('/logs.json', (_req, res) => {
+app.get('/logs.json', requireAdmin, (_req, res) => {
   res.json({ logs });
 });
 // Runtime status for dashboard polling
@@ -692,7 +693,7 @@ app.get('/', (req, res) => {
   });
 });
 
-app.get('/settings', async (req, res) => {
+app.get('/settings', requireAdmin, async (req, res) => {
   const eff = getEffectiveCronConfig();
   const cronHealth = getCronHealth({
     enabled: eff.enabled,
@@ -714,7 +715,7 @@ app.get('/settings', async (req, res) => {
   });
 });
 
-app.post('/settings/cron', async (req, res) => {
+app.post('/settings/cron', requireAdmin, async (req, res) => {
   if (!isMongooseEnabled()) {
     return res.redirect('/settings?error=' + encodeURIComponent('MongoDB is not configured; cannot save settings.'));
   }
@@ -767,6 +768,7 @@ app.post('/login', loginLimiter, async (req, res) => {
   const next = sanitiseNext(req.body?.next);
   const username = String(req.body?.username || '').trim();
   const password = String(req.body?.password || '');
+  const totp = String(req.body?.totp || '').trim();
   const skipTurnstile = process.env.SKIP_TURNSTILE === 'true';
 
   // Turnstile verification
@@ -818,12 +820,21 @@ app.post('/login', loginLimiter, async (req, res) => {
         'Content-Type': 'application/json',
         'X-Sync-Api-Key': apiKey,
       },
-      body: JSON.stringify({ username, password }),
+      body: JSON.stringify({ username, password, ...(totp ? { totp } : {}) }),
       signal: AbortSignal.timeout(10_000),
     });
 
-    if (response.status === 401) {
-      return res.redirect(`/login?next=${encodeURIComponent(next)}&error=${encodeURIComponent('Invalid username or password.')}`);
+    // 401/403 carry a structured error from hcs-app (invalid credentials,
+    // account locked, 2FA required/invalid, role not permitted).
+    if (response.status === 401 || response.status === 403) {
+      let message = 'Invalid username or password.';
+      try {
+        const body = await response.json();
+        if (body && typeof body.error === 'string' && body.error) message = body.error;
+      } catch {
+        // keep default message
+      }
+      return res.redirect(`/login?next=${encodeURIComponent(next)}&error=${encodeURIComponent(message)}`);
     }
     if (!response.ok) {
       logger.warn('[login] Unexpected status %d from hcs-app token endpoint', response.status);
@@ -856,7 +867,7 @@ app.get('/logout', (req, res) => {
   return res.redirect('/login');
 });
 
-app.post('/run', syncLimiter, async (_req, res) => {
+app.post('/run', requireAdmin, syncLimiter, async (_req, res) => {
   if (getEffectiveCronConfig().enabled) {
     return res.status(409).send('Manual runs are disabled when CRON is enabled.');
   }
@@ -877,7 +888,7 @@ app.post('/run', syncLimiter, async (_req, res) => {
 let dedupRunning = false;
 let lastDedupResult = null;
 
-app.post('/dedup', dedupLimiter, async (_req, res) => {
+app.post('/dedup', requireAdmin, dedupLimiter, async (_req, res) => {
   if (!isMongoEnabled()) {
     return res.status(400).send('MongoDB is not configured.');
   }
@@ -918,7 +929,7 @@ app.post('/dedup', dedupLimiter, async (_req, res) => {
   }
 });
 
-app.get('/dedup/status', (_req, res) => {
+app.get('/dedup/status', requireAdmin, (_req, res) => {
   res.json({ running: dedupRunning, lastResult: lastDedupResult });
 });
 
@@ -1060,7 +1071,7 @@ app.post('/history/:id/revert/:changeId', requireAdmin, (req, res) => {
       res.status(500).send(msg);
     });
 });
-app.get('/debug', (req, res) => {
+app.get('/debug', requireAdmin, (req, res) => {
   const entityTypes = Object.entries(ENTITY_CONFIG).map(([type, cfg]) => ({
     type,
     label: type.charAt(0).toUpperCase() + type.slice(1),
@@ -1073,7 +1084,7 @@ app.get('/debug', (req, res) => {
     query: req.query || {},
   });
 });
-app.post('/debug', pullLimiter, async (req, res) => {
+app.post('/debug', requireAdmin, pullLimiter, async (req, res) => {
   const { entityType, entityId } = req.body || {};
   if (!entityType || entityId == null) {
     return res.status(400).json({ ok: false, message: 'entityType and entityId are required' });
@@ -1086,7 +1097,7 @@ app.post('/debug', pullLimiter, async (req, res) => {
     res.status(500).json({ ok: false, message: err.message || 'Debug failed' });
   }
 });
-app.post('/pull', pullLimiter, async (req, res) => {
+app.post('/pull', requireAdmin, pullLimiter, async (req, res) => {
   const { entityType, entityId } = req.body || {};
   if (!entityType || entityId == null) {
     return res.status(400).json({ ok: false, message: 'entityType and entityId are required' });
