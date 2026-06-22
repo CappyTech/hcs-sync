@@ -2,6 +2,11 @@
 
 All notable changes to hcs-sync will be documented here. Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [0.4.1] - 2026-06-22
+
+### Changed
+- **Login page redesign**: login view now renders through the shared layout, gaining the footer and bottom nav (Theme toggle) consistent with all other pages. Card matches hcs-app's login style — rounded card, accent bar, same field/button layout — keeping blue colouring.
+
 ## [0.4.0] - 2026-06-11
 
 ### Security

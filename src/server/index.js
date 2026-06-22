@@ -761,7 +761,7 @@ app.get('/login', (req, res) => {
   const error = typeof req.query.error === 'string' ? req.query.error : null;
   const skipTurnstile = process.env.SKIP_TURNSTILE === 'true';
   const siteKey = String(process.env.TURNSTILE_SITE_KEY || '');
-  res.render('login', { next, error, csrfToken: res.locals.csrfToken, skipTurnstile, siteKey });
+  res.render('layout', { title: 'Log In — HCS Sync', content: 'login', next, error, skipTurnstile, siteKey, isAuthenticated: false });
 });
 
 app.post('/login', loginLimiter, async (req, res) => {
