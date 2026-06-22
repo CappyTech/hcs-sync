@@ -2,6 +2,12 @@
 
 All notable changes to hcs-sync will be documented here. Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [0.4.4] - 2026-06-22
+
+### Fixed
+- **Layout**: removed stray `<br>` tag between `<main>` and the footer/nav block, eliminating a spurious scrollbar on the login page caused by the extra line of height in the page flow.
+- **Layout**: theme toggle icon changed from `text-base` (Tailwind) to `fs-5` (Bootstrap Icons sizing utility), matching hcs-app and rendering at the correct 1.25rem size.
+
 ## [0.4.3] - 2026-06-22
 
 ### Fixed
