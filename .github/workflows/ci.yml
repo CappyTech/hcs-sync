@@ -4,6 +4,11 @@ on:
   push:
     branches: ['**']
   workflow_dispatch:
+    inputs:
+      tailscale:
+        description: 'Connect to Tailscale? (required to reach internal services)'
+        type: boolean
+        default: false
   release:
     types: [published]
 
@@ -21,6 +26,14 @@ jobs:
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
+
+      - name: Connect to Tailscale
+        if: ${{ inputs.tailscale == true }}
+        uses: tailscale/github-action@v3
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-client-secret: ${{ secrets.TS_OAUTH_CLIENT_SECRET }}
+          tags: tag:ci-hcs-sync
 
       - uses: actions/setup-node@v4
         with:

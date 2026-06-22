@@ -1,14 +1,28 @@
 services:
+  tailscale:
+    image: tailscale/tailscale:latest
+    container_name: hcs-sync-tailscale
+    hostname: hcs-sync
+    environment:
+      - TS_AUTHKEY=${TS_AUTHKEY:-}
+      - TS_STATE_DIR=/var/lib/tailscale
+      - TS_USERSPACE=true
+      - TS_EXTRA_ARGS=--accept-routes
+    volumes:
+      - tailscale_state:/var/lib/tailscale
+    restart: unless-stopped
+    networks:
+      - hcs-net
+
   hcs-sync:
     image: ghcr.io/cappytech/hcs-sync:latest
     pull_policy: always
     container_name: hcs-sync
     env_file:
       - .env
-    ports:
-      - "8080:3000"
-    networks:
-      - hcs-net
+    # Shares Tailscale's network namespace — app traffic routes through Tailscale.
+    # Caddy must proxy to 'tailscale:3000' (not 'hcs-sync:3000').
+    network_mode: service:tailscale
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3000/cron/health"]
       interval: 30s
@@ -16,7 +30,12 @@ services:
       retries: 5
       start_period: 20s
     restart: unless-stopped
+    depends_on:
+      - tailscale
 
 networks:
   hcs-net:
     external: true
+
+volumes:
+  tailscale_state:
