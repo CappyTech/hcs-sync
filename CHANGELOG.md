@@ -2,6 +2,11 @@
 
 All notable changes to hcs-sync will be documented here. Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [0.4.3] - 2026-06-22
+
+### Fixed
+- **Layout**: reduced `main` top padding from `pt-20` to `pt-16`, matching hcs-app. The extra 4 units was making the login card sit lower than its hcs-app equivalent and the bottom nav appear disproportionately large.
+
 ## [0.4.2] - 2026-06-22
 
 ### Changed
