@@ -2,6 +2,11 @@
 
 All notable changes to hcs-sync will be documented here. Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [0.4.7] - 2026-06-22
+
+### Changed
+- **.env.example**: documented all previously undocumented environment variables found in application code. Added a Tailscale section (`TS_AUTHKEY`, `TS_HOSTNAME`), logging variables (`LOG_LEVEL`, `PINO_PRETTY`, `RUN_LOG_MAX_ENTRIES`), and `DETAIL_CONCURRENCY`.
+
 ## [0.4.6] - 2026-06-22
 
 ### Added
