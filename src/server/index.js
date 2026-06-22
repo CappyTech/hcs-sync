@@ -657,7 +657,7 @@ app.get('/cron/health', (_req, res) => {
 // Simple logs stub (extend later) — admin only: log lines can contain
 // supplier/customer details from sync runs.
 app.get('/logs', requireAdmin, (_req, res) => {
-  res.render('layout', { title: 'HCS Sync Logs', content: 'pages/logs', logs, isRunning, lastRun, counts: lastCounts, lastError });
+  res.render('layout', { title: 'Logs', content: 'pages/logs', logs, isRunning, lastRun, counts: lastCounts, lastError });
 });
 app.get('/logs.json', requireAdmin, (_req, res) => {
   res.json({ logs });
@@ -681,7 +681,7 @@ app.get('/', (req, res) => {
   const dedupResult = req.query?.dedup === 'done' ? lastDedupResult : null;
 
   res.render('layout', {
-    title: 'HCS Sync',
+    title: 'HCS Sync Dashboard',
     content: 'pages/index',
     isRunning,
     lastRun,
@@ -761,7 +761,7 @@ app.get('/login', (req, res) => {
   const error = typeof req.query.error === 'string' ? req.query.error : null;
   const skipTurnstile = process.env.SKIP_TURNSTILE === 'true';
   const siteKey = String(process.env.TURNSTILE_SITE_KEY || '');
-  res.render('layout', { title: 'Log In — HCS Sync', content: 'login', next, error, skipTurnstile, siteKey, isAuthenticated: false });
+  res.render('layout', { title: 'Log In', content: 'login', next, error, skipTurnstile, siteKey, isAuthenticated: false });
 });
 
 app.post('/login', loginLimiter, async (req, res) => {
@@ -1078,7 +1078,7 @@ app.get('/debug', requireAdmin, (req, res) => {
     lookupField: cfg.lookupField,
   }));
   res.render('layout', {
-    title: 'Debug – HCS Sync',
+    title: 'Debug',
     content: 'pages/debug',
     entityTypes,
     query: req.query || {},
