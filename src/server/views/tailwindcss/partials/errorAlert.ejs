@@ -1,6 +1,7 @@
-<% if (typeof flash !== 'undefined' && flash && flash.error && flash.error.length > 0) { %>
+<% if ((typeof flash !== 'undefined' && flash && flash.error && flash.error.length > 0) || (typeof error !== 'undefined' && error)) { %>
+<% const _errors = (typeof flash !== 'undefined' && flash && flash.error) ? flash.error : [error]; %>
   <div class="fixed top-20 right-4 space-y-4 z-[60]">
-    <% flash.error.forEach(function(message, index) { %>
+    <% _errors.forEach(function(message, index) { %>
       <div id="errorToast<%= index %>"
         class="relative flex items-start bg-red-600 dark:bg-red-700 text-white rounded-lg shadow-lg px-4 py-3 max-w-xs animate-slide-in">
         <div class="flex-1 pr-6">

@@ -1,6 +1,4 @@
-<% if (!skipTurnstile) { %>
 <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
-<% } %>
 
 <div class="max-w-md mx-auto py-10 px-4">
   <div class="bg-white dark:bg-gray-900 shadow-lg rounded-2xl overflow-hidden">
@@ -8,20 +6,7 @@
     <div class="h-1.5 bg-gradient-to-r from-blue-600 to-blue-400"></div>
 
     <div class="p-8">
-      <div class="flex justify-center mb-4">
-        <div class="flex items-center gap-2">
-          <i class="bi bi-arrow-repeat text-blue-600 text-3xl"></i>
-          <span class="text-xl font-bold text-gray-900 dark:text-gray-100">HCS Sync</span>
-        </div>
-      </div>
-
       <h1 class="text-2xl font-bold text-center text-gray-900 dark:text-gray-100 mb-6">Log in</h1>
-
-      <% if (error) { %>
-      <div class="mb-4 p-3 rounded-xl bg-red-50 dark:bg-red-900/30 text-red-800 dark:text-red-300 text-sm border border-red-200 dark:border-red-800" role="alert">
-        <%= error %>
-      </div>
-      <% } %>
 
       <% if (skipTurnstile) { %>
       <div class="mb-4 p-3 rounded-xl bg-amber-50 dark:bg-amber-900/30 text-amber-800 dark:text-amber-300 text-sm border border-amber-200 dark:border-amber-800">
@@ -91,12 +76,21 @@
         </div>
         <% } %>
 
-        <!-- Submit -->
+        <!-- Submit / Register Buttons -->
         <div class="flex flex-col sm:flex-row justify-between items-center gap-4 pt-4">
           <button type="submit"
             class="w-full sm:w-auto inline-flex items-center justify-center gap-1.5 px-6 py-2.5 rounded-lg text-sm font-medium bg-blue-600 text-white hover:bg-blue-700 transition shadow-sm focus:ring-4 focus:ring-blue-300 dark:focus:ring-blue-800">
             <i class="bi bi-box-arrow-in-right"></i> Log in
           </button>
+          <a href="https://app.heroncs.co.uk/user/register"
+            class="w-full sm:w-auto inline-flex items-center justify-center gap-1.5 text-center text-sm font-medium border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300 px-6 py-2.5 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 transition">
+            <i class="bi bi-book"></i> Create an account
+          </a>
+        </div>
+        <div class="text-center pt-2">
+          <a href="https://app.heroncs.co.uk/user/forgot-password" class="text-sm text-blue-600 dark:text-blue-400 hover:underline">
+            Forgot your password?
+          </a>
         </div>
       </form>
     </div>

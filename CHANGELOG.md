@@ -2,6 +2,12 @@
 
 All notable changes to hcs-sync will be documented here. Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [0.4.2] - 2026-06-22
+
+### Changed
+- **Login page**: Turnstile script now loads unconditionally (matches hcs-app). Inline error block removed — errors now surface through the shared `errorAlert` partial.
+- **`errorAlert.ejs`**: extended to catch the `error` local variable (query-string errors on the login page) in addition to flash messages, without requiring server-side sessions.
+
 ## [0.4.1] - 2026-06-22
 
 ### Changed
