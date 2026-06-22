@@ -33,7 +33,7 @@ jobs:
         with:
           oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
           oauth-client-secret: ${{ secrets.TS_OAUTH_CLIENT_SECRET }}
-          tags: tag:ci-hcs-sync
+          tags: tag:dev-ci
 
       - uses: actions/setup-node@v4
         with:
