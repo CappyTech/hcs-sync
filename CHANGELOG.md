@@ -2,6 +2,11 @@
 
 All notable changes to hcs-sync will be documented here. Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [0.5.0] - 2026-06-25
+
+### Added
+- **Machine-to-machine `POST /api/pull`**: key-authenticated equivalent of the dashboard's "Pull & Sync" button, so other services (hcs-app) can refresh a single KashFlow entity into the shared REST namespace on demand. Auth is the shared `HCS_SYNC_API_KEY` sent as the `X-Sync-Api-Key` header (the same secret as the SSO token handshake). Body is `{ entityType, entityId }`. The endpoint is exempted from the SSO-cookie guard and CSRF (it is protected by the API key instead) and rate-limited via the existing `pullLimiter`.
+
 ## [0.4.7] - 2026-06-22
 
 ### Changed

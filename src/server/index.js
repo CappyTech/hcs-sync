@@ -433,6 +433,8 @@ app.use((req, res, next) => {
   if (p === '/favicon.ico' || p === '/robots.txt') return next();
   if (p === '/static' || p.startsWith('/static/')) return next();
   if (p === '/login') return next();
+  // Machine-to-machine API endpoints authenticate via X-Sync-Api-Key, not the SSO cookie.
+  if (p === '/api/pull') return next();
 
   const user = verifySsoCookie(req);
   if (!user) {
@@ -448,6 +450,29 @@ app.use((req, res, next) => {
 function requireAdmin(req, res, next) {
   if (req.user?.role !== 'admin') {
     return res.status(403).send('Forbidden: admin access required');
+  }
+  next();
+}
+
+// Timing-safe comparison for the shared machine-to-machine API key.
+function safeKeyEqual(a, b) {
+  const ha = crypto.createHmac('sha256', 'hcs-sync-api').update(String(a)).digest();
+  const hb = crypto.createHmac('sha256', 'hcs-sync-api').update(String(b)).digest();
+  return crypto.timingSafeEqual(ha, hb);
+}
+
+// Auth guard for machine-to-machine API endpoints (e.g. hcs-app triggering a
+// per-item re-sync). Uses the same shared secret as the SSO token handshake.
+function requireSyncApiKey(req, res, next) {
+  const expected = String(process.env.HCS_SYNC_API_KEY || '').trim();
+  if (!expected) {
+    logger.error('[api] HCS_SYNC_API_KEY not configured — machine API is disabled');
+    return res.status(503).json({ ok: false, message: 'API not configured' });
+  }
+  const provided = String(req.headers['x-sync-api-key'] || '');
+  if (!provided || !safeKeyEqual(expected, provided)) {
+    logger.warn('[api] machine API: invalid or missing X-Sync-Api-Key');
+    return res.status(401).json({ ok: false, message: 'Unauthorized' });
   }
   next();
 }
@@ -608,6 +633,9 @@ app.use((req, res, next) => {
 app.use((req, res, next) => {
   const method = (req.method || '').toUpperCase();
   if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return next();
+
+  // Machine-to-machine API endpoints are protected by X-Sync-Api-Key instead of CSRF.
+  if (req.path === '/api/pull') return next();
 
   const secret = req.cookies?.[csrfCookieName];
   const headerToken = req.headers['x-csrf-token'] || req.headers['x-xsrf-token'] || req.headers['csrf-token'] || req.headers['xsrf-token'];
@@ -1114,6 +1142,31 @@ app.post('/pull', requireAdmin, pullLimiter, async (req, res) => {
   } catch (err) {
     logger.error({ entityType, entityId, err: err.message }, 'Manual pull failed');
     pushLog({ time: Date.now(), level: 'error', message: `Manual pull failed: ${entityType} ${entityId} — ${err.message}`, meta: { entityType, entityId, error: err.message } });
+    res.status(500).json({ ok: false, message: err.message || 'Pull failed' });
+  }
+});
+
+// ── Machine-to-machine API ───────────────────────────────────────────────
+// Key-authenticated equivalent of the dashboard's "Pull & Sync" button, so
+// hcs-app can refresh a single entity from KashFlow on demand (e.g. after
+// marking a project Complete via the KashFlow API).
+app.post('/api/pull', requireSyncApiKey, pullLimiter, async (req, res) => {
+  const { entityType, entityId } = req.body || {};
+  if (!entityType || entityId == null) {
+    return res.status(400).json({ ok: false, message: 'entityType and entityId are required' });
+  }
+  const pushLog = (entry) => {
+    logs.unshift(entry);
+    if (logs.length > LOGS_CAP) logs.length = LOGS_CAP;
+  };
+  pushLog({ time: Date.now(), level: 'info', message: `API pull started: ${entityType} ${entityId}`, meta: { entityType, entityId, via: 'api' } });
+  try {
+    const result = await pullSingleEntity(entityType, entityId);
+    pushLog({ time: Date.now(), level: 'success', message: `API pull complete: ${entityType} ${entityId} — ${result.action}`, meta: { entityType, entityId, action: result.action, via: 'api' } });
+    res.json(result);
+  } catch (err) {
+    logger.error({ entityType, entityId, err: err.message }, 'API pull failed');
+    pushLog({ time: Date.now(), level: 'error', message: `API pull failed: ${entityType} ${entityId} — ${err.message}`, meta: { entityType, entityId, error: err.message, via: 'api' } });
     res.status(500).json({ ok: false, message: err.message || 'Pull failed' });
   }
 });

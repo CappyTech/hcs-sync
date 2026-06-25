@@ -10,6 +10,7 @@ import CsrfTokens from 'csrf';
 process.env.PORT = '0';               // random port so tests don't clash
 process.env.HCS_SSO_JWT_SECRET = 'test-server-jwt-secret';
 process.env.SKIP_TURNSTILE = 'true';  // disable CAPTCHA in tests
+process.env.HCS_SYNC_API_KEY = 'test-sync-api-key'; // machine-to-machine API key
 
 // ---------------------------------------------------------------------------
 // Mocks – hoisted before imports
@@ -358,6 +359,48 @@ describe('Express server routes', () => {
       expect(res.status).toBe(200);
       expect(res.body.ok).toBe(true);
       expect(res.body.entityType).toBe('invoice');
+    });
+  });
+
+  // ── POST /api/pull (machine-to-machine) ────────────────────────────────
+
+  describe('POST /api/pull', () => {
+    it('rejects requests without an API key (401)', async () => {
+      const res = await supertest(app)
+        .post('/api/pull')
+        .send({ entityType: 'invoice', entityId: 'INV-1' });
+
+      expect(res.status).toBe(401);
+      expect(res.body.ok).toBe(false);
+    });
+
+    it('rejects requests with a wrong API key (401)', async () => {
+      const res = await supertest(app)
+        .post('/api/pull')
+        .set('X-Sync-Api-Key', 'not-the-key')
+        .send({ entityType: 'invoice', entityId: 'INV-1' });
+
+      expect(res.status).toBe(401);
+    });
+
+    it('returns pull result with a valid API key — no cookie or CSRF needed', async () => {
+      const res = await supertest(app)
+        .post('/api/pull')
+        .set('X-Sync-Api-Key', 'test-sync-api-key')
+        .send({ entityType: 'invoice', entityId: 'INV-1' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.ok).toBe(true);
+      expect(res.body.entityType).toBe('invoice');
+    });
+
+    it('returns 400 when entityType or entityId is missing', async () => {
+      const res = await supertest(app)
+        .post('/api/pull')
+        .set('X-Sync-Api-Key', 'test-sync-api-key')
+        .send({ entityType: 'invoice' });
+
+      expect(res.status).toBe(400);
     });
   });
 
