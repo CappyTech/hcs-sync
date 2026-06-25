@@ -2,6 +2,11 @@
 
 All notable changes to hcs-sync will be documented here. Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [0.5.1] - 2026-06-25
+
+### Changed
+- **Rewrote `README.md`** into a full project overview, replacing the stale Basic-Auth/`METRICS_AUTH` documentation that no longer matches the code. Added Tech Stack, App Structure, application lifecycle, a 10-feature walkthrough (Dev / User / Business Owner perspectives), a current route table (SSO cookie auth, Turnstile, CSRF, `POST /api/pull` machine API), and split Development vs Production deployment instructions.
+
 ## [0.5.0] - 2026-06-25
 
 ### Added
