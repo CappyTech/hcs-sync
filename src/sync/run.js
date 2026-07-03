@@ -62,10 +62,13 @@ function buildUpsertUpdate({ keyField, keyValue, payload, syncedAt, runId, model
   // This means modifiedCount only increments when KashFlow data changed.
   // Data fields are wrapped in $literal to prevent misinterpretation by the
   // aggregation engine (e.g. strings starting with '$', operator-shaped objects).
+  // deletedAt is explicitly cleared to null: if an entity exists in KashFlow it
+  // is not deleted, so any legacy soft-delete flag must be removed.
   const pipelineSet = {
     ...Object.fromEntries(Object.entries(flattened).map(([k, v]) => [k, { $literal: v }])),
     [keyField]: { $literal: keyValue },
     _kfHash: { $literal: newHash },
+    deletedAt: { $literal: null },
     syncedAt:        { $ifNull: ['$syncedAt',        '$$NOW'] },
     createdAt:       { $ifNull: ['$createdAt',       '$$NOW'] },
     uuid:            { $ifNull: ['$uuid',            { $literal: newUuid }] },
@@ -82,7 +85,7 @@ function buildUpsertUpdate({ keyField, keyValue, payload, syncedAt, runId, model
   // pipeline._rawSet is a JS-only property (not serialised to BSON) that
   // the audit engine reads for deepDiff comparisons.
   const pipeline = [{ $set: pipelineSet }, { $unset: 'data' }];
-  pipeline._rawSet = { ...flattened, [keyField]: keyValue };
+  pipeline._rawSet = { ...flattened, [keyField]: keyValue, deletedAt: null };
   return pipeline;
 }
 

@@ -40,6 +40,29 @@
     }
   });
 
+  // ── data-pull-entity-type / data-pull-entity-id ────────────────────────
+  // Handles the Manual Pull button on the run-details page without inline JS.
+  document.addEventListener('click', function (e) {
+    var btn = e.target.closest('[data-pull-entity-type]');
+    if (!btn) return;
+    var entityType = btn.getAttribute('data-pull-entity-type');
+    var entityId   = btn.getAttribute('data-pull-entity-id');
+    var csrfMeta = document.querySelector('meta[name=csrf-token]');
+    var t = csrfMeta ? (csrfMeta.content || '') : '';
+    fetch('/pull', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-csrf-token': t },
+      body: JSON.stringify({ entityType: entityType, entityId: entityId }),
+    })
+      .then(function (r) { return r.json(); })
+      .then(function () {
+        try { window.showToast && window.showToast('info', 'Pull requested'); } catch {}
+      })
+      .catch(function () {
+        try { window.showToast && window.showToast('error', 'Pull request failed'); } catch {}
+      });
+  });
+
   // Theme toggle
   const btn = document.getElementById('toggle-theme');
   if (btn) {
@@ -159,9 +182,13 @@
         }
         if (prevIsRunning === true && s.isRunning === false && s.stage === 'finished') {
           showToast('success', 'Sync completed successfully');
+          // Reload so the Run Sync button re-enables (its disabled state is set at render time).
+          setTimeout(() => { window.location.reload(); }, 1200);
         }
         if (s.stage === 'failed' && prevStage !== 'failed') {
           showToast('error', s.lastError || 'Sync failed');
+          // Reload so the Run Sync button re-enables after a failed sync.
+          setTimeout(() => { window.location.reload(); }, 1200);
         }
         prevIsRunning = s.isRunning;
         prevStage = s.stage;

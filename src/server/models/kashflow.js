@@ -205,7 +205,7 @@ const ProjectSchema = buildSchema(schemas.project, {
 ProjectSchema.statics.syncConfig = {
   keyField: 'Id',
   fallbackKeyField: 'Number',
-  protectedFields: ['deletedAt'],
+  protectedFields: [],
 };
 
 export const Project =

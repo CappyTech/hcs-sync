@@ -43,16 +43,31 @@ document.addEventListener('DOMContentLoaded', function () {
   });
 
   // ── data-modal-open / data-modal-close ───────────────────────────────────
+  // Delegates to window.openModal / window.closeModal (defined in app.js) so
+  // the full modal behaviour (backdrop, flex, aria-hidden) is applied.
+  // Falls back to a simple class toggle when app.js is not loaded.
+  // Respects the HTML `disabled` attribute on the triggering element.
   document.addEventListener('click', function (e) {
     var opener = e.target.closest('[data-modal-open]');
     if (opener) {
-      var modal = document.getElementById(opener.getAttribute('data-modal-open'));
-      if (modal) modal.classList.remove('hidden');
+      if (opener.disabled) return;
+      var modalId = opener.getAttribute('data-modal-open');
+      if (typeof window.openModal === 'function') {
+        window.openModal(modalId);
+      } else {
+        var modal = document.getElementById(modalId);
+        if (modal) modal.classList.remove('hidden');
+      }
     }
     var closer = e.target.closest('[data-modal-close]');
     if (closer) {
-      var modal = document.getElementById(closer.getAttribute('data-modal-close'));
-      if (modal) modal.classList.add('hidden');
+      var modalId2 = closer.getAttribute('data-modal-close');
+      if (typeof window.closeModal === 'function') {
+        window.closeModal(modalId2);
+      } else {
+        var modal2 = document.getElementById(modalId2);
+        if (modal2) modal2.classList.add('hidden');
+      }
     }
   });
 
@@ -72,6 +87,14 @@ document.addEventListener('DOMContentLoaded', function () {
         if (input) input.value = attrs[i].value;
       }
     }
+  });
+
+  // ── data-auto-submit ──────────────────────────────────────────────────────
+  // Submits the closest form when the element's value changes.
+  document.addEventListener('change', function (e) {
+    if (!e.target.closest('[data-auto-submit]')) return;
+    var form = e.target.closest('form');
+    if (form) form.submit();
   });
 
   // ── data-submit-once ─────────────────────────────────────────────────────

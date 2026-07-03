@@ -788,7 +788,8 @@ app.post('/settings/cron', requireAdmin, async (req, res) => {
 // Rate limiters for expensive / state-changing endpoints.
 const loginLimiter = rateLimit({ windowMs: 15 * 60_000, max: 20, standardHeaders: true, legacyHeaders: false, message: 'Too many login attempts, please try again later.' });
 const syncLimiter = rateLimit({ windowMs: 60_000, max: 5, standardHeaders: true, legacyHeaders: false, message: 'Too many requests, please slow down.' });
-const pullLimiter = rateLimit({ windowMs: 60_000, max: 20, standardHeaders: true, legacyHeaders: false, message: 'Too many pull requests, please slow down.' });
+// JSON body: /debug and /pull are fetch()ed by the debug page, which parses JSON responses.
+const pullLimiter = rateLimit({ windowMs: 60_000, max: 20, standardHeaders: true, legacyHeaders: false, message: { message: 'Too many pull/debug requests, please slow down.' } });
 const dedupLimiter = rateLimit({ windowMs: 300_000, max: 3, standardHeaders: true, legacyHeaders: false, message: 'Too many dedup requests, please slow down.' });
 
 // ── Login routes (unauthenticated) ────────────────────────────────────────────
