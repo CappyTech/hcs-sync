@@ -2,6 +2,15 @@
 
 All notable changes to hcs-sync will be documented here. Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [0.5.2] - 2026-07-03
+
+### Added
+- **Debug page "All fields" now shows full key/value pairs.** The collapsed expander listed only field names, hiding the values needed to diagnose issues (e.g. whether `deletedAt` is set). It now renders every field with its value — objects/arrays as truncated JSON, HTML-escaped — in a scrollable table, for both the MongoDB and KashFlow cards.
+- **Debug page now surfaces the soft-delete flag.** The MongoDB card shows `deletedAt` (previously only its name appeared in the collapsed field list, hiding whether it was set), and the diagnosis reports `SOFT_DELETED` when the flag is set plus `SOFT_DELETE_MISMATCH` when the entity simultaneously exists in KashFlow. Legacy `deletedAt` values (from the removed unseen-document soft-delete feature) are invisible to the dashboard but cause downstream apps like hcs-app — which filter on `deletedAt: null` — to treat live purchases as deleted (e.g. false "Stale KashFlow Links" on the hcs-app documents overview).
+
+### Fixed
+- **Pull & Sync now clears `deletedAt`.** KashFlow returning the entity is proof it exists, but the upsert never touched the legacy soft-delete flag, so a stuck `deletedAt` survived every re-sync and could not be cleared by any current code path.
+
 ## [0.5.1] - 2026-06-25
 
 ### Changed

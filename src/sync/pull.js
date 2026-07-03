@@ -76,6 +76,11 @@ export async function pullSingleEntity(entityType, entityId) {
   });
   update[0].$set.detailSyncedAt = { $literal: now };
   update._rawSet.detailSyncedAt = now;
+  // KashFlow just returned this entity, so it demonstrably exists — clear any
+  // legacy soft-delete flag (nothing in the current sync ever clears it, and
+  // downstream apps filter on deletedAt: null).
+  update[0].$set.deletedAt = { $literal: null };
+  update._rawSet.deletedAt = null;
 
   // Use native MongoDB driver — Mongoose 8's bulkWrite casting silently
   // drops complex array sub-documents (LineItems, PaymentLines) during cast.
@@ -159,6 +164,7 @@ export async function debugEntity(entityType, entityId) {
         detailSyncedAt: doc.detailSyncedAt || null,
         createdAt: doc.createdAt || null,
         updatedAt: doc.updatedAt || null,
+        deletedAt: doc.deletedAt || null,
         hasLineItems: Array.isArray(lineItems) && lineItems.length > 0,
         lineItemsCount: Array.isArray(lineItems) ? lineItems.length : 0,
         hasPaymentLines: Array.isArray(paymentLines) && paymentLines.length > 0,
@@ -169,9 +175,17 @@ export async function debugEntity(entityType, entityId) {
         Status: doc.Status ?? null,
         fieldCount: Object.keys(doc).length,
         fields: Object.keys(doc).sort(),
+        all: doc,
       };
 
       // Diagnostics from MongoDB state
+      if (doc.deletedAt) {
+        report.diagnosis.push(
+          `SOFT_DELETED: MongoDB record has deletedAt=${new Date(doc.deletedAt).toISOString()}. ` +
+          'Downstream apps (e.g. hcs-app) filter on deletedAt: null and treat this entity as deleted. ' +
+          'Pull & Sync will clear the flag if the entity still exists in KashFlow.'
+        );
+      }
       if (!doc.detailSyncedAt) {
         report.diagnosis.push('MISSING_DETAIL_SYNC: Document has never had a Phase 2 detail sync (detailSyncedAt is null). LineItems/PaymentLines may be absent.');
       }
@@ -211,11 +225,18 @@ export async function debugEntity(entityType, entityId) {
         Status: full.Status ?? null,
         fieldCount: Object.keys(full).length,
         fields: Object.keys(full).sort(),
+        all: full,
       };
 
       // Compare with MongoDB
       if (report.mongo) {
         const mongoDoc = report.mongo;
+
+        if (mongoDoc.deletedAt) {
+          report.diagnosis.push(
+            'SOFT_DELETE_MISMATCH: Entity exists in KashFlow but is soft-deleted in MongoDB — run Pull & Sync to clear deletedAt.'
+          );
+        }
 
         if (mongoDoc.lineItemsCount !== report.kashflow.lineItemsCount) {
           report.diagnosis.push(

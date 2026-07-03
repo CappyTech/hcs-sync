@@ -128,7 +128,7 @@
     }
 
     const rows = [];
-    const fieldOrder = ['Id', 'Number', 'Code', 'syncedAt', 'detailSyncedAt', 'createdAt', 'updatedAt',
+    const fieldOrder = ['Id', 'Number', 'Code', 'syncedAt', 'detailSyncedAt', 'createdAt', 'updatedAt', 'deletedAt',
                         'Status', 'NetAmount', 'VATAmount', 'GrossAmount',
                         'hasLineItems', 'lineItemsCount', 'hasPaymentLines', 'paymentLinesCount', 'fieldCount'];
     const shown = new Set();
@@ -149,13 +149,41 @@
     var html = '<table class="w-full text-sm text-left">';
     html += '<tbody>' + rows.join('') + '</tbody></table>';
 
-    // Collapsible field list
-    if (data.fields && data.fields.length) {
+    // Collapsible full key/value dump
+    if (data.all && typeof data.all === 'object') {
+      var keys = Object.keys(data.all).sort();
+      var allRows = keys.map(function (key) {
+        return '<tr class="border-b border-gray-100 dark:border-gray-700 align-top">'
+          + '<td class="py-1 pr-3 font-mono text-xs text-gray-700 dark:text-gray-300 whitespace-nowrap">' + escapeHtml(key) + '</td>'
+          + '<td class="py-1 font-mono text-xs text-gray-900 dark:text-gray-100 break-all">' + formatValue(data.all[key]) + '</td>'
+          + '</tr>';
+      });
+      html += '<details class="mt-3"><summary class="text-xs text-gray-500 dark:text-gray-400 cursor-pointer">All fields (' + keys.length + ')</summary>';
+      html += '<div class="mt-2 max-h-96 overflow-auto"><table class="w-full text-left"><tbody>' + allRows.join('') + '</tbody></table></div></details>';
+    } else if (data.fields && data.fields.length) {
       html += '<details class="mt-3"><summary class="text-xs text-gray-500 dark:text-gray-400 cursor-pointer">All fields (' + data.fields.length + ')</summary>';
       html += '<p class="mt-1 text-xs font-mono text-gray-600 dark:text-gray-300 break-all">' + data.fields.join(', ') + '</p></details>';
     }
 
     container.innerHTML = html;
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  function formatValue(value) {
+    if (value === null || value === undefined) return '<span class="text-gray-400">null</span>';
+    if (typeof value === 'boolean') return value ? 'true' : 'false';
+    if (typeof value === 'object') {
+      var json;
+      try { json = JSON.stringify(value, null, 1); } catch { json = String(value); }
+      if (json && json.length > 2000) json = json.slice(0, 2000) + '…';
+      return '<pre class="whitespace-pre-wrap break-all">' + escapeHtml(json) + '</pre>';
+    }
+    return escapeHtml(String(value));
   }
 
   function renderRow(key, value) {
