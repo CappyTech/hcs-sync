@@ -8,7 +8,7 @@
       <% if (skipTurnstile) { %>
         <div
           class="mb-4 p-3 rounded-xl bg-amber-50 dark:bg-amber-900/30 text-amber-800 dark:text-amber-300 text-sm border border-amber-200 dark:border-amber-800">
-          CAPTCHA bypass is active (SKIP_TURNSTILE=true). Do not enable this in production.
+          CAPTCHA bypass is active (non-production environment or SKIP_TURNSTILE=true). Turnstile always runs in production.
         </div>
         <% } %>
           <form action="/login" method="POST" class="space-y-6">

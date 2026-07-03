@@ -2,7 +2,14 @@
   <div class="max-w-7xl mx-auto flex flex-wrap justify-between items-center gap-x-4 gap-y-1 px-2 text-[0.75rem] leading-snug">
     <div>
       <% if (appBuild?.version) { %>
-        <small class="cursor-default">v<%= appBuild.version %><% if (appBuild?.commit) { %> &bull; <%= appBuild.branch ? (appBuild.branch + '@') : '' %><%= appBuild.commit %><% } %></small>
+        <small class="cursor-default">v<%= appBuild.version %></small>
+        <% if (appBuild?.commit) { %>
+          <span class="mx-1 text-gray-300 dark:text-gray-600">&bull;</span>
+          <a href="<%= appBuild.commitUrl %>" target="_blank" rel="noopener noreferrer"
+             class="text-blue-600 hover:underline font-mono" title="View commit <%= appBuild.commit %> on GitHub">
+            <%= appBuild.branch ? (appBuild.branch + '@') : '' %><%= appBuild.commit %>
+          </a>
+        <% } %>
       <% } %>
     </div>
     <div class="flex items-center space-x-2">

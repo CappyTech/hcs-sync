@@ -27,6 +27,15 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 ENV NODE_ENV=production
 ENV PORT=3000
+
+# Build identity for the footer (the image has no .git to fall back on).
+# CI passes these; manual builds:
+#   docker build --build-arg GIT_COMMIT=$(git rev-parse --short HEAD) --build-arg GIT_BRANCH=$(git rev-parse --abbrev-ref HEAD) ...
+ARG GIT_COMMIT=
+ENV GIT_COMMIT=$GIT_COMMIT
+ARG GIT_BRANCH=
+ENV GIT_BRANCH=$GIT_BRANCH
+
 EXPOSE 3000
 
 ENTRYPOINT ["/usr/bin/dumb-init", "--", "/usr/local/bin/docker-entrypoint.sh"]

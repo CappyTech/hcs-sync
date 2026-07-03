@@ -2,6 +2,15 @@
 
 All notable changes to hcs-sync will be documented here. Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [0.5.3] - 2026-07-03
+
+### Changed
+- **Local dev login without hcs-app.** Login previously always required the hcs-app SSO backend (`HCS_SYNC_API_KEY` + `HCS_SSO_JWT_SECRET`), so local dev failed with "Login service is not configured". Outside production, when `HCS_SYNC_API_KEY` is unset, POST /login now signs a local admin session itself (any username/password), using an ephemeral per-process JWT secret when `HCS_SSO_JWT_SECRET` is absent — sessions die with the process. Production is unchanged: with `NODE_ENV=production` the bypass never activates and a missing API key still errors.
+- **Turnstile CAPTCHA is skipped automatically outside production.** Local dev has no Cloudflare keys, so every login failed with "CAPTCHA token missing" unless `SKIP_TURNSTILE=true` was set manually. The bypass now also activates when `NODE_ENV !== 'production'`; production behaviour is unchanged (the Docker image sets `NODE_ENV=production`), and the login-page banner states which condition triggered the bypass.
+
+### Fixed
+- **Footer commit SHA was blank in deployed images.** The footer and `APP_BUILD` already support showing `branch@commit`, but the Docker image has no `.git` to fall back on and neither the Dockerfile nor CI supplied the commit — the same gap hcs-app fixed in 6.6.10. The Dockerfile now takes `GIT_COMMIT`/`GIT_BRANCH` build args (exported as env) and CI passes `SHORT_SHA` and the branch name. For parity with hcs-app, the footer's `branch@commit` is now a link to the commit on GitHub (repo URL overridable via `GIT_REPO_URL`).
+
 ## [0.5.2] - 2026-07-03
 
 ### Added

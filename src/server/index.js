@@ -97,12 +97,27 @@ const APP_BUILD = (() => {
   }
   if (branch === 'HEAD') branch = '';
 
+  const repoUrl = (process.env.GIT_REPO_URL || 'https://github.com/CappyTech/hcs-sync').replace(/\/+$/, '');
+
   return {
     version,
     commit: commit || null,
     branch: branch || null,
+    commitUrl: commit ? `${repoUrl}/commit/${commit}` : null,
   };
 })();
+
+const IS_PROD = process.env.NODE_ENV === 'production';
+
+// Turnstile CAPTCHA is skipped outside production (local dev has no Cloudflare
+// keys) or when explicitly bypassed via SKIP_TURNSTILE=true.
+const SKIP_TURNSTILE = process.env.SKIP_TURNSTILE === 'true' || !IS_PROD;
+
+// SSO cookie signing secret. In production this MUST be the shared secret from
+// hcs-app (HCS_SSO_JWT_SECRET). Outside production, fall back to an ephemeral
+// per-process secret so the dev login bypass can sign its own sessions
+// (sessions die with the process — fine for local dev).
+const SSO_JWT_SECRET = process.env.HCS_SSO_JWT_SECRET || (!IS_PROD ? crypto.randomBytes(32).toString('hex') : '');
 
 // Behind reverse proxies (Caddy/FRP): trust loopback and Docker bridge range only.
 // Avoid trusting the full private-IP space to prevent X-Forwarded-For spoofing
@@ -411,7 +426,7 @@ function sanitiseNext(raw) {
 function verifySsoCookie(req) {
   const token = req.cookies?.hcs_sso;
   if (!token) return null;
-  const secret = process.env.HCS_SSO_JWT_SECRET;
+  const secret = SSO_JWT_SECRET;
   if (!secret) return null;
 
   try {
@@ -787,7 +802,7 @@ app.get('/login', (req, res) => {
   }
   const next = sanitiseNext(req.query.next);
   const error = typeof req.query.error === 'string' ? req.query.error : null;
-  const skipTurnstile = process.env.SKIP_TURNSTILE === 'true';
+  const skipTurnstile = SKIP_TURNSTILE;
   const siteKey = String(process.env.TURNSTILE_SITE_KEY || '');
   res.render('layout', { title: 'Log In', content: 'login', next, error, skipTurnstile, siteKey, isAuthenticated: false });
 });
@@ -797,7 +812,7 @@ app.post('/login', loginLimiter, async (req, res) => {
   const username = String(req.body?.username || '').trim();
   const password = String(req.body?.password || '');
   const totp = String(req.body?.totp || '').trim();
-  const skipTurnstile = process.env.SKIP_TURNSTILE === 'true';
+  const skipTurnstile = SKIP_TURNSTILE;
 
   // Turnstile verification
   if (!skipTurnstile) {
@@ -826,7 +841,7 @@ app.post('/login', loginLimiter, async (req, res) => {
       return res.redirect(`/login?next=${encodeURIComponent(next)}&error=${encodeURIComponent('CAPTCHA check failed. Please try again.')}`);
     }
   } else {
-    logger.info('[login] CAPTCHA bypass active (SKIP_TURNSTILE=true)');
+    logger.info('[login] CAPTCHA bypass active (%s)', process.env.SKIP_TURNSTILE === 'true' ? 'SKIP_TURNSTILE=true' : `NODE_ENV=${process.env.NODE_ENV || 'undefined'}`);
   }
 
   if (!username || !password) {
@@ -836,6 +851,24 @@ app.post('/login', loginLimiter, async (req, res) => {
   const appBase = String(process.env.HCS_APP_BASE_URL || 'https://app.heroncs.co.uk').replace(/\/$/, '');
   const apiKey = String(process.env.HCS_SYNC_API_KEY || '');
   if (!apiKey) {
+    if (!IS_PROD) {
+      // Dev bypass: no hcs-app to validate against — sign a local admin session
+      // with the ephemeral secret. Any username/password is accepted.
+      logger.warn('[login] DEV login bypass — HCS_SYNC_API_KEY not set and NODE_ENV != production; issuing local admin session for "%s"', username);
+      const devToken = jwt.sign(
+        { username, name: username, role: 'admin', dev: true },
+        SSO_JWT_SECRET,
+        { algorithm: 'HS256', audience: 'hcs-sync', issuer: 'hcs-app', expiresIn: '8h' },
+      );
+      res.cookie('hcs_sso', devToken, {
+        httpOnly: true,
+        secure: false, // local dev runs on plain http
+        sameSite: 'lax',
+        path: '/',
+        maxAge: 8 * 60 * 60 * 1000,
+      });
+      return res.redirect(next);
+    }
     logger.error('[login] HCS_SYNC_API_KEY is not set — cannot validate credentials');
     return res.redirect(`/login?next=${encodeURIComponent(next)}&error=${encodeURIComponent('Login service is not configured.')}`);
   }
