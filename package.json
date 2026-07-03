@@ -1,6 +1,6 @@
 {
   "name": "hcs-sync",
-  "version": "0.5.4",
+  "version": "0.5.5",
   "description": "Backend-only KashFlow admin sync in Node.js",
   "type": "module",
   "private": true,

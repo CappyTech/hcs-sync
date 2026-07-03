@@ -62,9 +62,18 @@ function buildUpsertUpdate({ keyField, keyValue, payload, syncedAt, runId, model
   // This means modifiedCount only increments when KashFlow data changed.
   // Data fields are wrapped in $literal to prevent misinterpretation by the
   // aggregation engine (e.g. strings starting with '$', operator-shaped objects).
-  // deletedAt is explicitly cleared to null: if an entity exists in KashFlow it
-  // is not deleted, so any legacy soft-delete flag must be removed.
+  //
+  // Soft-delete handling:
+  //   deletedAt (lowercase) — a legacy hcs-sync-only flag never returned by the KashFlow
+  //   API. Always cleared to null; placed after the spread so it cannot be re-introduced
+  //   by a stale payload field.
+  //
+  //   DeletedAt (PascalCase) — a real KashFlow field: present (with a date) for records
+  //   KashFlow has voided/deleted, absent for active records. Placed before the spread so
+  //   it defaults to null for active records (KashFlow omits it) but is overridden by the
+  //   KashFlow value when the record is genuinely deleted.
   const pipelineSet = {
+    DeletedAt: { $literal: null },
     ...Object.fromEntries(Object.entries(flattened).map(([k, v]) => [k, { $literal: v }])),
     [keyField]: { $literal: keyValue },
     _kfHash: { $literal: newHash },
@@ -85,7 +94,7 @@ function buildUpsertUpdate({ keyField, keyValue, payload, syncedAt, runId, model
   // pipeline._rawSet is a JS-only property (not serialised to BSON) that
   // the audit engine reads for deepDiff comparisons.
   const pipeline = [{ $set: pipelineSet }, { $unset: 'data' }];
-  pipeline._rawSet = { ...flattened, [keyField]: keyValue, deletedAt: null };
+  pipeline._rawSet = { DeletedAt: null, ...flattened, [keyField]: keyValue, deletedAt: null };
   return pipeline;
 }
 

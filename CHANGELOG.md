@@ -2,10 +2,14 @@
 
 All notable changes to hcs-sync will be documented here. Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [0.5.5] - 2026-07-03
+
+### Fixed
+- **Stale PascalCase `DeletedAt` values persisted after records became active again.** The KashFlow API only includes `DeletedAt` in its response when a record is genuinely voided/deleted; for active records the field is simply absent. Because the upsert pipeline only wrote fields present in the KashFlow payload, a stale `DeletedAt` stored in MongoDB from an earlier deletion was never cleared when the record became active again. `DeletedAt: null` is now placed **before** the payload spread in `buildUpsertUpdate` so it acts as a default for active records (where KashFlow omits the field), while a genuinely-deleted record's `DeletedAt` from the KashFlow payload still overrides it via the spread.
+
 ## [0.5.4] - 2026-07-03
 
 ### Fixed
-- **Run Sync button stayed disabled after sync completed.** After triggering a manual run the dashboard reloaded with `isRunning=true`, disabling the button. When the sync finished the status poll updated the badge to "Idle" but the button remained greyed out because its disabled state is set at render time. The poll now reloads the page 1.2 s after detecting a `running → idle` or `running → failed` transition, so the button correctly re-enables.
 - **Run Sync / Dedup buttons did nothing when clicked — CSP violation.** The dashboard buttons used inline `onclick` attributes (`onclick="openModal(…)"`) which are blocked by the `script-src-attr: 'none'` CSP directive. All inline event handlers across `index.ejs` and `run.ejs` have been replaced with `data-modal-open`, `data-modal-close`, `data-auto-submit`, and `data-pull-entity-type/id` attributes. The `data-modal-open/close` handler in `ui-helpers.js` now delegates to `window.openModal`/`window.closeModal` (defined in `app.js`) so the full backdrop/aria behaviour is preserved. The `data-auto-submit` handler submits the enclosing form on `change`. Manual Pull buttons on the run-details page use `data-pull-entity-*` attributes handled by `app.js` event delegation.
 - **16,753 soft-deleted records invisible to hcs-app.** Legacy sync runs had set a `deletedAt` timestamp on purchase, invoice, supplier, project, and quote documents. Because `deletedAt` was in Project's `protectedFields` (and not explicitly cleared for other models) the regular sync never restored these records — hcs-app filters on `deletedAt: null` and treated them as deleted. The upsert pipeline in `buildUpsertUpdate` now unconditionally sets `deletedAt: null` for every entity fetched from KashFlow, and `deletedAt` has been removed from Project's `protectedFields`. The first sync after this change will restore all affected records.
 
