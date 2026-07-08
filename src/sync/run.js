@@ -6,7 +6,7 @@ import config from '../config.js';
 import progress from '../server/progress.js';
 import { connectMongoose, isMongooseEnabled } from '../db/mongoose.js';
 import { ensureKashflowIndexes } from '../db/mongo.js';
-import { Customer, Supplier, Invoice, Quote, Purchase, Project, Nominal, VATRate, SYNC_INTERNAL_FIELDS, toDate, computeCisTaxPeriod, preparePurchaseForUpsert } from '../server/models/kashflow.js';
+import { Customer, Supplier, Invoice, Quote, Purchase, Project, Nominal, VATRate, BankAccount, SYNC_INTERNAL_FIELDS, toDate, computeCisTaxPeriod, preparePurchaseForUpsert } from '../server/models/kashflow.js';
 import deepDiff, { stableStringify } from '../util/deepDiff.js';
 
 function computePayloadHash(data) {
@@ -414,12 +414,13 @@ async function run(options = {}) {
     const auditOpts = (collectionName) => auditCol ? { auditCollection: auditCol, runId, collectionName } : null;
 
     setStage('fetch:lists');
-    const [customers, suppliers, projects, nominals, vatRatesRaw] = await Promise.all([
+    const [customers, suppliers, projects, nominals, vatRatesRaw, bankAccountsRaw] = await Promise.all([
       kf.customers.listAll({ perpage: 200 }),
       kf.suppliers.listAll({ perpage: 200 }),
       kf.projects.listAll({ perpage: 200 }),
       kf.nominals.list(),
       kf.vatRates.list().catch((e) => { logger.warn({ err: e.message }, 'Failed to fetch VAT rates'); return []; }),
+      kf.bankAccounts.list().catch((e) => { logger.warn({ err: e.message }, 'Failed to fetch bank accounts'); return []; }),
     ]);
 
     const customerCodes = (customers || []).map(pickCode).filter((x) => !isMissingKey(x));
@@ -431,6 +432,7 @@ async function run(options = {}) {
       projects: projects?.length || 0,
       nominals: nominals?.length || 0,
       vatRates: vatRatesRaw?.length || 0,
+      bankAccounts: bankAccountsRaw?.length || 0,
     });
 
     // Upsert list payloads for collections that have no detail phase.
@@ -476,6 +478,26 @@ async function run(options = {}) {
           mongoDetails.vatRates = up.getUpsertedFilters();
           logger.info({ mongo: { vatRates: up.getStats() } }, 'Mongo upsert summary (vatRates)');
           emitLog('info', 'Mongo upsert summary (vatRates)', { stats: up.getStats() });
+        })(),
+        (async () => {
+          if (!bankAccountsRaw?.length) return;
+          const up = createBulkUpserter(BankAccount, { captureUpserts: true, audit: auditOpts('bankaccounts') });
+          const skip = createSkipCounter();
+          for (const b of bankAccountsRaw) {
+            if (typeof b !== 'object' || b == null) continue;
+            const id = pickId(b);
+            const code = pickCode(b);
+            const keyField = id != null ? 'Id' : 'Code';
+            const keyValue = id != null ? id : code;
+            if (keyValue == null || (typeof keyValue === 'string' && keyValue.trim() === '')) { skip.incMissingKey(); continue; }
+            await up.push({ updateOne: { filter: { [keyField]: keyValue }, update: buildUpsertUpdate({ keyField, keyValue, payload: b, syncedAt: now, runId, model: BankAccount }), upsert: true } });
+          }
+          await up.flush();
+          mongoSummary.bankAccounts = addMongoStats(mongoSummary.bankAccounts, up.getStats());
+          mongoDetails.bankAccounts = up.getUpsertedFilters();
+          logger.info({ mongo: { bankAccounts: up.getStats() } }, 'Mongo upsert summary (bankAccounts)');
+          emitLog('info', 'Mongo upsert summary (bankAccounts)', { stats: up.getStats() });
+          if (skip.getMissingKey() > 0) { logger.warn({ skippedMissingId: skip.getMissingKey() }, 'Skipped bank account upserts with missing Id/Code'); emitLog('warn', 'Skipped bank account upserts with missing Id/Code', { count: skip.getMissingKey() }); }
         })(),
       ]);
     }
@@ -791,6 +813,7 @@ async function run(options = {}) {
       projects: projects?.length || 0,
       nominals: nominals?.length || 0,
       vatRates: vatRatesRaw?.length || 0,
+      bankAccounts: bankAccountsRaw?.length || 0,
       invoices: invoicesTotal,
       quotes: quotesTotal,
       purchases: purchasesTotal,

@@ -74,6 +74,33 @@
 
 </div>
 
+<!-- ── Response shapes ──────────────────────────────────────────────── -->
+<section class="mt-10">
+  <h2 class="text-xl font-semibold mb-1">Response Shapes</h2>
+  <p class="text-sm text-gray-500 dark:text-gray-400 mb-4">Sample live KashFlow responses and infer field types — KashFlow's Swagger is incomplete, so this is the source for updating the API documentation (hcs-app apiDocsConfig.js).</p>
+  <div class="grid grid-cols-1 md:grid-cols-4 gap-4 items-end mb-4">
+    <div>
+      <label for="shapeEntity" class="block mb-1 text-sm font-medium text-gray-900 dark:text-gray-100">Entity</label>
+      <select id="shapeEntity" class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:text-white">
+        <% (shapeEntities || []).forEach(function(name) { %>
+          <option value="<%= name %>"><%= name %></option>
+        <% }); %>
+      </select>
+    </div>
+    <div>
+      <button id="btn-shape" type="button" class="text-white bg-blue-700 hover:bg-blue-800 focus:ring-4 focus:outline-none focus:ring-blue-300 font-medium rounded-lg text-sm px-5 py-2.5 dark:bg-blue-600 dark:hover:bg-blue-700 dark:focus:ring-blue-800 w-full">
+        Capture shape
+      </button>
+    </div>
+    <div>
+      <button id="btn-shape-copy" type="button" class="text-gray-900 bg-white border border-gray-300 hover:bg-gray-100 focus:ring-4 focus:outline-none focus:ring-gray-200 font-medium rounded-lg text-sm px-5 py-2.5 dark:bg-gray-800 dark:text-white dark:border-gray-600 dark:hover:bg-gray-700 w-full" disabled>
+        Copy JSON
+      </button>
+    </div>
+  </div>
+  <div id="shape-results" class="hidden space-y-6"></div>
+</section>
+
 <script nonce="<%= locals.cspNonce %>">
 (function () {
   const csrfToken = (document.querySelector('meta[name="csrf-token"]') || {}).content || '';
@@ -297,5 +324,76 @@
   btnDebug.addEventListener('click', doDebug);
   btnPull.addEventListener('click', doPull);
   inputId.addEventListener('keydown', function (e) { if (e.key === 'Enter') doDebug(); });
+
+  // ── Response shapes ─────────────────────────────────────────────────
+  const btnShape = document.getElementById('btn-shape');
+  const btnShapeCopy = document.getElementById('btn-shape-copy');
+  const shapeEntity = document.getElementById('shapeEntity');
+  const shapeResults = document.getElementById('shape-results');
+  let lastShape = null;
+
+  function renderShapeReport(report) {
+    if (!report) return '';
+    var rows = (report.fields || []).map(function (f) {
+      return '<tr class="border-b border-gray-100 dark:border-gray-700 align-top">'
+        + '<td class="py-1 pr-3 font-mono text-xs text-gray-700 dark:text-gray-300 whitespace-nowrap">' + escapeHtml(f.name) + '</td>'
+        + '<td class="py-1 pr-3 font-mono text-xs text-blue-700 dark:text-blue-300 whitespace-nowrap">' + escapeHtml(f.type) + '</td>'
+        + '<td class="py-1 pr-3 text-xs">' + (f.optional ? '<span class="text-amber-600 dark:text-amber-400">optional</span>' : '<span class="text-gray-400">always</span>') + '</td>'
+        + '<td class="py-1 font-mono text-xs text-gray-500 dark:text-gray-400 break-all">' + (f.example !== undefined ? escapeHtml(f.example) : '') + '</td>'
+        + '</tr>';
+    });
+    return '<div class="p-4 bg-white border border-gray-200 rounded-lg shadow dark:bg-gray-800 dark:border-gray-700">'
+      + '<div class="flex items-baseline justify-between mb-2 gap-2 flex-wrap">'
+      + '<span class="font-mono text-sm font-semibold">' + escapeHtml(report.endpoint) + '</span>'
+      + '<span class="text-xs text-gray-500 dark:text-gray-400">sampled ' + report.sampledItems + ' of ' + report.totalItems + ' item(s) · ' + (report.fields || []).length + ' fields · ' + escapeHtml(report.fetchedAt) + '</span>'
+      + '</div>'
+      + '<div class="max-h-96 overflow-auto"><table class="w-full text-left"><thead>'
+      + '<tr class="text-xs text-gray-500 dark:text-gray-400"><th class="py-1 pr-3">Field</th><th class="py-1 pr-3">Type</th><th class="py-1 pr-3">Presence</th><th class="py-1">Example</th></tr>'
+      + '</thead><tbody>' + rows.join('') + '</tbody></table></div>'
+      + '</div>';
+  }
+
+  async function doShape() {
+    var entity = shapeEntity.value;
+    hideError();
+    btnShape.disabled = true;
+    btnShapeCopy.disabled = true;
+    setLoading(true, 'Sampling ' + entity + ' from KashFlow...');
+    try {
+      var r = await fetch('/debug/shape', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-csrf-token': csrfToken },
+        body: JSON.stringify({ entity: entity }),
+      });
+      var data = await parseResponse(r);
+      setLoading(false);
+      btnShape.disabled = false;
+      if (!r.ok) { showError(data.message || 'Shape capture failed'); return; }
+      lastShape = data;
+      btnShapeCopy.disabled = false;
+      var html = renderShapeReport(data.list);
+      if (data.detail) html += renderShapeReport(data.detail);
+      shapeResults.innerHTML = html;
+      shapeResults.classList.remove('hidden');
+    } catch (err) {
+      setLoading(false);
+      btnShape.disabled = false;
+      showError('Shape request failed: ' + err.message);
+    }
+  }
+
+  async function copyShape() {
+    if (!lastShape) return;
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(lastShape, null, 2));
+      if (typeof window.showToast === 'function') window.showToast('success', 'Shape JSON copied');
+      else { btnShapeCopy.textContent = 'Copied!'; setTimeout(function () { btnShapeCopy.textContent = 'Copy JSON'; }, 1500); }
+    } catch (err) {
+      showError('Copy failed: ' + err.message);
+    }
+  }
+
+  if (btnShape) btnShape.addEventListener('click', doShape);
+  if (btnShapeCopy) btnShapeCopy.addEventListener('click', copyShape);
 })();
 </script>

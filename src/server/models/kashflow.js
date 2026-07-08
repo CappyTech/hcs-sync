@@ -243,6 +243,19 @@ VATRateSchema.statics.syncConfig = {
 export const VATRate =
   mongoose.models.vatrate || mongoose.model('vatrate', VATRateSchema);
 
+// ── BankAccount ─────────────────────────────────────────────────────────
+
+const BankAccountSchema = buildSchema(schemas.bankAccount);
+
+BankAccountSchema.statics.syncConfig = {
+  keyField: 'Id',
+  fallbackKeyField: 'Code',
+  protectedFields: [],
+};
+
+export const BankAccount =
+  mongoose.models.bankaccount || mongoose.model('bankaccount', BankAccountSchema);
+
 // ── Convenience map ─────────────────────────────────────────────────────
 
 const models = {
@@ -255,6 +268,7 @@ const models = {
   Nominal,
   Note,
   VATRate,
+  BankAccount,
 };
 
 export default models;

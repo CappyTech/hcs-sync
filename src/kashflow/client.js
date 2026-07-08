@@ -166,6 +166,11 @@ async function createClient() {
     vatRates: {
       list: () => http.get('/vat/settings/vatrates').then((r) => normalizeList(r.data)),
     },
+    bankAccounts: {
+      // Include archived accounts so historical PaymentLines.AccountId always resolves
+      list: (params = {}) => listInternal('/bankaccounts', { includeArchivedAccounts: true, ...params }),
+      get: (id) => http.get(`/bankaccounts/${id}`).then((r) => r.data),
+    },
   };
 }
 

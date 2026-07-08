@@ -2,6 +2,12 @@
 
 All notable changes to hcs-sync will be documented here. Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [0.6.0] - 2026-07-08
+
+### Added
+- **Bank accounts are now synced from KashFlow.** New `bankaccounts` collection populated in the `upsert:lists` phase alongside nominals and VAT rates, from `GET /bankaccounts` (archived accounts included so historical `PaymentLines.AccountId` values always resolve). New `BankAccount` model built from `@cappytech/hcs-schemas` 1.0.2, managed indexes (unique `Id`, secondary `Code`), and fetch counts in the run summary. Consumed by hcs-app's subcontractor draft page for a named payment-account selector.
+- **KashFlow response-shape capture — because KashFlow's Swagger is incomplete.** New "Response Shapes" section on the Debug page (`POST /debug/shape`, admin + rate-limited): pick an entity, sample the live list + detail responses, and get an inferred field table (dotted/`[]` paths, type unions like `integer|null`, optional-field detection from sample presence, date-time string detection, truncated examples) in the same style as hcs-app's `apiDocsConfig.js` fields, with a Copy JSON button. The same capture runs headless via `npm run shapes` (writes `shapes/*.json`, gitignored; per-entity filter: `npm run shapes -- purchases bankAccounts`). Purchases sampling prefers a paid purchase so `PaymentLines` appears in the shape. Core in `src/sync/shapes.js` + `src/util/shape.js`.
+
 ## [0.5.5] - 2026-07-03
 
 ### Fixed
