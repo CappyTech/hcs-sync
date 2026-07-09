@@ -6,7 +6,7 @@ import config from '../config.js';
 import progress from '../server/progress.js';
 import { connectMongoose, isMongooseEnabled } from '../db/mongoose.js';
 import { ensureKashflowIndexes } from '../db/mongo.js';
-import { Customer, Supplier, Invoice, Quote, Purchase, Project, Nominal, VATRate, BankAccount, SYNC_INTERNAL_FIELDS, toDate, computeCisTaxPeriod, preparePurchaseForUpsert } from '../server/models/kashflow.js';
+import { Customer, Supplier, Invoice, Quote, Purchase, Project, Nominal, VATRate, BankAccount, BankTransaction, Journal, Product, PurchaseOrder, QuoteCategory, PurchaseOrderCategory, Currency, Country, AccountingPeriod, VatReturn, SYNC_INTERNAL_FIELDS, toDate, computeCisTaxPeriod, preparePurchaseForUpsert } from '../server/models/kashflow.js';
 import deepDiff, { stableStringify } from '../util/deepDiff.js';
 
 function computePayloadHash(data) {
@@ -414,13 +414,30 @@ async function run(options = {}) {
     const auditOpts = (collectionName) => auditCol ? { auditCollection: auditCol, runId, collectionName } : null;
 
     setStage('fetch:lists');
-    const [customers, suppliers, projects, nominals, vatRatesRaw, bankAccountsRaw] = await Promise.all([
+    const listOrEmpty = (label, promise) =>
+      promise.catch((e) => { logger.warn({ err: e.message }, `Failed to fetch ${label}`); return []; });
+
+    const [
+      customers, suppliers, projects, nominals, vatRatesRaw, bankAccountsRaw,
+      journalsRaw, productsRaw, purchaseOrdersRaw, quoteCategoriesRaw,
+      purchaseOrderCategoriesRaw, currenciesRaw, countriesRaw,
+      accountingPeriodsRaw, vatReturnsRaw,
+    ] = await Promise.all([
       kf.customers.listAll({ perpage: 200 }),
       kf.suppliers.listAll({ perpage: 200 }),
       kf.projects.listAll({ perpage: 200 }),
       kf.nominals.list(),
-      kf.vatRates.list().catch((e) => { logger.warn({ err: e.message }, 'Failed to fetch VAT rates'); return []; }),
-      kf.bankAccounts.list().catch((e) => { logger.warn({ err: e.message }, 'Failed to fetch bank accounts'); return []; }),
+      listOrEmpty('VAT rates', kf.vatRates.list()),
+      listOrEmpty('bank accounts', kf.bankAccounts.list()),
+      listOrEmpty('journals', kf.journals.listAll({ perpage: 200 })),
+      listOrEmpty('products', kf.products.listAll({ perpage: 200 })),
+      listOrEmpty('purchase orders', kf.purchaseOrders.listAll({ perpage: 200 })),
+      listOrEmpty('quote categories', kf.quoteCategories.list()),
+      listOrEmpty('purchase order categories', kf.purchaseOrderCategories.list()),
+      listOrEmpty('currencies', kf.currencies.list()),
+      listOrEmpty('countries', kf.countries.list()),
+      listOrEmpty('accounting periods', kf.accountingPeriods.list()),
+      listOrEmpty('VAT returns', kf.vatReturns.list()),
     ]);
 
     const customerCodes = (customers || []).map(pickCode).filter((x) => !isMissingKey(x));
@@ -433,6 +450,15 @@ async function run(options = {}) {
       nominals: nominals?.length || 0,
       vatRates: vatRatesRaw?.length || 0,
       bankAccounts: bankAccountsRaw?.length || 0,
+      journals: journalsRaw?.length || 0,
+      products: productsRaw?.length || 0,
+      purchaseOrders: purchaseOrdersRaw?.length || 0,
+      quoteCategories: quoteCategoriesRaw?.length || 0,
+      purchaseOrderCategories: purchaseOrderCategoriesRaw?.length || 0,
+      currencies: currenciesRaw?.length || 0,
+      countries: countriesRaw?.length || 0,
+      accountingPeriods: accountingPeriodsRaw?.length || 0,
+      vatReturns: vatReturnsRaw?.length || 0,
     });
 
     // Upsert list payloads for collections that have no detail phase.
@@ -440,10 +466,45 @@ async function run(options = {}) {
     // written via the detail phase immediately below, with a more complete payload.
     // Writing them twice per run would cause _kfHash to oscillate between the list-field
     // hash and the detail-field hash, producing spurious Modified counts every sync.
+    // Generic list upsert for entities with no detail phase. keyFields are
+    // tried in order (e.g. Id then Code) per row, mirroring the nominal/bank
+    // account blocks below.
+    const upsertSimpleList = async ({ model, rows, summaryKey, collectionName, keyFields, now }) => {
+      if (!rows?.length) return;
+      const up = createBulkUpserter(model, { captureUpserts: true, audit: auditOpts(collectionName) });
+      const skip = createSkipCounter();
+      for (const row of rows) {
+        if (typeof row !== 'object' || row == null) continue;
+        let keyField = null;
+        let keyValue = null;
+        for (const f of keyFields) {
+          const v = row[f];
+          if (v != null && !(typeof v === 'string' && v.trim() === '')) { keyField = f; keyValue = v; break; }
+        }
+        if (keyField == null) { skip.incMissingKey(); continue; }
+        await up.push({ updateOne: { filter: { [keyField]: keyValue }, update: buildUpsertUpdate({ keyField, keyValue, payload: row, syncedAt: now, runId, model }), upsert: true } });
+      }
+      await up.flush();
+      mongoSummary[summaryKey] = addMongoStats(mongoSummary[summaryKey], up.getStats());
+      mongoDetails[summaryKey] = up.getUpsertedFilters();
+      logger.info({ mongo: { [summaryKey]: up.getStats() } }, `Mongo upsert summary (${summaryKey})`);
+      emitLog('info', `Mongo upsert summary (${summaryKey})`, { stats: up.getStats() });
+      if (skip.getMissingKey() > 0) { logger.warn({ skippedMissingKey: skip.getMissingKey() }, `Skipped ${summaryKey} upserts with missing key`); emitLog('warn', `Skipped ${summaryKey} upserts with missing key`, { count: skip.getMissingKey() }); }
+    };
+
     if (mongoEnabled) {
       setStage('upsert:lists');
       const now = new Date();
       await Promise.all([
+        upsertSimpleList({ model: Journal,               rows: journalsRaw,                summaryKey: 'journals',                collectionName: 'journals',                keyFields: ['Id', 'Number'], now }),
+        upsertSimpleList({ model: Product,               rows: productsRaw,                summaryKey: 'products',                collectionName: 'products',                keyFields: ['Id', 'Code'],   now }),
+        upsertSimpleList({ model: PurchaseOrder,         rows: purchaseOrdersRaw,          summaryKey: 'purchaseOrders',          collectionName: 'purchaseorders',          keyFields: ['Id', 'Number'], now }),
+        upsertSimpleList({ model: QuoteCategory,         rows: quoteCategoriesRaw,         summaryKey: 'quoteCategories',         collectionName: 'quotecategories',         keyFields: ['Number'],       now }),
+        upsertSimpleList({ model: PurchaseOrderCategory, rows: purchaseOrderCategoriesRaw, summaryKey: 'purchaseOrderCategories', collectionName: 'purchaseordercategories', keyFields: ['Number'],       now }),
+        upsertSimpleList({ model: Currency,              rows: currenciesRaw,              summaryKey: 'currencies',              collectionName: 'currencies',              keyFields: ['Id', 'Code'],   now }),
+        upsertSimpleList({ model: Country,               rows: countriesRaw,               summaryKey: 'countries',               collectionName: 'countries',               keyFields: ['Id', 'Code'],   now }),
+        upsertSimpleList({ model: AccountingPeriod,      rows: accountingPeriodsRaw,       summaryKey: 'accountingPeriods',       collectionName: 'accountingperiods',       keyFields: ['Id'],           now }),
+        upsertSimpleList({ model: VatReturn,             rows: vatReturnsRaw,              summaryKey: 'vatReturns',              collectionName: 'vatreturns',              keyFields: ['Id'],           now }),
         (async () => {
           const up = createBulkUpserter(Nominal, { captureUpserts: true, audit: auditOpts('nominals') });
           const skip = createSkipCounter();
@@ -500,6 +561,28 @@ async function run(options = {}) {
           if (skip.getMissingKey() > 0) { logger.warn({ skippedMissingId: skip.getMissingKey() }, 'Skipped bank account upserts with missing Id/Code'); emitLog('warn', 'Skipped bank account upserts with missing Id/Code', { count: skip.getMissingKey() }); }
         })(),
       ]);
+    }
+
+    // Bank transactions — fetched per account (KashFlow has no global endpoint).
+    // Best-effort: a failing account is logged and skipped so it never breaks the run.
+    let bankTransactionsTotal = 0;
+    if (mongoEnabled && bankAccountsRaw?.length) {
+      setStage('banktransactions:fetch');
+      const now = new Date();
+      for (const account of bankAccountsRaw) {
+        const accountId = pickId(account);
+        if (accountId == null) continue;
+        try {
+          const txs = await kf.bankTransactions.listAll(accountId, { perpage: 200 });
+          if (!txs?.length) continue;
+          bankTransactionsTotal += txs.length;
+          await upsertSimpleList({ model: BankTransaction, rows: txs, summaryKey: 'bankTransactions', collectionName: 'banktransactions', keyFields: ['Id'], now });
+        } catch (e) {
+          logger.warn({ accountId, err: e.message }, 'Failed to fetch bank transactions for account');
+          emitLog('warn', 'Failed to fetch bank transactions for account', { accountId, message: e.message });
+        }
+      }
+      emitLog('info', 'Fetched bank transactions', { accounts: bankAccountsRaw.length, transactions: bankTransactionsTotal });
     }
 
     // Detail fetch phases — customers, suppliers, projects, invoices, quotes, purchases all run concurrently.
@@ -814,6 +897,16 @@ async function run(options = {}) {
       nominals: nominals?.length || 0,
       vatRates: vatRatesRaw?.length || 0,
       bankAccounts: bankAccountsRaw?.length || 0,
+      bankTransactions: bankTransactionsTotal,
+      journals: journalsRaw?.length || 0,
+      products: productsRaw?.length || 0,
+      purchaseOrders: purchaseOrdersRaw?.length || 0,
+      quoteCategories: quoteCategoriesRaw?.length || 0,
+      purchaseOrderCategories: purchaseOrderCategoriesRaw?.length || 0,
+      currencies: currenciesRaw?.length || 0,
+      countries: countriesRaw?.length || 0,
+      accountingPeriods: accountingPeriodsRaw?.length || 0,
+      vatReturns: vatReturnsRaw?.length || 0,
       invoices: invoicesTotal,
       quotes: quotesTotal,
       purchases: purchasesTotal,

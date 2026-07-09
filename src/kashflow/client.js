@@ -171,6 +171,66 @@ async function createClient() {
       list: (params = {}) => listInternal('/bankaccounts', { includeArchivedAccounts: true, ...params }),
       get: (id) => http.get(`/bankaccounts/${id}`).then((r) => r.data),
     },
+    bankTransactions: {
+      list: (accountId, params = {}) => listInternal(`/bankaccounts/${accountId}/transactions`, params),
+      listAll: (accountId, params = {}) => listAllInternal(`/bankaccounts/${accountId}/transactions`, params),
+      get: (accountId, transactionId) => http.get(`/bankaccounts/${accountId}/transactions/${transactionId}`).then((r) => r.data),
+    },
+    journals: {
+      list: (params = {}) => listInternal('/journals', params),
+      listAll: (params = {}) => listAllInternal('/journals', params),
+      get: (number) => http.get(`/journals/${number}`).then((r) => r.data),
+      create: (body) => http.post('/journals', body).then((r) => r.data),
+      update: (number, body) => http.put(`/journals/${number}`, body).then((r) => r.data),
+      delete: (number) => http.delete(`/journals/${number}`).then((r) => r.status === 204),
+    },
+    products: {
+      list: (params = {}) => listInternal('/products', params),
+      listAll: (params = {}) => listAllInternal('/products', params),
+      get: (id) => http.get(`/products/${id}`).then((r) => r.data),
+      create: (body) => http.post('/products', body).then((r) => r.data),
+      update: (id, body) => http.put(`/products/${id}`, body).then((r) => r.data),
+      delete: (id) => http.delete(`/products/${id}`).then((r) => r.status === 204),
+    },
+    purchaseOrders: {
+      list: (params = {}) => listInternal('/purchaseorders', params),
+      listAll: (params = {}) => listAllInternal('/purchaseorders', params),
+      get: (number) => http.get(`/purchaseorders/${number}`).then((r) => r.data),
+      create: (body) => http.post('/purchaseorders', body).then((r) => r.data),
+      update: (number, body) => http.put(`/purchaseorders/${number}`, body).then((r) => r.data),
+    },
+    quoteCategories: {
+      list: () => http.get('/quotecategories').then((r) => normalizeList(r.data)),
+      create: (body) => http.post('/quotecategories', body).then((r) => r.data),
+      update: (number, body) => http.put(`/quotecategories/${number}`, body).then((r) => r.data),
+      delete: (number) => http.delete(`/quotecategories/${number}`).then((r) => r.status === 204),
+    },
+    purchaseOrderCategories: {
+      list: () => http.get('/purchaseordercategories').then((r) => normalizeList(r.data)),
+      create: (body) => http.post('/purchaseordercategories', body).then((r) => r.data),
+      update: (number, body) => http.put(`/purchaseordercategories/${number}`, body).then((r) => r.data),
+      delete: (number) => http.delete(`/purchaseordercategories/${number}`).then((r) => r.status === 204),
+    },
+    currencies: {
+      list: () => http.get('/currencies').then((r) => normalizeList(r.data)),
+      get: (id) => http.get(`/currencies/${id}`).then((r) => r.data),
+      create: (body) => http.post('/currencies', body).then((r) => r.data),
+      update: (id, body) => http.put(`/currencies/${id}`, body).then((r) => r.data),
+      delete: (id) => http.delete(`/currencies/${id}`).then((r) => r.status === 204),
+    },
+    countries: {
+      list: () => http.get('/countries').then((r) => normalizeList(r.data)),
+    },
+    accountingPeriods: {
+      list: () => http.get('/accountingperiods').then((r) => normalizeList(r.data)),
+      create: (body) => http.post('/accountingperiods', body).then((r) => r.data),
+      delete: (id) => http.delete(`/accountingperiods/${id}`).then((r) => r.status === 204),
+    },
+    vatReturns: {
+      // page=0 & pagesize=0 returns all records
+      list: (params = {}) => listInternal('/vatreturns', { page: 0, pagesize: 0, status: 0, ...params }),
+      get: (id) => http.get(`/vatreturns/${id}`).then((r) => r.data),
+    },
   };
 }
 

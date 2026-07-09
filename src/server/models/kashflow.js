@@ -256,6 +256,129 @@ BankAccountSchema.statics.syncConfig = {
 export const BankAccount =
   mongoose.models.bankaccount || mongoose.model('bankaccount', BankAccountSchema);
 
+// ── BankTransaction ─────────────────────────────────────────────────────
+
+const BankTransactionSchema = buildSchema(schemas.bankTransaction);
+
+BankTransactionSchema.statics.syncConfig = {
+  keyField: 'Id',
+  protectedFields: [],
+};
+
+export const BankTransaction =
+  mongoose.models.banktransaction || mongoose.model('banktransaction', BankTransactionSchema);
+
+// ── Journal ─────────────────────────────────────────────────────────────
+
+const JournalSchema = buildSchema(schemas.journal);
+
+JournalSchema.statics.syncConfig = {
+  keyField: 'Id',
+  fallbackKeyField: 'Number',
+  protectedFields: [],
+};
+
+export const Journal =
+  mongoose.models.journal || mongoose.model('journal', JournalSchema);
+
+// ── Product ─────────────────────────────────────────────────────────────
+
+const ProductSchema = buildSchema(schemas.product);
+
+ProductSchema.statics.syncConfig = {
+  keyField: 'Id',
+  fallbackKeyField: 'Code',
+  protectedFields: [],
+};
+
+export const Product =
+  mongoose.models.product || mongoose.model('product', ProductSchema);
+
+// ── PurchaseOrder ───────────────────────────────────────────────────────
+
+const PurchaseOrderSchema = buildSchema(schemas.purchaseOrder);
+
+PurchaseOrderSchema.statics.syncConfig = {
+  keyField: 'Id',
+  fallbackKeyField: 'Number',
+  protectedFields: [],
+};
+
+export const PurchaseOrder =
+  mongoose.models.purchaseorder || mongoose.model('purchaseorder', PurchaseOrderSchema);
+
+// ── QuoteCategory / PurchaseOrderCategory ───────────────────────────────
+
+const QuoteCategorySchema = buildSchema(schemas.quoteCategory);
+
+QuoteCategorySchema.statics.syncConfig = {
+  keyField: 'Number',
+  protectedFields: [],
+};
+
+export const QuoteCategory =
+  mongoose.models.quotecategory || mongoose.model('quotecategory', QuoteCategorySchema);
+
+const PurchaseOrderCategorySchema = buildSchema(schemas.purchaseOrderCategory);
+
+PurchaseOrderCategorySchema.statics.syncConfig = {
+  keyField: 'Number',
+  protectedFields: [],
+};
+
+export const PurchaseOrderCategory =
+  mongoose.models.purchaseordercategory || mongoose.model('purchaseordercategory', PurchaseOrderCategorySchema);
+
+// ── Currency ────────────────────────────────────────────────────────────
+
+const CurrencySchema = buildSchema(schemas.currency);
+
+CurrencySchema.statics.syncConfig = {
+  keyField: 'Id',
+  fallbackKeyField: 'Code',
+  protectedFields: [],
+};
+
+export const Currency =
+  mongoose.models.currency || mongoose.model('currency', CurrencySchema);
+
+// ── Country ─────────────────────────────────────────────────────────────
+
+const CountrySchema = buildSchema(schemas.country);
+
+CountrySchema.statics.syncConfig = {
+  keyField: 'Id',
+  fallbackKeyField: 'Code',
+  protectedFields: [],
+};
+
+export const Country =
+  mongoose.models.country || mongoose.model('country', CountrySchema);
+
+// ── AccountingPeriod ────────────────────────────────────────────────────
+
+const AccountingPeriodSchema = buildSchema(schemas.accountingPeriod);
+
+AccountingPeriodSchema.statics.syncConfig = {
+  keyField: 'Id',
+  protectedFields: [],
+};
+
+export const AccountingPeriod =
+  mongoose.models.accountingperiod || mongoose.model('accountingperiod', AccountingPeriodSchema);
+
+// ── VatReturn ───────────────────────────────────────────────────────────
+
+const VatReturnSchema = buildSchema(schemas.vatReturn);
+
+VatReturnSchema.statics.syncConfig = {
+  keyField: 'Id',
+  protectedFields: [],
+};
+
+export const VatReturn =
+  mongoose.models.vatreturn || mongoose.model('vatreturn', VatReturnSchema);
+
 // ── Convenience map ─────────────────────────────────────────────────────
 
 const models = {
@@ -269,6 +392,16 @@ const models = {
   Note,
   VATRate,
   BankAccount,
+  BankTransaction,
+  Journal,
+  Product,
+  PurchaseOrder,
+  QuoteCategory,
+  PurchaseOrderCategory,
+  Currency,
+  Country,
+  AccountingPeriod,
+  VatReturn,
 };
 
 export default models;

@@ -5,6 +5,7 @@ import createClient from '../kashflow/client.js';
 import { connectMongoose, isMongooseEnabled } from '../db/mongoose.js';
 import {
   Customer, Supplier, Invoice, Quote, Purchase, Project,
+  Journal, Product, PurchaseOrder, VatReturn,
   SYNC_INTERNAL_FIELDS,
 } from '../server/models/kashflow.js';
 import { buildUpsertUpdate } from './run.js';
@@ -21,6 +22,10 @@ const ENTITY_CONFIG = {
   customer:  { model: Customer,  getMethod: 'customers',  keyField: 'Id', lookupField: 'Code'   },
   supplier:  { model: Supplier,  getMethod: 'suppliers',  keyField: 'Id', lookupField: 'Code'   },
   project:   { model: Project,   getMethod: 'projects',   keyField: 'Id', lookupField: 'Number' },
+  journal:   { model: Journal,   getMethod: 'journals',   keyField: 'Id', lookupField: 'Number' },
+  product:   { model: Product,   getMethod: 'products',   keyField: 'Id', lookupField: 'Code'   },
+  purchaseorder: { model: PurchaseOrder, getMethod: 'purchaseOrders', keyField: 'Id', lookupField: 'Number' },
+  vatreturn: { model: VatReturn, getMethod: 'vatReturns', keyField: 'Id', lookupField: 'Id'     },
 };
 
 /**

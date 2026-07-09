@@ -148,6 +148,16 @@ export async function ensureKashflowIndexes(db) {
       purchases: ['Id'],
       projects: ['Id'],
       bankaccounts: ['Id'],
+      banktransactions: ['Id'],
+      journals: ['Id'],
+      products: ['Id'],
+      purchaseorders: ['Id'],
+      quotecategories: ['Number'],
+      purchaseordercategories: ['Number'],
+      currencies: ['Id'],
+      countries: ['Id'],
+      accountingperiods: ['Id'],
+      vatreturns: ['Id'],
     };
 
     // Repair legacy indexes that cause dup-key errors on missing fields.
@@ -210,6 +220,16 @@ export async function ensureKashflowIndexes(db) {
       ensureUniqueKeyIndex('purchases', 'Id'),
       ensureUniqueKeyIndex('projects', 'Id'),
       ensureUniqueKeyIndex('bankaccounts', 'Id'),
+      ensureUniqueKeyIndex('banktransactions', 'Id'),
+      ensureUniqueKeyIndex('journals', 'Id'),
+      ensureUniqueKeyIndex('products', 'Id'),
+      ensureUniqueKeyIndex('purchaseorders', 'Id'),
+      ensureUniqueKeyIndex('quotecategories', 'Number'),
+      ensureUniqueKeyIndex('purchaseordercategories', 'Number'),
+      ensureUniqueKeyIndex('currencies', 'Id'),
+      ensureUniqueKeyIndex('countries', 'Id'),
+      ensureUniqueKeyIndex('accountingperiods', 'Id'),
+      ensureUniqueKeyIndex('vatreturns', 'Id'),
     ];
 
     // Secondary non-unique indexes on Code/Number for query performance.
@@ -223,6 +243,11 @@ export async function ensureKashflowIndexes(db) {
       ensureSecondaryIndex('purchases', 'Number'),
       ensureSecondaryIndex('projects', 'Number'),
       ensureSecondaryIndex('bankaccounts', 'Code'),
+      ensureSecondaryIndex('journals', 'Number'),
+      ensureSecondaryIndex('products', 'Code'),
+      ensureSecondaryIndex('purchaseorders', 'Number'),
+      ensureSecondaryIndex('currencies', 'Code'),
+      ensureSecondaryIndex('countries', 'Code'),
     ];
 
     for (const collectionName of collectionsNeedingUuid) {

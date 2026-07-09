@@ -2,6 +2,18 @@
 
 All notable changes to hcs-sync will be documented here. Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [0.7.0] - 2026-07-09
+
+### Added
+- **Ten new KashFlow entities are now synced**, extending 1-1 API parity (requires `@cappytech/hcs-schemas` 1.1.0):
+  - **List-phase entities** (`upsert:lists`, best-effort — a failed fetch logs a warning and never breaks the run): `journals`, `products`, `purchaseorders`, `quotecategories`, `purchaseordercategories`, `currencies`, `countries`, `accountingperiods`, `vatreturns`.
+  - **Bank transactions** (`banktransactions`): fetched per bank account via `GET /bankaccounts/{accountId}/transactions` in a new `banktransactions:fetch` stage after the list phase; a failing account is skipped with a warning.
+  - New KashFlow client namespaces: `bankTransactions`, `journals`, `products`, `purchaseOrders`, `quoteCategories`, `purchaseOrderCategories`, `currencies`, `countries`, `accountingPeriods`, `vatReturns` (full CRUD where the API supports it).
+  - Managed indexes for all new collections (unique `Id` — or `Number` for the two category collections — plus secondary `Number`/`Code` where applicable).
+  - Manual **Pull & Sync / Debug** now also supports `journal`, `product`, `purchaseorder`, and `vatreturn` entity types.
+  - All new entity counts included in the fetched-lists log and the final run summary.
+  - New generic `upsertSimpleList` helper in `run.js` replaces the copy-pasted per-entity upsert blocks for the new entities.
+
 ## [0.6.0] - 2026-07-08
 
 ### Added
