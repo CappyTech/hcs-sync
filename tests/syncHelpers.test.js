@@ -536,26 +536,57 @@ describe('preparePurchaseForUpsert()', () => {
     expect(item.TaxMonth).toBe(1);
   });
 
-  it('falls back to IssuedDate when PaidDate is also null', () => {
+  it('does not stamp from IssuedDate: unpaid purchases carry no tax period', () => {
     const item = {
       PaidDate: null,
       IssuedDate: '2025-12-15',
       DueDate: null,
     };
     preparePurchaseForUpsert(item);
-    expect(item.TaxYear).toBe(2025);
-    expect(item.TaxMonth).toBe(9);
+    expect(item.TaxYear).toBeNull();
+    expect(item.TaxMonth).toBeNull();
   });
 
-  it('does not set TaxYear/TaxMonth when no date is available', () => {
+  it('clears a stale stamp when no payment date is available', () => {
     const item = {
       PaidDate: null,
       IssuedDate: null,
       DueDate: null,
+      TaxYear: 2025,
+      TaxMonth: 9,
     };
     preparePurchaseForUpsert(item);
-    expect(item.TaxYear).toBeUndefined();
-    expect(item.TaxMonth).toBeUndefined();
+    expect(item.TaxYear).toBeNull();
+    expect(item.TaxMonth).toBeNull();
+  });
+
+  it('uses the earliest payment line, not the first in array order', () => {
+    const item = {
+      PaidDate: null,
+      IssuedDate: null,
+      DueDate: null,
+      PaymentLines: [
+        { PayDate: '2025-07-15', Date: null },
+        { PayDate: '2025-06-10', Date: null },
+      ],
+    };
+    preparePurchaseForUpsert(item);
+    expect(item.TaxYear).toBe(2025);
+    expect(item.TaxMonth).toBe(3);
+  });
+
+  it('falls back to a payment line Date when PayDate is missing', () => {
+    const item = {
+      PaidDate: null,
+      IssuedDate: null,
+      DueDate: null,
+      PaymentLines: [
+        { PayDate: null, Date: '2025-08-20' },
+      ],
+    };
+    preparePurchaseForUpsert(item);
+    expect(item.TaxYear).toBe(2025);
+    expect(item.TaxMonth).toBe(5);
   });
 
   it('returns the mutated item', () => {

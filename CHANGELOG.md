@@ -2,6 +2,12 @@
 
 All notable changes to hcs-sync will be documented here. Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [0.7.1] - 2026-07-10
+
+### Fixed
+- **Unpaid purchases were stamped with a CIS tax period from their issue date.** `preparePurchaseForUpsert` fell back to `IssuedDate` when no payment date existed, so unpaid invoices carried a `TaxYear`/`TaxMonth` stamp and were treated as paid by hcs-app's CIS dashboard (e.g. ~74 of tax month 3's 213 stamped purchases had no payment in the period). The stamp is now derived from payments only — earliest `PaymentLines` date, then `PaidDate` — and is written as explicit `null` when the purchase is unpaid, so stale issue-date stamps are cleared on the next sync run. CIS reports payments in the month they were made; an issue date must never place an invoice in a return.
+- **Tax-period stamping picked the first payment line in array order and ignored `Date`-only lines.** It now selects the earliest payment across all lines and falls back to a line's `Date` when `PayDate` is missing (previously such lines fell through to the issue date).
+
 ## [0.7.0] - 2026-07-09
 
 ### Added

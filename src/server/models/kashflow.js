@@ -166,22 +166,23 @@ export function preparePurchaseForUpsert(item) {
     }
   }
 
-  // --- Derive reference date (priority order) -----------------------
+  // --- Derive reference date: earliest actual payment ----------------
   let refDate = null;
   if (Array.isArray(item.PaymentLines)) {
     for (const pl of item.PaymentLines) {
-      if (pl.PayDate) { refDate = pl.PayDate; break; }
+      const d = pl.PayDate || pl.Date;
+      if (d && (!refDate || d < refDate)) refDate = d;
     }
   }
-  if (!refDate && item.PaidDate)   refDate = item.PaidDate;
-  if (!refDate && item.IssuedDate) refDate = item.IssuedDate;
+  if (!refDate && item.PaidDate) refDate = item.PaidDate;
 
-  // --- Compute CIS tax period ---------------------------------------
+  // --- Compute CIS tax period (payments only) ------------------------
+  // CIS returns report payments in the month they were made, so an unpaid
+  // purchase carries no stamp. Explicit nulls clear any stale stamp a
+  // previous sync derived from IssuedDate.
   const period = computeCisTaxPeriod(refDate);
-  if (period) {
-    item.TaxYear  = period.TaxYear;
-    item.TaxMonth = period.TaxMonth;
-  }
+  item.TaxYear  = period ? period.TaxYear  : null;
+  item.TaxMonth = period ? period.TaxMonth : null;
 
   return item;
 }
