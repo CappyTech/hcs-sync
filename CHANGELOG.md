@@ -2,6 +2,11 @@
 
 All notable changes to hcs-sync will be documented here. Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [0.7.2] - 2026-07-10
+
+### Fixed
+- **`SupplierId` backfilled on purchase details.** KashFlow stopped including `SupplierId` in purchase responses (~May 2026; `SupplierCode` remains), leaving every purchase synced since without it — hcs-app's CIS dashboard and returns join purchases to suppliers on that field. The purchase detail phase now resolves `SupplierCode` → supplier `Id` via the suppliers list and fills the missing field; the run summary logs how many were backfilled. Existing documents heal on their next detail sync.
+
 ## [0.7.1] - 2026-07-10
 
 ### Fixed

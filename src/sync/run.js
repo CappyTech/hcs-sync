@@ -844,6 +844,16 @@ async function run(options = {}) {
         emitLog('info', 'Purchase Phase 1 summary', { listed: purchasesTotal, withNumber: purchaseEntries.length, missingId: purchasesSkippedMissingId });
         let purchasesDetailFailed = 0;
         let purchasesDetailNoLineItems = 0;
+        // KashFlow stopped returning SupplierId on purchase details (~May 2026;
+        // SupplierCode remains). Backfill it from the suppliers list so
+        // downstream consumers (CIS dashboard, returns) can keep joining on it.
+        const supplierIdByCode = new Map();
+        for (const s of suppliers || []) {
+          const sid = pickId(s);
+          const scode = pickCode(s);
+          if (sid != null && scode) supplierIdByCode.set(String(scode).trim().toUpperCase(), sid);
+        }
+        let purchasesSupplierIdBackfilled = 0;
         if (mongoEnabled && purchaseEntries.length > 0) {
           setStage('purchases:details');
           progress.setItemTotal('purchases', purchaseEntries.length);
@@ -859,6 +869,10 @@ async function run(options = {}) {
               const lineItemsCount = Array.isArray(full.LineItems) ? full.LineItems.length : 0;
               const paymentLinesCount = Array.isArray(full.PaymentLines) ? full.PaymentLines.length : 0;
               if (lineItemsCount === 0) { purchasesDetailNoLineItems += 1; logger.warn({ purchaseNumber: number, purchaseId: id, paymentLinesCount }, 'Purchase detail returned 0 LineItems'); }
+              if ((full.SupplierId == null || full.SupplierId === '') && full.SupplierCode) {
+                const sid = supplierIdByCode.get(String(full.SupplierCode).trim().toUpperCase());
+                if (sid != null) { full.SupplierId = sid; purchasesSupplierIdBackfilled += 1; }
+              }
               Purchase.syncConfig.transform(full);
               const update = buildUpsertUpdate({ keyField: 'Id', keyValue: id, payload: full, syncedAt: runNow, runId, model: Purchase });
               update[0].$set.detailSyncedAt = { $cond: { if: { $ne: ['$_kfHash', update[0].$set._kfHash] }, then: { $literal: runNow }, else: { $ifNull: ['$detailSyncedAt', { $literal: runNow }] } } };
@@ -878,6 +892,7 @@ async function run(options = {}) {
           logger.info({ mongo: { purchases: purchaseDetailUpserter.getStats() } }, 'Mongo upsert summary (purchases details)');
           emitLog('info', 'Mongo upsert summary (purchases details)', { stats: purchaseDetailUpserter.getStats() });
         }
+        if (purchasesSupplierIdBackfilled > 0) { logger.info({ purchasesSupplierIdBackfilled }, 'Backfilled SupplierId from SupplierCode on purchase details'); emitLog('info', 'Backfilled SupplierId from SupplierCode', { purchasesSupplierIdBackfilled }); }
         if (purchasesDetailFailed > 0) { logger.warn({ purchasesDetailFailed }, 'Some purchase detail fetches failed; those documents used summary data'); emitLog('warn', 'Some purchase detail fetches failed', { purchasesDetailFailed }); }
         if (purchasesDetailNoLineItems > 0) { logger.warn({ purchasesDetailNoLineItems, total: purchaseEntries.length }, 'Some purchase detail responses had 0 LineItems'); emitLog('warn', 'Some purchase detail responses had 0 LineItems', { purchasesDetailNoLineItems }); }
         if (purchasesSkippedMissingId > 0) logger.warn({ skippedMissingId: purchasesSkippedMissingId }, 'Skipped purchase upserts with missing Id');
