@@ -2,6 +2,11 @@
 
 All notable changes to hcs-sync will be documented here. Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [0.8.0] - 2026-07-23
+
+### Added
+- **Discord alerts for sync runs.** When `DISCORD_WEBHOOK_URL` is set, a run posts a colour-coded Discord embed on **failure** (always) and on **success that changed data** — per-entity count deltas (e.g. `invoices 10 → 13 (+3)`) and/or Mongo upserts. No-op successful runs stay silent, so a frequent cron doesn't spam the channel. The sender (`src/util/discord.js`) mirrors the host backup-alert scripts: emerald/red embeds, host in the footer, a custom `User-Agent` (Discord 403s some defaults), and one retry on HTTP 429 honouring `Retry-After`. It never throws or blocks a run — a Discord hiccup can't fail or delay a sync. Point it at a dedicated #sync-alerts webhook, separate from the backup webhook; leave `DISCORD_WEBHOOK_URL` unset to disable.
+
 ## [0.7.2] - 2026-07-10
 
 ### Fixed

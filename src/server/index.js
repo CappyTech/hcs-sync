@@ -15,6 +15,7 @@ import { pullSingleEntity, debugEntity, ENTITY_CONFIG } from '../sync/pull.js';
 import { SHAPE_ENDPOINTS, captureShape } from '../sync/shapes.js';
 import progress from './progress.js';
 import runStore from './runStore.js';
+import { sendDiscord } from '../util/discord.js';
 import { getMongoDb, isMongoEnabled } from '../db/mongo.js';
 import config from '../config.js';
 import { getCronHealth, startCron, stopCron } from './cron.js';
@@ -588,6 +589,45 @@ async function triggerSync({ requestedBy }) {
       });
 
       recordRunLog('success', 'Sync completed successfully', { counts: lastCounts });
+
+      // Discord alert — only for runs that actually changed data; silent on no-op
+      // success to keep a frequent cron quiet. Failures always alert (see .catch).
+      try {
+        const prev = result?.previousCounts ?? countsBeforeRun;
+        const curr = lastCounts || {};
+        const resources = ['customers', 'suppliers', 'projects', 'nominals', 'vatRates', 'invoices', 'quotes', 'purchases'];
+        const deltaFields = [];
+        resources.forEach((name) => {
+          const before = prev ? prev[name] ?? null : null;
+          const after = curr[name] ?? null;
+          if (before === after) return;
+          if (before === null && after === null) return;
+          const diff = (after ?? 0) - (before ?? 0);
+          deltaFields.push({
+            name,
+            value: `${before ?? '—'} → ${after ?? '—'} (${diff >= 0 ? '+' : ''}${diff})`,
+            inline: true,
+          });
+        });
+
+        const upserts = result?.mongoUpserts && typeof result.mongoUpserts === 'object' ? result.mongoUpserts : null;
+        const upsertTotal = upserts ? Object.values(upserts).reduce((a, b) => a + (Number(b) || 0), 0) : 0;
+
+        if (deltaFields.length > 0 || upsertTotal > 0) {
+          const fields = deltaFields.slice(0, 23); // leave room for the two summary fields (25 max)
+          if (upsertTotal > 0) fields.push({ name: 'Mongo upserts', value: String(upsertTotal), inline: true });
+          fields.push({ name: 'Trigger', value: String(requestedBy || 'unknown'), inline: true });
+          sendDiscord({
+            ok: true,
+            title: 'Heron CS | Sync — Completed',
+            description: 'Sync completed with data changes.',
+            fields,
+          }).catch(() => {});
+        }
+      } catch (e) {
+        logger.warn({ err: { message: e?.message } }, 'Failed to build Discord success alert');
+      }
+
       return result;
     })
     .catch((err) => {
@@ -603,6 +643,15 @@ async function triggerSync({ requestedBy }) {
       progress.fail(lastError);
       runStore.finishRun(runId, { error: lastError });
       recordRunLog('error', 'Sync failed', { error: lastError });
+
+      // Discord alert — failures always notify.
+      sendDiscord({
+        ok: false,
+        title: 'Heron CS | Sync — Failed',
+        description: lastError || 'Sync failed — see the run logs for details.',
+        fields: [{ name: 'Trigger', value: String(requestedBy || 'unknown'), inline: true }],
+      }).catch(() => {});
+
       throw err;
     });
 
