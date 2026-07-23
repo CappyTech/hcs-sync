@@ -2,6 +2,11 @@
 
 All notable changes to hcs-sync will be documented here. Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [0.9.0] - 2026-07-23
+
+### Changed
+- **Repo is now 100% ESM.** The application source was already `"type": "module"`; the last remaining CommonJS file, `tailwind.config.js`, now uses `import`/`export default`. Verified with `npm run build:css` and the full vitest suite. Ready for `@cappytech/hcs-schemas` 2.0.0 (ESM) — the existing default import keeps working unchanged.
+
 ## [0.8.0] - 2026-07-23
 
 ### Added

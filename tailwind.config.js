@@ -1,6 +1,6 @@
 /* eslint-disable */
-const forms = require('@tailwindcss/forms');
-const typography = require('@tailwindcss/typography');
+import forms from '@tailwindcss/forms';
+import typography from '@tailwindcss/typography';
 
 const staticSafelist = [
   // Progress bar color variants
@@ -24,7 +24,7 @@ const staticSafelist = [
 ];
 const generatedSafelist = [];
 
-module.exports = {
+export default {
   darkMode: 'class',
   content: [
     './src/server/views/**/*.ejs',
