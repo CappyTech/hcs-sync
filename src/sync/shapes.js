@@ -72,6 +72,36 @@ export const SHAPE_ENDPOINTS = {
     detailPath: '/bankaccounts/{id}',
     listPath: '/bankaccounts',
   },
+  // Reconciliations are scoped under an account, so the list resolves an
+  // account first. Preference goes to an account that actually has
+  // reconciliations — most here have none, and an empty sample shapes nothing.
+  bankReconciliations: {
+    list: async (kf) => {
+      const accounts = await kf.bankAccounts.list();
+      for (const account of accounts || []) {
+        if (account?.Id == null) continue;
+        const rows = await kf.bankReconciliations.list(account.Id, { perpage: 50 });
+        if (rows?.length) return rows;
+      }
+      return [];
+    },
+    detail: async (kf, items) => {
+      const first = (items || []).find((r) => r?.Id != null);
+      if (!first) return undefined;
+      // AccountId is not in the payload; recover it the same way the list did.
+      const accounts = await kf.bankAccounts.list();
+      for (const account of accounts || []) {
+        if (account?.Id == null) continue;
+        const rows = await kf.bankReconciliations.list(account.Id, { perpage: 50 });
+        if ((rows || []).some((r) => r?.Id === first.Id)) {
+          return kf.bankReconciliations.get(account.Id, first.Id);
+        }
+      }
+      return undefined;
+    },
+    detailPath: '/bankaccounts/{bankaccountId}/reconciliations/{reconciliationId}',
+    listPath: '/bankaccounts/{bankaccountId}/reconciliations',
+  },
 };
 
 /**

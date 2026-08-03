@@ -176,6 +176,27 @@ async function createClient() {
       listAll: (accountId, params = {}) => listAllInternal(`/bankaccounts/${accountId}/transactions`, params),
       get: (accountId, transactionId) => http.get(`/bankaccounts/${accountId}/transactions/${transactionId}`).then((r) => r.data),
     },
+    // READ-ONLY BY DESIGN. hcs-app reconciles locally and never writes back to
+    // KashFlow, so the create/update/delete reconciliation endpoints are
+    // deliberately absent from this client — as are
+    // `PUT /bankaccounts/{id}/transactionlist` and
+    // `POST /bankaccounts/assign-transaction-to-new-entity`, both of which
+    // DELETE the source bank transaction on success. Their absence here is the
+    // enforcement mechanism; do not add them without revisiting that decision.
+    bankReconciliations: {
+      list: (accountId, params = {}) =>
+        listInternal(`/bankaccounts/${accountId}/reconciliations`, params),
+      listAll: (accountId, params = {}) =>
+        listAllInternal(`/bankaccounts/${accountId}/reconciliations`, params),
+      get: (accountId, reconciliationId, params = {}) =>
+        http
+          .get(`/bankaccounts/${accountId}/reconciliations/${reconciliationId}`, { params })
+          .then((r) => r.data),
+      metadata: (accountId) =>
+        http
+          .get(`/bankaccounts/${accountId}/reconciliations/metadata`)
+          .then((r) => r.data),
+    },
     journals: {
       list: (params = {}) => listInternal('/journals', params),
       listAll: (params = {}) => listAllInternal('/journals', params),

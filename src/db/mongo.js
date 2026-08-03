@@ -126,6 +126,26 @@ export async function ensureKashflowIndexes(db) {
       await col.createIndex({ [keyField]: 1 }, { name: indexName });
     };
 
+    /**
+     * Create a non-unique compound index.
+     *
+     * These are also declared on the Mongoose schemas, but hcs-sync writes
+     * through the native driver and `autoIndex` is not something to rely on in
+     * production, so the reconciliation query paths are ensured explicitly here
+     * alongside every other index this module manages.
+     */
+    const ensureCompoundIndex = async (collectionName, keySpec, name) => {
+      const col = db.collection(collectionName);
+      try {
+        await col.createIndex(keySpec, { name, background: true });
+      } catch (err) {
+        // An equivalent index under a different name is not a failure.
+        const codeName = err?.codeName || '';
+        if (codeName !== 'IndexOptionsConflict' && codeName !== 'IndexKeySpecsConflict') throw err;
+        logger.warn({ collectionName, name, err: err.message }, 'Compound index already exists under different options');
+      }
+    };
+
     const dropIndexIfExists = async (collectionName, indexName) => {
       const col = db.collection(collectionName);
       try {
@@ -149,6 +169,9 @@ export async function ensureKashflowIndexes(db) {
       projects: ['Id'],
       bankaccounts: ['Id'],
       banktransactions: ['Id'],
+      // Keyed on the synthetic "<AccountId>:<Id>" composite — KashFlow's
+      // reconciliation Id is only unique within an account.
+      bankreconciliations: ['ReconKey'],
       journals: ['Id'],
       products: ['Id'],
       purchaseorders: ['Id'],
@@ -221,6 +244,7 @@ export async function ensureKashflowIndexes(db) {
       ensureUniqueKeyIndex('projects', 'Id'),
       ensureUniqueKeyIndex('bankaccounts', 'Id'),
       ensureUniqueKeyIndex('banktransactions', 'Id'),
+      ensureUniqueKeyIndex('bankreconciliations', 'ReconKey', 'string'),
       ensureUniqueKeyIndex('journals', 'Id'),
       ensureUniqueKeyIndex('products', 'Id'),
       ensureUniqueKeyIndex('purchaseorders', 'Id'),
@@ -250,6 +274,21 @@ export async function ensureKashflowIndexes(db) {
       ensureSecondaryIndex('countries', 'Code'),
     ];
 
+    // Compound indexes serving hcs-app's bank reconciliation query paths.
+    const compoundJobs = [
+      // Per-account unreconciled worklist, ordered newest first.
+      ensureCompoundIndex('banktransactions', { AccountId: 1, Reconciled: 1, Date: -1 }, 'bt_acct_recon_date'),
+      // Resolving a bank line to the document it settles.
+      ensureCompoundIndex('banktransactions', { EntityName: 1, ResourceNumber: 1 }, 'bt_entity_resource'),
+      // Candidate lookup by issue date when suggesting matches.
+      ensureCompoundIndex('invoices', { IssuedDate: -1 }, 'inv_issued'),
+      ensureCompoundIndex('purchases', { IssuedDate: -1 }, 'pur_issued'),
+      // Resolving a batch-payment bank line to the documents it settled.
+      ensureCompoundIndex('invoices', { 'PaymentLines.BulkPaymentNumber': 1 }, 'inv_pl_bulk'),
+      ensureCompoundIndex('purchases', { 'PaymentLines.BulkPaymentNumber': 1 }, 'pur_pl_bulk'),
+      ensureCompoundIndex('bankreconciliations', { AccountId: 1, EndDate: -1 }, 'brec_acct_end'),
+    ];
+
     for (const collectionName of collectionsNeedingUuid) {
       indexJobs.push(ensureUniqueKeyIndex(collectionName, 'uuid', 'string'));
     }
@@ -270,7 +309,7 @@ export async function ensureKashflowIndexes(db) {
       ),
     ];
 
-    await Promise.all([...indexJobs, ...secondaryJobs, ...auditJobs]);
+    await Promise.all([...indexJobs, ...secondaryJobs, ...compoundJobs, ...auditJobs]);
   } catch (err) {
     if (isMongoAuthError(err)) {
       throw new Error(
