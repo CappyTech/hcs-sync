@@ -133,16 +133,23 @@ export async function ensureKashflowIndexes(db) {
      * through the native driver and `autoIndex` is not something to rely on in
      * production, so the reconciliation query paths are ensured explicitly here
      * alongside every other index this module manages.
+     *
+     * No explicit name: Mongoose's autoIndex may already have created the same
+     * key under the driver's default name, and supplying our own would collide
+     * with it on every run. Letting the driver derive the name makes this
+     * idempotent whichever path got there first.
      */
-    const ensureCompoundIndex = async (collectionName, keySpec, name) => {
+    const ensureCompoundIndex = async (collectionName, keySpec, options = {}) => {
       const col = db.collection(collectionName);
       try {
-        await col.createIndex(keySpec, { name, background: true });
+        // Options must match what the schema declares, or the two paths fight
+        // over the same auto-generated index name on every run.
+        await col.createIndex(keySpec, { background: true, ...options });
       } catch (err) {
         // An equivalent index under a different name is not a failure.
         const codeName = err?.codeName || '';
         if (codeName !== 'IndexOptionsConflict' && codeName !== 'IndexKeySpecsConflict') throw err;
-        logger.warn({ collectionName, name, err: err.message }, 'Compound index already exists under different options');
+        logger.warn({ collectionName, keySpec, err: err.message }, 'Compound index already exists under different options');
       }
     };
 
@@ -277,16 +284,18 @@ export async function ensureKashflowIndexes(db) {
     // Compound indexes serving hcs-app's bank reconciliation query paths.
     const compoundJobs = [
       // Per-account unreconciled worklist, ordered newest first.
-      ensureCompoundIndex('banktransactions', { AccountId: 1, Reconciled: 1, Date: -1 }, 'bt_acct_recon_date'),
+      ensureCompoundIndex('banktransactions', { AccountId: 1, Reconciled: 1, Date: -1 }),
       // Resolving a bank line to the document it settles.
-      ensureCompoundIndex('banktransactions', { EntityName: 1, ResourceNumber: 1 }, 'bt_entity_resource'),
+      ensureCompoundIndex('banktransactions', { EntityName: 1, ResourceNumber: 1 }),
       // Candidate lookup by issue date when suggesting matches.
-      ensureCompoundIndex('invoices', { IssuedDate: -1 }, 'inv_issued'),
-      ensureCompoundIndex('purchases', { IssuedDate: -1 }, 'pur_issued'),
+      ensureCompoundIndex('invoices', { IssuedDate: -1 }),
+      ensureCompoundIndex('purchases', { IssuedDate: -1 }),
       // Resolving a batch-payment bank line to the documents it settled.
-      ensureCompoundIndex('invoices', { 'PaymentLines.BulkPaymentNumber': 1 }, 'inv_pl_bulk'),
-      ensureCompoundIndex('purchases', { 'PaymentLines.BulkPaymentNumber': 1 }, 'pur_pl_bulk'),
-      ensureCompoundIndex('bankreconciliations', { AccountId: 1, EndDate: -1 }, 'brec_acct_end'),
+      // sparse to match the hcs-schemas declaration: most documents have no
+      // batch payment, so the index only covers those that do.
+      ensureCompoundIndex('invoices', { 'PaymentLines.BulkPaymentNumber': 1 }, { sparse: true }),
+      ensureCompoundIndex('purchases', { 'PaymentLines.BulkPaymentNumber': 1 }, { sparse: true }),
+      ensureCompoundIndex('bankreconciliations', { AccountId: 1, EndDate: -1 }),
     ];
 
     for (const collectionName of collectionsNeedingUuid) {
