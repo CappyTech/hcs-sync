@@ -2,6 +2,21 @@
 
 All notable changes to hcs-sync will be documented here. Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [0.10.1] - 2026-08-04
+
+Stops an open dashboard tab hammering the server once a second, forever, after its session expires.
+
+### Fixed
+- **The dashboard poller re-requested the login page every second, indefinitely.** `poll()` fetches `/status` on a 1s timer. When the SSO cookie expires the auth guard 302s that request to `/login?next=/status` — and `fetch()` follows redirects by default, so the poller received the login *page*: HTTP 200, `r.ok` true, HTML body. `r.json()` then threw, the throw landed in an empty `catch {}`, and the next poll was scheduled 1000ms later. Nothing in that loop could ever break it, so a tab left open on an expired session kept up a sustained 1 req/s against the server until someone closed it. Observed in production: ~3,300 requests in a single overnight stretch from one browser tab, all of them serving a full login page to a caller that wanted JSON.
+- **The auth guard now answers JSON callers with `401` instead of redirecting them.** A redirect to an HTML page is unusable to a `fetch()` caller — it cannot tell the login page apart from a real response without parsing the body. `/status`, `/logs.json` and `/dedup/status` always get JSON, as does any request that sets `X-Requested-With: XMLHttpRequest` or asks for `application/json` without `text/html`. Browser navigations are unaffected and still redirect: they send `Accept: text/html,…,*/*`, and an expired session must land the user on the login page, not on raw JSON.
+- **The poller no longer retries at a fixed 1s after a failure.** A failed or non-OK poll now backs off, doubling to a 30s ceiling and resetting on the next success, so an unreachable server does not get a steady 1/s stream from every open tab.
+
+### Changed
+- The poller sends `Accept: application/json` and `redirect: 'manual'`, and stops on `401`/`opaqueredirect` — reloading once so the user gets the login page instead of a tab that silently stops updating. `redirect: 'manual'` means the client stops looping even against a server that still redirects.
+
+### Added
+- `tests/server.test.js` — six cases on the auth guard: `/status`, `/logs.json` and `/dedup/status` unauthenticated return 401 JSON carrying the login path, an explicit JSON `Accept` and an `XMLHttpRequest` header both return 401, and a browser-style `Accept` still returns a 302 to `/login`. Five fail against the unfixed guard.
+
 ## [0.10.0] - 2026-08-04
 
 Groundwork for bank reconciliation in hcs-app. Everything here is read-only

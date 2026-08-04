@@ -418,6 +418,21 @@ function buildLoginRedirect(req) {
   return `/login?next=${encodeURIComponent(returnTo)}`;
 }
 
+// Endpoints that answer with JSON. Redirecting one of these to the login *page*
+// hands a fetch() caller a 200 full of HTML, which it cannot distinguish from a
+// real response without parsing it — the dashboard poller followed exactly that
+// redirect and hammered /login once a second for as long as the tab stayed open.
+// They get a 401 instead, which a caller can act on.
+const JSON_ENDPOINTS = new Set(['/status', '/logs.json', '/dedup/status']);
+
+function wantsJson(req) {
+  if (JSON_ENDPOINTS.has(req.path)) return true;
+  if (String(req.get('x-requested-with') || '').toLowerCase() === 'xmlhttprequest') return true;
+  // Only when JSON is preferred outright; browsers send */* on navigation.
+  const accept = String(req.get('accept') || '');
+  return accept.includes('application/json') && !accept.includes('text/html');
+}
+
 // Only allow relative paths for the post-login redirect to prevent open redirects.
 function sanitiseNext(raw) {
   const v = String(raw || '/').trim();
@@ -455,6 +470,9 @@ app.use((req, res, next) => {
 
   const user = verifySsoCookie(req);
   if (!user) {
+    if (wantsJson(req)) {
+      return res.status(401).json({ ok: false, error: 'Not authenticated', login: buildLoginRedirect(req) });
+    }
     return res.redirect(buildLoginRedirect(req));
   }
 

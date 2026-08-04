@@ -197,6 +197,49 @@ describe('Express server routes', () => {
         .set('Cookie', `hcs_sso=${sso}`);
       expect(res.status).toBe(200);
     });
+
+    // A JSON endpoint must not be answered with a redirect to the login *page*:
+    // fetch() follows redirects by default, so the caller receives a 200 full of
+    // HTML that it cannot distinguish from a real response. The dashboard poller
+    // did exactly that and re-requested /login once a second indefinitely.
+    it('answers an unauthenticated /status with 401 JSON, not a redirect', async () => {
+      const res = await supertest(app).get('/status');
+      expect(res.status).toBe(401);
+      expect(res.body).toMatchObject({ ok: false });
+      expect(res.body.login).toMatch(/^\/login/);
+    });
+
+    it('answers an unauthenticated /logs.json with 401 JSON', async () => {
+      const res = await supertest(app).get('/logs.json');
+      expect(res.status).toBe(401);
+      expect(res.body).toMatchObject({ ok: false });
+    });
+
+    it('answers an unauthenticated /dedup/status with 401 JSON', async () => {
+      const res = await supertest(app).get('/dedup/status');
+      expect(res.status).toBe(401);
+      expect(res.body).toMatchObject({ ok: false });
+    });
+
+    it('answers 401 when the caller asks for JSON outright', async () => {
+      const res = await supertest(app).get('/history').set('Accept', 'application/json');
+      expect(res.status).toBe(401);
+    });
+
+    it('answers 401 for an XMLHttpRequest', async () => {
+      const res = await supertest(app).get('/history').set('X-Requested-With', 'XMLHttpRequest');
+      expect(res.status).toBe(401);
+    });
+
+    // Browsers send Accept: text/html,...,*/* when navigating. Those must keep
+    // redirecting, or an expired session lands the user on raw JSON.
+    it('still redirects a browser navigation to /login', async () => {
+      const res = await supertest(app)
+        .get('/history')
+        .set('Accept', 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8');
+      expect(res.status).toBe(302);
+      expect(res.headers.location).toMatch(/^\/login/);
+    });
   });
 
   describe('GET /login', () => {

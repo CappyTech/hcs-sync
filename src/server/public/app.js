@@ -171,11 +171,36 @@
     if (lastRunEl) lastRunEl.textContent = s.lastRun ? new Date(s.lastRun).toLocaleString() : 'Never';
   }
 
+  // Polling cadence. A failed poll backs off up to POLL_MAX_MS rather than
+  // retrying every second forever — a dashboard left open overnight against a
+  // down or unreachable server should not keep up a 1/s request rate.
+  const POLL_MS = 1000;
+  const POLL_MAX_MS = 30000;
+  let pollDelay = POLL_MS;
+  let stopped = false;
+
   async function poll() {
+    if (stopped) return;
     try {
-      const r = await fetch('/status', { cache: 'no-store' });
+      const r = await fetch('/status', {
+        cache: 'no-store',
+        headers: { Accept: 'application/json' },
+        // Never chase a redirect here: following one to the login page yields a
+        // 200 full of HTML that r.ok cannot tell apart from a real response.
+        redirect: 'manual',
+      });
+
+      // Session gone: stop polling and show the login page once, instead of
+      // silently re-requesting it every second for as long as the tab is open.
+      if (r.status === 401 || r.type === 'opaqueredirect' || r.redirected) {
+        stopped = true;
+        window.location.reload();
+        return;
+      }
+
       if (r.ok) {
         const s = await r.json();
+        pollDelay = POLL_MS;
         // toasts on transitions
         if (prevIsRunning === false && s.isRunning === true) {
           showToast('info', 'Sync started');
@@ -193,9 +218,13 @@
         prevIsRunning = s.isRunning;
         prevStage = s.stage;
         renderStatus(s);
+      } else {
+        pollDelay = Math.min(pollDelay * 2, POLL_MAX_MS);
       }
-    } catch {}
-    setTimeout(poll, 1000);
+    } catch {
+      pollDelay = Math.min(pollDelay * 2, POLL_MAX_MS);
+    }
+    setTimeout(poll, pollDelay);
   }
   poll();
 })();
