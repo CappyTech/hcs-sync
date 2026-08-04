@@ -63,11 +63,54 @@ export const Supplier =
 
 // ── Invoice ─────────────────────────────────────────────────────────────
 
-const InvoiceSchema = buildSchema(schemas.invoice);
+// strict:false because KashFlow's documented payment-line shape is incomplete
+// (BankReconciliationId, for one, is undocumented but always present), and
+// upserts go through the native driver, so undeclared fields are already on
+// disk — a strict sub-schema would hide them on read rather than remove them.
+// Guarded for the same reason as bankReconciliation below: paymentLineFields
+// arrived in hcs-schemas 2.1.0, and that dependency is a branch tip. Against an
+// older one the lines stay Mixed, which is what they were before.
+const InvoicePaymentLineSchema = schemas.invoice.paymentLineFields
+  ? new mongoose.Schema(schemas.invoice.paymentLineFields, { _id: false, strict: false })
+  : null;
+
+// Overrides the [{}] Mixed that schemas.invoice.fields still carries for the
+// benefit of consumers that only spread `...fields` (see hcs-schemas 2.1.0).
+const InvoiceSchema = buildSchema(
+  schemas.invoice,
+  InvoicePaymentLineSchema ? { PaymentLines: [InvoicePaymentLineSchema] } : {},
+);
+
+/**
+ * Mutate an invoice item in-place, converting KashFlow's date strings to real
+ * Dates. Mirrors preparePurchaseForUpsert, minus the CIS stamping (that is a
+ * purchase-side concept).
+ *
+ * Without this, upserts go through the native driver with $literal-wrapped
+ * values, which bypasses Mongoose casting entirely — so a `Date` declaration in
+ * the schema is not enough on its own and payment dates stay as
+ * "YYYY-MM-DD HH:mm:ss" strings that no date-range query can touch.
+ */
+export function prepareInvoiceForUpsert(item) {
+  item.IssuedDate      = toDate(item.IssuedDate);
+  item.DueDate         = toDate(item.DueDate);
+  item.PaidDate        = toDate(item.PaidDate);
+  item.CreatedDate     = toDate(item.CreatedDate);
+  item.LastPaymentDate = toDate(item.LastPaymentDate);
+
+  if (Array.isArray(item.PaymentLines)) {
+    for (const pl of item.PaymentLines) {
+      pl.Date = toDate(pl.Date);
+    }
+  }
+
+  return item;
+}
 
 InvoiceSchema.statics.syncConfig = {
   keyField: 'Id',
   protectedFields: [],
+  transform: prepareInvoiceForUpsert,
 };
 
 export const Invoice =
@@ -87,9 +130,10 @@ export const Quote =
 
 // ── Purchase ────────────────────────────────────────────────────────────
 
+// strict:false for the same reason as invoices — see InvoicePaymentLineSchema.
 const PurchasePaymentLineSchema = new mongoose.Schema(
   schemas.purchase.paymentLineFields,
-  { _id: false }
+  { _id: false, strict: false }
 );
 
 const PurchaseSchema = buildSchema(schemas.purchase, {
@@ -261,13 +305,88 @@ export const BankAccount =
 
 const BankTransactionSchema = buildSchema(schemas.bankTransaction);
 
+/**
+ * Mutate a bank transaction in-place, converting KashFlow's date string to a
+ * real Date.
+ *
+ * The schema has always declared `Date: Date`, but every row on disk held a
+ * "2022-03-31 12:00:00" string, because upserts go through the native driver
+ * with $literal-wrapped values and so never hit Mongoose casting. Reconciliation
+ * needs date-range queries over this collection, which a string cannot serve
+ * (lexical ordering happens to agree for this format, but $gte against a Date
+ * matches nothing at all).
+ */
+export function prepareBankTransactionForUpsert(item) {
+  item.Date = toDate(item.Date);
+  return item;
+}
+
 BankTransactionSchema.statics.syncConfig = {
   keyField: 'Id',
   protectedFields: [],
+  transform: prepareBankTransactionForUpsert,
 };
 
 export const BankTransaction =
   mongoose.models.banktransaction || mongoose.model('banktransaction', BankTransactionSchema);
+
+// ── BankReconciliation ──────────────────────────────────────────────────
+
+/**
+ * Guarded: @cappytech/hcs-schemas is a branch-tip dependency, so an image can
+ * be built against a version predating the bankReconciliation entity (2.1.0).
+ * Unguarded, that throws at import time and takes down the WHOLE sync —
+ * customers, invoices, purchases and all — over one optional collection.
+ *
+ * Absent means reconciliations are simply not synced; run.js checks the model
+ * before its fan-out.
+ */
+const BankReconciliationSchema = schemas.bankReconciliation
+  ? buildSchema(schemas.bankReconciliation)
+  : null;
+
+/**
+ * Mutate a reconciliation in-place: coerce dates, normalise the nested
+ * transaction dates, and materialise the ReconKey composite.
+ *
+ * AccountId must already have been injected by the caller during the
+ * per-account fan-out — KashFlow carries it only in the request URL. A
+ * reconciliation without one cannot be attributed to an account, and its Id is
+ * only known to be unique *within* an account, so it is dropped rather than
+ * risk overwriting another account's identically-numbered reconciliation.
+ */
+export function prepareBankReconciliationForUpsert(item) {
+  item.StartDate = toDate(item.StartDate);
+  item.EndDate   = toDate(item.EndDate);
+
+  if (Array.isArray(item.Transactions)) {
+    for (const t of item.Transactions) {
+      t.Date = toDate(t.Date);
+    }
+  }
+
+  // Leaving ReconKey unset makes the row fail the engine's missing-key check,
+  // which counts and skips it rather than writing an unattributable document.
+  item.ReconKey =
+    item.AccountId != null && item.Id != null
+      ? `${item.AccountId}:${item.Id}`
+      : null;
+
+  return item;
+}
+
+if (BankReconciliationSchema) {
+  BankReconciliationSchema.statics.syncConfig = {
+    keyField: 'ReconKey',
+    protectedFields: [],
+    transform: prepareBankReconciliationForUpsert,
+  };
+}
+
+export const BankReconciliation = BankReconciliationSchema
+  ? (mongoose.models.bankreconciliation
+     || mongoose.model('bankreconciliation', BankReconciliationSchema))
+  : null;
 
 // ── Journal ─────────────────────────────────────────────────────────────
 
@@ -394,6 +513,7 @@ const models = {
   VATRate,
   BankAccount,
   BankTransaction,
+  BankReconciliation,
   Journal,
   Product,
   PurchaseOrder,

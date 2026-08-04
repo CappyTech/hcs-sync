@@ -126,6 +126,33 @@ export async function ensureKashflowIndexes(db) {
       await col.createIndex({ [keyField]: 1 }, { name: indexName });
     };
 
+    /**
+     * Create a non-unique compound index.
+     *
+     * These are also declared on the Mongoose schemas, but hcs-sync writes
+     * through the native driver and `autoIndex` is not something to rely on in
+     * production, so the reconciliation query paths are ensured explicitly here
+     * alongside every other index this module manages.
+     *
+     * No explicit name: Mongoose's autoIndex may already have created the same
+     * key under the driver's default name, and supplying our own would collide
+     * with it on every run. Letting the driver derive the name makes this
+     * idempotent whichever path got there first.
+     */
+    const ensureCompoundIndex = async (collectionName, keySpec, options = {}) => {
+      const col = db.collection(collectionName);
+      try {
+        // Options must match what the schema declares, or the two paths fight
+        // over the same auto-generated index name on every run.
+        await col.createIndex(keySpec, { background: true, ...options });
+      } catch (err) {
+        // An equivalent index under a different name is not a failure.
+        const codeName = err?.codeName || '';
+        if (codeName !== 'IndexOptionsConflict' && codeName !== 'IndexKeySpecsConflict') throw err;
+        logger.warn({ collectionName, keySpec, err: err.message }, 'Compound index already exists under different options');
+      }
+    };
+
     const dropIndexIfExists = async (collectionName, indexName) => {
       const col = db.collection(collectionName);
       try {
@@ -149,6 +176,9 @@ export async function ensureKashflowIndexes(db) {
       projects: ['Id'],
       bankaccounts: ['Id'],
       banktransactions: ['Id'],
+      // Keyed on the synthetic "<AccountId>:<Id>" composite — KashFlow's
+      // reconciliation Id is only unique within an account.
+      bankreconciliations: ['ReconKey'],
       journals: ['Id'],
       products: ['Id'],
       purchaseorders: ['Id'],
@@ -221,6 +251,7 @@ export async function ensureKashflowIndexes(db) {
       ensureUniqueKeyIndex('projects', 'Id'),
       ensureUniqueKeyIndex('bankaccounts', 'Id'),
       ensureUniqueKeyIndex('banktransactions', 'Id'),
+      ensureUniqueKeyIndex('bankreconciliations', 'ReconKey', 'string'),
       ensureUniqueKeyIndex('journals', 'Id'),
       ensureUniqueKeyIndex('products', 'Id'),
       ensureUniqueKeyIndex('purchaseorders', 'Id'),
@@ -250,6 +281,23 @@ export async function ensureKashflowIndexes(db) {
       ensureSecondaryIndex('countries', 'Code'),
     ];
 
+    // Compound indexes serving hcs-app's bank reconciliation query paths.
+    const compoundJobs = [
+      // Per-account unreconciled worklist, ordered newest first.
+      ensureCompoundIndex('banktransactions', { AccountId: 1, Reconciled: 1, Date: -1 }),
+      // Resolving a bank line to the document it settles.
+      ensureCompoundIndex('banktransactions', { EntityName: 1, ResourceNumber: 1 }),
+      // Candidate lookup by issue date when suggesting matches.
+      ensureCompoundIndex('invoices', { IssuedDate: -1 }),
+      ensureCompoundIndex('purchases', { IssuedDate: -1 }),
+      // Resolving a batch-payment bank line to the documents it settled.
+      // sparse to match the hcs-schemas declaration: most documents have no
+      // batch payment, so the index only covers those that do.
+      ensureCompoundIndex('invoices', { 'PaymentLines.BulkPaymentNumber': 1 }, { sparse: true }),
+      ensureCompoundIndex('purchases', { 'PaymentLines.BulkPaymentNumber': 1 }, { sparse: true }),
+      ensureCompoundIndex('bankreconciliations', { AccountId: 1, EndDate: -1 }),
+    ];
+
     for (const collectionName of collectionsNeedingUuid) {
       indexJobs.push(ensureUniqueKeyIndex(collectionName, 'uuid', 'string'));
     }
@@ -270,7 +318,7 @@ export async function ensureKashflowIndexes(db) {
       ),
     ];
 
-    await Promise.all([...indexJobs, ...secondaryJobs, ...auditJobs]);
+    await Promise.all([...indexJobs, ...secondaryJobs, ...compoundJobs, ...auditJobs]);
   } catch (err) {
     if (isMongoAuthError(err)) {
       throw new Error(

@@ -2,6 +2,28 @@
 
 All notable changes to hcs-sync will be documented here. Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [0.10.0] - 2026-08-04
+
+Groundwork for bank reconciliation in hcs-app. Everything here is read-only
+against KashFlow.
+
+### Fixed
+- **`syncConfig.transform` was never applied.** It was declared per model but only ever invoked by one hand-written line in the purchase detail fanout, so declaring a transform on any other model silently did nothing. It now runs inside `buildUpsertUpdate`, the single choke point every upsert passes through, and the redundant explicit call is gone. This is load-bearing rather than tidy-up: upserts go out through the native driver with every value wrapped in `$literal`, so Mongoose casting never runs and a `Date` field declaration alone stores whatever string KashFlow sent. A throwing transform is logged and the raw payload written, so one malformed row cannot abort a batch.
+- **`bankTransaction.Date` was stored as a string.** The schema had declared it a `Date` since the collection existed while all 13,429 rows on disk held `"2022-03-31 12:00:00"`, which no date-range query can serve — `$gte` against a `Date` matches none of them. Now coerced via `prepareBankTransactionForUpsert`. Invoice header and payment-line dates get the same treatment (`prepareInvoiceForUpsert`), mirroring what purchases already had.
+- **`mongoDetails` was overwritten once per account** in `upsertSimpleList`. The bank fan-outs call it per account, so a plain assignment left only the last account's captured filters. Reporting only.
+- **Compound index creation was not idempotent.** Supplying explicit index names collided with the ones Mongoose `autoIndex` had already created under the driver's defaults, logging a conflict on every run. The names are now derived, and options match what the schema declares.
+
+### Added
+- **Bank reconciliations synced** (`bankreconciliations`), read-only, via a per-account fan-out alongside the existing bank-transaction loop. KashFlow's own reconciliation state is the only way to compare our reconciliation against theirs, and its `StartBalance`/`EndBalance` give free anchors for period sign-off. Fetched with `excludetransactions=true`: the per-reconciliation transaction array duplicates `banktransactions`, and pulling it hourly would be a lot of I/O for data already held. Note there is exactly **one** reconciliation in the live account — KashFlow's own reconciliation feature has effectively never been used here.
+- **Soft-delete for bank transactions KashFlow no longer returns.** The mirror kept them forever; two such rows exist in the live data, last synced 9–10 July, sitting beside 13,427 that update normally on the same active account. Not cosmetic for reconciliation — a phantom line appears on hcs-app's worklist looking perfectly reconcilable and can be matched against a document it never paid for. The guards matter more than the feature: the sweep sits inside the same `try` as the fetch so a throw skips it, and the existing `if (!txs?.length) continue` rules out an empty response. Sweeping after a failed or empty fetch would mark an entire account's history deleted. Reappearance self-heals, because `buildUpsertUpdate` already writes `deletedAt: null` on every upsert. Accounts KashFlow does not return are never swept.
+- **GET-only `bankReconciliations` client resource.** Deliberately no wrapper for the reconciliation create/update/delete endpoints, nor for `PUT /bankaccounts/{id}/transactionlist` or `POST /bankaccounts/assign-transaction-to-new-entity` — the last two **delete the source bank transaction** on success. hcs-app reconciles locally and never writes back; their absence from the client is the enforcement mechanism.
+- Shape capture for reconciliations, resolving an account that actually has some (most have none, and an empty sample shapes nothing).
+- Compound indexes for the reconciliation query paths on `banktransactions`, `invoices`, `purchases` and `bankreconciliations`.
+
+### Notes
+- Requires `@cappytech/hcs-schemas` ≥ 2.1.0 for the `bankReconciliation` entity. That dependency is a **branch tip**, not a version range, so a push to its `main` changes what the next image build installs here.
+- Verified against a copy of the live database: 13,427 of 13,429 bank dates coerced (the two exceptions being the rows KashFlow had deleted), all 1,670 invoice payment-line dates converted, collection counts otherwise unchanged, and both reconciliation query paths index-served.
+
 ## [0.9.0] - 2026-07-23
 
 ### Changed

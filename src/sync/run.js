@@ -6,7 +6,7 @@ import config from '../config.js';
 import progress from '../server/progress.js';
 import { connectMongoose, isMongooseEnabled } from '../db/mongoose.js';
 import { ensureKashflowIndexes } from '../db/mongo.js';
-import { Customer, Supplier, Invoice, Quote, Purchase, Project, Nominal, VATRate, BankAccount, BankTransaction, Journal, Product, PurchaseOrder, QuoteCategory, PurchaseOrderCategory, Currency, Country, AccountingPeriod, VatReturn, SYNC_INTERNAL_FIELDS, toDate, computeCisTaxPeriod, preparePurchaseForUpsert } from '../server/models/kashflow.js';
+import { Customer, Supplier, Invoice, Quote, Purchase, Project, Nominal, VATRate, BankAccount, BankTransaction, BankReconciliation, Journal, Product, PurchaseOrder, QuoteCategory, PurchaseOrderCategory, Currency, Country, AccountingPeriod, VatReturn, SYNC_INTERNAL_FIELDS, toDate, computeCisTaxPeriod, preparePurchaseForUpsert } from '../server/models/kashflow.js';
 import deepDiff, { stableStringify } from '../util/deepDiff.js';
 
 function computePayloadHash(data) {
@@ -39,6 +39,28 @@ function createPool(limit, label, handler, onProgress) {
 function buildUpsertUpdate({ keyField, keyValue, payload, syncedAt, runId, model, protectedFields }) {
   const source = payload && typeof payload === 'object' && !Array.isArray(payload) ? payload : {};
   const syncConfig = model?.syncConfig || {};
+
+  // Apply the model's transform here, at the single choke point every upsert
+  // passes through. Previously transform was declared in syncConfig but only
+  // ever invoked explicitly by the purchase detail fanout, so declaring one on
+  // any other model was a silent no-op.
+  //
+  // This is what converts KashFlow's "YYYY-MM-DD HH:mm:ss" strings into real
+  // Dates. It cannot be left to Mongoose: the pipeline below wraps every value
+  // in $literal and the write goes out through the native driver, so schema
+  // casting never runs and a `Date` field declaration alone stores a string.
+  //
+  // Transforms mutate in place and must be idempotent — a row may be built more
+  // than once across list and detail phases.
+  if (typeof syncConfig.transform === 'function') {
+    try {
+      syncConfig.transform(source);
+    } catch (err) {
+      // A malformed row must not abort the whole batch; it is written untransformed.
+      logger.warn({ keyField, keyValue, err: err.message }, 'syncConfig.transform failed; upserting raw payload');
+    }
+  }
+
   const protectedSet = new Set(protectedFields || syncConfig.protectedFields || []);
   const flattened = {};
   for (const [k, v] of Object.entries(source)) {
@@ -486,7 +508,21 @@ async function run(options = {}) {
       }
       await up.flush();
       mongoSummary[summaryKey] = addMongoStats(mongoSummary[summaryKey], up.getStats());
-      mongoDetails[summaryKey] = up.getUpsertedFilters();
+      // Accumulate rather than assign: the bank-transaction and reconciliation
+      // fan-outs call this once per account, and a plain assignment left
+      // mongoDetails holding only the last account's filters.
+      const added = up.getUpsertedFilters();
+      if (added?.filters?.length) {
+        const existing = mongoDetails[summaryKey]?.filters || [];
+        const cap = added.maxCapturedUpserts || 2000;
+        mongoDetails[summaryKey] = {
+          filters: existing.concat(added.filters).slice(0, cap),
+          truncated: Boolean(mongoDetails[summaryKey]?.truncated) || Boolean(added.truncated),
+          maxCapturedUpserts: cap,
+        };
+      } else if (!mongoDetails[summaryKey]) {
+        mongoDetails[summaryKey] = added;
+      }
       logger.info({ mongo: { [summaryKey]: up.getStats() } }, `Mongo upsert summary (${summaryKey})`);
       emitLog('info', `Mongo upsert summary (${summaryKey})`, { stats: up.getStats() });
       if (skip.getMissingKey() > 0) { logger.warn({ skippedMissingKey: skip.getMissingKey() }, `Skipped ${summaryKey} upserts with missing key`); emitLog('warn', `Skipped ${summaryKey} upserts with missing key`, { count: skip.getMissingKey() }); }
@@ -566,6 +602,7 @@ async function run(options = {}) {
     // Bank transactions — fetched per account (KashFlow has no global endpoint).
     // Best-effort: a failing account is logged and skipped so it never breaks the run.
     let bankTransactionsTotal = 0;
+    let bankTransactionsSoftDeleted = 0;
     if (mongoEnabled && bankAccountsRaw?.length) {
       setStage('banktransactions:fetch');
       const now = new Date();
@@ -577,12 +614,100 @@ async function run(options = {}) {
           if (!txs?.length) continue;
           bankTransactionsTotal += txs.length;
           await upsertSimpleList({ model: BankTransaction, rows: txs, summaryKey: 'bankTransactions', collectionName: 'banktransactions', keyFields: ['Id'], now });
+
+          // Soft-delete anything KashFlow no longer returns for this account.
+          //
+          // Without this the mirror keeps transactions deleted in KashFlow
+          // forever. That is not cosmetic for reconciliation: a phantom line
+          // sits on the worklist looking perfectly reconcilable, and can be
+          // matched against a document it never paid for.
+          //
+          // Only ever runs after a SUCCESSFUL, non-empty fetch. Sweeping on a
+          // failed or empty response would mark an entire account's history
+          // deleted, so both guards matter more than the feature does:
+          //   - a throw skips this entirely (we are inside the try)
+          //   - `if (!txs?.length) continue` above rules out an empty response
+          //
+          // Reappearance self-heals: buildUpsertUpdate sets deletedAt to null
+          // on every upsert, so a transaction KashFlow returns again is
+          // un-deleted without special handling.
+          const seen = txs.map(t => t?.Id).filter(v => v != null);
+          if (seen.length) {
+            const res = await BankTransaction.updateMany(
+              { AccountId: accountId, Id: { $nin: seen }, deletedAt: null },
+              { $set: { deletedAt: now } },
+            );
+            const n = res?.modifiedCount || 0;
+            if (n > 0) {
+              bankTransactionsSoftDeleted += n;
+              logger.info({ accountId, softDeleted: n }, 'Soft-deleted bank transactions no longer in KashFlow');
+              emitLog('info', 'Soft-deleted bank transactions no longer in KashFlow', { accountId, count: n });
+            }
+          }
         } catch (e) {
           logger.warn({ accountId, err: e.message }, 'Failed to fetch bank transactions for account');
           emitLog('warn', 'Failed to fetch bank transactions for account', { accountId, message: e.message });
         }
       }
-      emitLog('info', 'Fetched bank transactions', { accounts: bankAccountsRaw.length, transactions: bankTransactionsTotal });
+      emitLog('info', 'Fetched bank transactions', {
+        accounts: bankAccountsRaw.length,
+        transactions: bankTransactionsTotal,
+        softDeleted: bankTransactionsSoftDeleted,
+      });
+    }
+
+    // Bank reconciliations — also per account, and mirrored READ-ONLY: hcs-app
+    // reconciles locally and never writes back. They are synced so we can
+    // compare our state against KashFlow's and take the StartBalance/EndBalance
+    // anchors for period sign-off.
+    //
+    // The list endpoint is asked for reconciliations without their transaction
+    // arrays (excludetransactions=true). The per-reconciliation transaction list
+    // duplicates data we already hold in banktransactions, and pulling it for
+    // every reconciliation on every hourly run would be a large amount of I/O
+    // for data that is already there.
+    let bankReconciliationsTotal = 0;
+    // BankReconciliation is null when built against hcs-schemas < 2.1.0 — the
+    // dependency is a branch tip, so that is a real possibility rather than a
+    // theoretical one. Skipping leaves every other entity syncing normally.
+    if (mongoEnabled && bankAccountsRaw?.length && BankReconciliation) {
+      setStage('bankreconciliations:fetch');
+      const now = new Date();
+      for (const account of bankAccountsRaw) {
+        const accountId = pickId(account);
+        if (accountId == null) continue;
+        try {
+          const recons = await kf.bankReconciliations.listAll(accountId, {
+            perpage: 200,
+            excludetransactions: true,
+          });
+          if (!recons?.length) continue;
+
+          // KashFlow scopes reconciliation Ids under an account and returns the
+          // account nowhere in the body, so both AccountId and the ReconKey
+          // composite are injected here. They must be set before the upsert
+          // runs, because the engine reads the key field off the row to build
+          // its filter — a transform would be too late.
+          const rows = [];
+          for (const r of recons) {
+            if (typeof r !== 'object' || r == null) continue;
+            if (r.Id == null) continue;
+            r.AccountId = accountId;
+            r.ReconKey = `${accountId}:${r.Id}`;
+            rows.push(r);
+          }
+          if (!rows.length) continue;
+
+          bankReconciliationsTotal += rows.length;
+          await upsertSimpleList({ model: BankReconciliation, rows, summaryKey: 'bankReconciliations', collectionName: 'bankreconciliations', keyFields: ['ReconKey'], now });
+        } catch (e) {
+          // Best-effort, matching the bank-transaction loop above: a failing
+          // account is logged and skipped so it never breaks the run.
+          logger.warn({ accountId, err: e.message }, 'Failed to fetch bank reconciliations for account');
+          emitLog('warn', 'Failed to fetch bank reconciliations for account', { accountId, message: e.message });
+        }
+      }
+      emitLog('info', 'Fetched bank reconciliations', { accounts: bankAccountsRaw.length, reconciliations: bankReconciliationsTotal });
     }
 
     // Detail fetch phases — customers, suppliers, projects, invoices, quotes, purchases all run concurrently.
@@ -873,7 +998,7 @@ async function run(options = {}) {
                 const sid = supplierIdByCode.get(String(full.SupplierCode).trim().toUpperCase());
                 if (sid != null) { full.SupplierId = sid; purchasesSupplierIdBackfilled += 1; }
               }
-              Purchase.syncConfig.transform(full);
+              // buildUpsertUpdate applies Purchase.syncConfig.transform itself.
               const update = buildUpsertUpdate({ keyField: 'Id', keyValue: id, payload: full, syncedAt: runNow, runId, model: Purchase });
               update[0].$set.detailSyncedAt = { $cond: { if: { $ne: ['$_kfHash', update[0].$set._kfHash] }, then: { $literal: runNow }, else: { $ifNull: ['$detailSyncedAt', { $literal: runNow }] } } };
               update._rawSet.detailSyncedAt = runNow;
@@ -913,6 +1038,8 @@ async function run(options = {}) {
       vatRates: vatRatesRaw?.length || 0,
       bankAccounts: bankAccountsRaw?.length || 0,
       bankTransactions: bankTransactionsTotal,
+      bankTransactionsSoftDeleted,
+      bankReconciliations: bankReconciliationsTotal,
       journals: journalsRaw?.length || 0,
       products: productsRaw?.length || 0,
       purchaseOrders: purchaseOrdersRaw?.length || 0,
