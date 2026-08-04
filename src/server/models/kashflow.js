@@ -67,16 +67,19 @@ export const Supplier =
 // (BankReconciliationId, for one, is undocumented but always present), and
 // upserts go through the native driver, so undeclared fields are already on
 // disk — a strict sub-schema would hide them on read rather than remove them.
-const InvoicePaymentLineSchema = new mongoose.Schema(
-  schemas.invoice.paymentLineFields,
-  { _id: false, strict: false }
-);
+// Guarded for the same reason as bankReconciliation below: paymentLineFields
+// arrived in hcs-schemas 2.1.0, and that dependency is a branch tip. Against an
+// older one the lines stay Mixed, which is what they were before.
+const InvoicePaymentLineSchema = schemas.invoice.paymentLineFields
+  ? new mongoose.Schema(schemas.invoice.paymentLineFields, { _id: false, strict: false })
+  : null;
 
 // Overrides the [{}] Mixed that schemas.invoice.fields still carries for the
 // benefit of consumers that only spread `...fields` (see hcs-schemas 2.1.0).
-const InvoiceSchema = buildSchema(schemas.invoice, {
-  PaymentLines: [InvoicePaymentLineSchema],
-});
+const InvoiceSchema = buildSchema(
+  schemas.invoice,
+  InvoicePaymentLineSchema ? { PaymentLines: [InvoicePaymentLineSchema] } : {},
+);
 
 /**
  * Mutate an invoice item in-place, converting KashFlow's date strings to real
@@ -329,7 +332,18 @@ export const BankTransaction =
 
 // ── BankReconciliation ──────────────────────────────────────────────────
 
-const BankReconciliationSchema = buildSchema(schemas.bankReconciliation);
+/**
+ * Guarded: @cappytech/hcs-schemas is a branch-tip dependency, so an image can
+ * be built against a version predating the bankReconciliation entity (2.1.0).
+ * Unguarded, that throws at import time and takes down the WHOLE sync —
+ * customers, invoices, purchases and all — over one optional collection.
+ *
+ * Absent means reconciliations are simply not synced; run.js checks the model
+ * before its fan-out.
+ */
+const BankReconciliationSchema = schemas.bankReconciliation
+  ? buildSchema(schemas.bankReconciliation)
+  : null;
 
 /**
  * Mutate a reconciliation in-place: coerce dates, normalise the nested
@@ -361,15 +375,18 @@ export function prepareBankReconciliationForUpsert(item) {
   return item;
 }
 
-BankReconciliationSchema.statics.syncConfig = {
-  keyField: 'ReconKey',
-  protectedFields: [],
-  transform: prepareBankReconciliationForUpsert,
-};
+if (BankReconciliationSchema) {
+  BankReconciliationSchema.statics.syncConfig = {
+    keyField: 'ReconKey',
+    protectedFields: [],
+    transform: prepareBankReconciliationForUpsert,
+  };
+}
 
-export const BankReconciliation =
-  mongoose.models.bankreconciliation
-  || mongoose.model('bankreconciliation', BankReconciliationSchema);
+export const BankReconciliation = BankReconciliationSchema
+  ? (mongoose.models.bankreconciliation
+     || mongoose.model('bankreconciliation', BankReconciliationSchema))
+  : null;
 
 // ── Journal ─────────────────────────────────────────────────────────────
 

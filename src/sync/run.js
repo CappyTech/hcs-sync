@@ -667,7 +667,10 @@ async function run(options = {}) {
     // every reconciliation on every hourly run would be a large amount of I/O
     // for data that is already there.
     let bankReconciliationsTotal = 0;
-    if (mongoEnabled && bankAccountsRaw?.length) {
+    // BankReconciliation is null when built against hcs-schemas < 2.1.0 — the
+    // dependency is a branch tip, so that is a real possibility rather than a
+    // theoretical one. Skipping leaves every other entity syncing normally.
+    if (mongoEnabled && bankAccountsRaw?.length && BankReconciliation) {
       setStage('bankreconciliations:fetch');
       const now = new Date();
       for (const account of bankAccountsRaw) {
