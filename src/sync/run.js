@@ -602,6 +602,7 @@ async function run(options = {}) {
     // Bank transactions — fetched per account (KashFlow has no global endpoint).
     // Best-effort: a failing account is logged and skipped so it never breaks the run.
     let bankTransactionsTotal = 0;
+    let bankTransactionsSoftDeleted = 0;
     if (mongoEnabled && bankAccountsRaw?.length) {
       setStage('banktransactions:fetch');
       const now = new Date();
@@ -613,12 +614,46 @@ async function run(options = {}) {
           if (!txs?.length) continue;
           bankTransactionsTotal += txs.length;
           await upsertSimpleList({ model: BankTransaction, rows: txs, summaryKey: 'bankTransactions', collectionName: 'banktransactions', keyFields: ['Id'], now });
+
+          // Soft-delete anything KashFlow no longer returns for this account.
+          //
+          // Without this the mirror keeps transactions deleted in KashFlow
+          // forever. That is not cosmetic for reconciliation: a phantom line
+          // sits on the worklist looking perfectly reconcilable, and can be
+          // matched against a document it never paid for.
+          //
+          // Only ever runs after a SUCCESSFUL, non-empty fetch. Sweeping on a
+          // failed or empty response would mark an entire account's history
+          // deleted, so both guards matter more than the feature does:
+          //   - a throw skips this entirely (we are inside the try)
+          //   - `if (!txs?.length) continue` above rules out an empty response
+          //
+          // Reappearance self-heals: buildUpsertUpdate sets deletedAt to null
+          // on every upsert, so a transaction KashFlow returns again is
+          // un-deleted without special handling.
+          const seen = txs.map(t => t?.Id).filter(v => v != null);
+          if (seen.length) {
+            const res = await BankTransaction.updateMany(
+              { AccountId: accountId, Id: { $nin: seen }, deletedAt: null },
+              { $set: { deletedAt: now } },
+            );
+            const n = res?.modifiedCount || 0;
+            if (n > 0) {
+              bankTransactionsSoftDeleted += n;
+              logger.info({ accountId, softDeleted: n }, 'Soft-deleted bank transactions no longer in KashFlow');
+              emitLog('info', 'Soft-deleted bank transactions no longer in KashFlow', { accountId, count: n });
+            }
+          }
         } catch (e) {
           logger.warn({ accountId, err: e.message }, 'Failed to fetch bank transactions for account');
           emitLog('warn', 'Failed to fetch bank transactions for account', { accountId, message: e.message });
         }
       }
-      emitLog('info', 'Fetched bank transactions', { accounts: bankAccountsRaw.length, transactions: bankTransactionsTotal });
+      emitLog('info', 'Fetched bank transactions', {
+        accounts: bankAccountsRaw.length,
+        transactions: bankTransactionsTotal,
+        softDeleted: bankTransactionsSoftDeleted,
+      });
     }
 
     // Bank reconciliations — also per account, and mirrored READ-ONLY: hcs-app
@@ -1000,6 +1035,7 @@ async function run(options = {}) {
       vatRates: vatRatesRaw?.length || 0,
       bankAccounts: bankAccountsRaw?.length || 0,
       bankTransactions: bankTransactionsTotal,
+      bankTransactionsSoftDeleted,
       bankReconciliations: bankReconciliationsTotal,
       journals: journalsRaw?.length || 0,
       products: productsRaw?.length || 0,

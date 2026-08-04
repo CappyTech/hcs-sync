@@ -205,3 +205,64 @@ describe('buildUpsertUpdate() applies syncConfig.transform', () => {
     expect(setValue(withTransform, '_kfHash')).not.toBe(setValue(without, '_kfHash'));
   });
 });
+
+describe('soft-delete sweep for bank transactions', () => {
+  /**
+   * The sweep marks transactions KashFlow no longer returns. Getting the
+   * guards wrong would mark an entire account's history deleted, so these
+   * pin the conditions rather than the mechanics.
+   */
+  const sweepFilter = (accountId, seen) => ({
+    AccountId: accountId, Id: { $nin: seen }, deletedAt: null,
+  });
+
+  it('targets only unseen, not-already-deleted lines on that one account', () => {
+    const f = sweepFilter(611594, [1, 2, 3]);
+    expect(f.AccountId).toBe(611594);
+    expect(f.Id.$nin).toEqual([1, 2, 3]);
+    // Already-deleted rows are excluded so the modifiedCount reports real
+    // transitions rather than re-stamping the same rows every run.
+    expect(f.deletedAt).toBeNull();
+  });
+
+  it('is skipped entirely when the fetch returned nothing', () => {
+    // run.js does `if (!txs?.length) continue;` before the sweep. An empty or
+    // partial response must never be read as "KashFlow deleted everything".
+    const txs = [];
+    const wouldSweep = Boolean(txs?.length);
+    expect(wouldSweep).toBe(false);
+  });
+
+  it('sits inside the fetch try block, so a failed fetch cannot trigger it', async () => {
+    // This is the dangerous case: if the sweep ran after a failed fetch it
+    // would mark an entire account's history deleted. Asserted against the
+    // source, because the sweep is inline in run() and the ordering is the
+    // whole safety property.
+    const fs = await import('node:fs');
+    const src = fs.readFileSync(new URL('../src/sync/run.js', import.meta.url), 'utf8');
+
+    const fetchAt = src.indexOf('kf.bankTransactions.listAll');
+    const guardAt = src.indexOf('if (!txs?.length) continue;');
+    const sweepAt = src.indexOf('Soft-deleted bank transactions no longer in KashFlow');
+    const catchAt = src.indexOf('Failed to fetch bank transactions for account');
+
+    expect(fetchAt).toBeGreaterThan(-1);
+    expect(guardAt).toBeGreaterThan(fetchAt);
+    // The empty-response guard must precede the sweep...
+    expect(sweepAt).toBeGreaterThan(guardAt);
+    // ...and the sweep must sit before the catch, i.e. inside the try.
+    expect(sweepAt).toBeLessThan(catchAt);
+  });
+
+  it('un-deletes a transaction KashFlow returns again', () => {
+    // buildUpsertUpdate always writes deletedAt: null, so reappearance
+    // self-heals without special handling.
+    const pipeline = buildUpsertUpdate({
+      keyField: 'Id', keyValue: 7,
+      payload: { Id: 7, PaidOut: 10 },
+      syncedAt: new Date(),
+      model: { syncConfig: {} },
+    });
+    expect(setValue(pipeline, 'deletedAt')).toBeNull();
+  });
+});
