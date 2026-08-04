@@ -257,6 +257,20 @@ describe('Express server routes', () => {
       expect(res.status).toBe(302);
       expect(res.headers.location).toBe('/');
     });
+
+    // layout.ejs loads /static/app.js on every page, so the dashboard poller
+    // runs on the login page too. There, /status answering 401 is the normal
+    // resting state rather than an expired session, and the poller's 401
+    // branch reloads — which re-runs app.js and reloads again, a loop no one
+    // can type through. app.js therefore only starts polling when #status-badge
+    // is present. That gate is only correct while the login page has no such
+    // element; this pins it.
+    it('does not carry the dashboard poller sentinel', async () => {
+      const res = await supertest(app).get('/login');
+      expect(res.status).toBe(200);
+      expect(res.text).toContain('/static/app.js');
+      expect(res.text).not.toContain('status-badge');
+    });
   });
 
   // ── Authenticated JSON endpoints ───────────────────────────────────────
@@ -297,6 +311,18 @@ describe('Express server routes', () => {
 
       expect(res.status).toBe(200);
       expect(res.text).toContain('Dashboard');
+    });
+
+    // The other half of the app.js poller gate: it starts only when
+    // #status-badge is on the page, so the dashboard must keep carrying it or
+    // the status panel silently stops updating with nothing logged anywhere.
+    it('carries the poller sentinel the dashboard updates', async () => {
+      const sso = makeSsoToken();
+      const res = await supertest(app)
+        .get('/')
+        .set('Cookie', `hcs_sso=${sso}`);
+
+      expect(res.text).toContain('status-badge');
     });
   });
 
