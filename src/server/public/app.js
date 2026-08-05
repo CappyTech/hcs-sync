@@ -192,6 +192,8 @@
 
       // Session gone: stop polling and show the login page once, instead of
       // silently re-requesting it every second for as long as the tab is open.
+      // The reload is safe only because poll() never starts without a dashboard
+      // on the page — see the guard at the bottom of this file.
       if (r.status === 401 || r.type === 'opaqueredirect' || r.redirected) {
         stopped = true;
         window.location.reload();
@@ -226,5 +228,13 @@
     }
     setTimeout(poll, pollDelay);
   }
-  poll();
+
+  // Only the dashboard has anything for the poller to update, but layout.ejs
+  // loads this script on every page — including /login, where a 401 from
+  // /status is the normal resting state and not an expired session. Polling
+  // there made the 401 branch reload a page that immediately re-ran this file
+  // and reloaded again; `stopped` guards one tab's timer but does not survive
+  // the reload it triggers, so the login page reloaded ~6x/second and nobody
+  // could type into it. Gate on the element renderStatus writes to.
+  if (document.getElementById('status-badge')) poll();
 })();

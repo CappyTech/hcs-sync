@@ -2,6 +2,17 @@
 
 All notable changes to hcs-sync will be documented here. Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [0.10.2] - 2026-08-05
+
+Fixes a reload loop that made the login page impossible to use — a regression introduced by 0.10.1's own fix.
+
+### Fixed
+- **The login page reloaded itself ~6 times a second and could not be typed into.** 0.10.1 taught the dashboard poller to stop on a `401` from `/status` and `window.location.reload()` once, so an expired session lands the user on the login page. But `layout.ejs` loads `/static/app.js` on *every* page, including `/login` — and on the login page a `401` from `/status` is not an expired session, it is the normal resting state. So the poller fired immediately on load, got its `401`, and reloaded; the fresh page re-ran `app.js`, which polled, got `401`, and reloaded again. The `stopped` flag guards one page's timer but does not survive the reload it triggers, so nothing broke the cycle. Because `poll()` runs at load rather than after `POLL_MS`, each iteration took ~170ms rather than a second. Observed in production: 333 full login-page loads in 90 seconds from one browser, and not a single `POST /login` — the reload discarded the form before anyone could submit it.
+- **`poll()` now starts only when the dashboard is actually on the page**, gated on `#status-badge`, the element `renderStatus` writes to. The 401-reload branch is correct behaviour for a dashboard whose session expired and wrong everywhere else; the gate is what makes the distinction. Everything 0.10.1 fixed still holds — this narrows where the poller runs, it does not revert the backoff, the `Accept: application/json` header or `redirect: 'manual'`.
+
+### Added
+- `tests/server.test.js` — both halves of that gate, since it is a load-bearing invariant split across a template and a script that cannot see each other: the login page must carry `/static/app.js` but **not** `status-badge`, and the dashboard must carry `status-badge`. Without the second test the gate could be silently disabled everywhere, and the status panel would just stop updating with nothing logged.
+
 ## [0.10.1] - 2026-08-04
 
 Stops an open dashboard tab hammering the server once a second, forever, after its session expires.
