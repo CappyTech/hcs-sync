@@ -2,6 +2,29 @@
 
 All notable changes to hcs-sync will be documented here. Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [0.11.0] - 2026-08-05
+
+Requires **hcs-schemas 3.0.0**. Stores both halves of an internal transfer, which the mirror has been silently merging since bank transactions were first synced.
+
+### Fixed
+- **Both halves of an internal transfer are now stored.** KashFlow returns a transfer between two company accounts in **both** accounts' transaction feeds, each rendered from that account's point of view: `PaidIn`/`PaidOut` swapped, `Balance` being that account's running balance, `Type` naming the *other* account, `TransactionType` 0 vs 6. The per-account fan-out keyed the upsert on `Id` alone, and `banktransactions` had a unique index on `Id`, so the two renderings collapsed into one document and each feed overwrote the other's version on every run.
+
+  On the live mirror: **422 documents rewritten twice per hourly sync** — 844 modifications that could never converge, because each write invalidated the other's `_kfHash`. Accounts are synced in the order KashFlow lists them, so the main trading account (611594) wrote first and a counterparty account always wrote last: **483 lines fetched under 611594 were stored under some other account**, absent from its ledger entirely, leaving the account with the largest outstanding balance unable to reconcile. hcs-app's `bankTransferService` — written specifically to pair the two halves of a transfer — was looking for halves this merge had already destroyed, which is why it found 22 candidate pairs instead of a few hundred.
+
+  Rows are now stamped with the account whose feed returned them and keyed on `(AccountId, Id)`. **KashFlow's own `AccountId` could not carry this**: it is identical in both feeds — it names the account the transaction was entered against, and for 105 rows here it is not even one of the nine accounts KashFlow lists. Only the feed identifies the ledger a line belongs to.
+
+  The soft-delete sweep's `{ AccountId: accountId, Id: { $nin: seen } }` filter becomes correctly scoped as a consequence, rather than accidentally correct because there was only ever one document per `Id`.
+
+### Changed
+- `upsertSimpleList()` takes an optional `scope` merged into every filter, making the effective key a composite. Bank transactions are the only caller; everything else is unaffected.
+- **Index migration, applied automatically on connect.** The legacy unique `Id_1` is downgraded to a non-unique secondary index and a unique `{ AccountId: 1, Id: 1 }` is created. This runs at startup, before any sync writes, because the second half of every pair would otherwise fail with a duplicate key error. `Id` stays indexed — it identifies the *transfer*, not the ledger line.
+
+### Added
+- `tests/bankReconciliation.test.js` — the two renderings of one transfer must hash differently (indistinguishable halves are what let them merge), one rendering must hash identically across runs (or the churn returns in a new form), and the source must both stamp `AccountId` from the loop and scope the filter to it. Those two travel together: stamping without scoping still merges the halves; scoping without stamping leaves the hash oscillating.
+
+### Migration
+Deploy **after** hcs-app has backfilled `bankAccountId` onto `bankmatches` and `statementlines`. Those hold a bare numeric `bankTransactionId`, which stops being unique the moment this release runs. The backfill is unambiguous only while one document per `Id` still exists.
+
 ## [0.10.3] - 2026-08-05
 
 Fixes a second login-page failure with the same shape as 0.10.2's — something the layout loads unconditionally breaking the page it loads on — and stops the run summary and Discord alert under-reporting what a sync changed.

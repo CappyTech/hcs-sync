@@ -266,3 +266,61 @@ describe('soft-delete sweep for bank transactions', () => {
     expect(setValue(pipeline, 'deletedAt')).toBeNull();
   });
 });
+
+describe('bank transactions are keyed per account, not per KashFlow Id', () => {
+  /**
+   * An internal transfer is returned by BOTH accounts' feeds under one Id, each
+   * rendered from that account's point of view. Keying on Id alone collapsed
+   * the two into a single document, so the per-account fan-out overwrote one
+   * half with the other on every run — 422 documents churning hourly, and the
+   * main trading account's half never surviving, because it syncs first and the
+   * counterparty account writes last.
+   */
+  const transferAsSeenBy = (accountId, { paidIn, paidOut, balance, type }) => ({
+    Id: 213715814,
+    AccountId: accountId,
+    Date: '2026-07-02 12:00:00',
+    PaidIn: paidIn,
+    PaidOut: paidOut,
+    Balance: balance,
+    Type: type,
+  });
+
+  const hashFor = (row) => setValue(
+    buildUpsertUpdate({
+      keyField: 'Id', keyValue: row.Id, payload: row,
+      syncedAt: new Date(), model: { syncConfig: {} },
+    }),
+    '_kfHash',
+  );
+
+  it('gives the two halves of one transfer different content hashes', () => {
+    // Same Id, opposite sides. If these hash alike the halves are
+    // indistinguishable; if they are stored under one key they overwrite each
+    // other forever, which is exactly what happened.
+    const main = transferAsSeenBy(611594, { paidIn: 0, paidOut: 312.17, balance: -1494.24, type: 'Business Credit Card' });
+    const sub  = transferAsSeenBy(938298, { paidIn: 312.17, paidOut: 0, balance: 28250.34, type: 'Heron Constructive Solutions LTD' });
+    expect(hashFor(main)).not.toBe(hashFor(sub));
+  });
+
+  it('hashes one half identically across runs, so a steady state stops writing', () => {
+    const row = { paidIn: 0, paidOut: 312.17, balance: -1494.24, type: 'Business Credit Card' };
+    expect(hashFor(transferAsSeenBy(611594, row))).toBe(hashFor(transferAsSeenBy(611594, row)));
+  });
+
+  it('stamps rows with the feed account and scopes the upsert to it', async () => {
+    // KashFlow's own AccountId is the same in both feeds — it names the account
+    // the transaction was entered against, and for 105 rows here it is not even
+    // one of the accounts KashFlow lists. Only the feed says which ledger a
+    // line belongs to, so both the stamp and the filter scope must come from
+    // the loop variable. These two travel together: stamping without scoping
+    // still merges the halves, scoping without stamping leaves the hash
+    // oscillating.
+    const fs = await import('node:fs');
+    const src = fs.readFileSync(new URL('../src/sync/run.js', import.meta.url), 'utf8');
+    expect(src).toMatch(/t\.AccountId = accountId/);
+    expect(src).toMatch(/scope: \{ AccountId: accountId \}/);
+    // And the filter must actually apply the scope.
+    expect(src).toMatch(/filter: \{ \.\.\.\(scope \|\| \{\}\), \[keyField\]: keyValue \}/);
+  });
+});
