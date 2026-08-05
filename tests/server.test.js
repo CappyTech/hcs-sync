@@ -396,6 +396,20 @@ describe('Express server routes', () => {
       expect(res.status).toBe(200);
       expect(res.body.ok).toBe(true);
     });
+
+    // The secret cookie is minted by any request that arrives without one, and a
+    // browser fetches `<link rel="manifest">` without credentials. When /static
+    // sat behind this middleware, loading /login minted secret A into the form and
+    // the manifest fetch that followed minted secret B over the top, so the POST
+    // that came next failed with "Invalid CSRF token" — nobody could log in.
+    // Static assets must never mint a secret; only pages that can carry a token.
+    it('does not mint a CSRF secret for uncredentialed static asset requests', async () => {
+      for (const asset of ['/static/manifest.json', '/static/app.js']) {
+        const res = await supertest(app).get(asset);
+        expect(res.status).toBe(200);
+        expect(res.headers['set-cookie']).toBeUndefined();
+      }
+    });
   });
 
   // ── POST /run ──────────────────────────────────────────────────────────

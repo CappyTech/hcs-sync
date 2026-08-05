@@ -684,6 +684,24 @@ app.set('views', path.join(__dirname, 'views/tailwindcss'));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// Static assets are mounted ahead of the CSRF middleware on purpose. The secret
+// cookie is minted by any request that arrives without one, and a browser fetches
+// `<link rel="manifest">` *without* credentials unless it is marked
+// crossorigin="use-credentials". So loading a page minted secret A into the form,
+// then the manifest fetch that followed minted secret B over the top of it, and the
+// POST failed with "Invalid CSRF token". Only responses that can carry a token
+// should mint one.
+// Serve static assets with no-store to avoid stale caching in admin dashboard
+app.use('/static', express.static(path.join(__dirname, 'public'), {
+  etag: false,
+  lastModified: false,
+  cacheControl: true,
+  maxAge: 0,
+  setHeaders: (res) => {
+    res.set('Cache-Control', 'no-store');
+  },
+}));
+
 // CSRF protection (double-submit style) using a per-client secret stored in an HttpOnly cookie.
 // This avoids server-side sessions while still protecting POST routes.
 const csrfTokens = new CsrfTokens();
@@ -732,16 +750,6 @@ app.use((req, res, next) => {
   if (!ok) return res.status(403).send('Invalid CSRF token');
   return next();
 });
-// Serve static assets with no-store to avoid stale caching in admin dashboard
-app.use('/static', express.static(path.join(__dirname, 'public'), {
-  etag: false,
-  lastModified: false,
-  cacheControl: true,
-  maxAge: 0,
-  setHeaders: (res) => {
-    res.set('Cache-Control', 'no-store');
-  },
-}));
 app.get('/health', (_req, res) => {
   const eff = getEffectiveCronConfig();
   const cronHealth = getCronHealth({
