@@ -175,7 +175,12 @@ export async function ensureKashflowIndexes(db) {
       purchases: ['Id'],
       projects: ['Id'],
       bankaccounts: ['Id'],
-      banktransactions: ['Id'],
+      // Keyed on the (AccountId, Id) composite, not a bare Id: an internal
+      // transfer is two ledger lines sharing one KashFlow Id, one per account.
+      // Listed here so the legacy-index repair below still reaches this
+      // collection (it is also what converts a legacy unique `uuid` index into
+      // a partial one); the composite itself is created in `compoundJobs`.
+      banktransactions: ['AccountId', 'Id'],
       // Keyed on the synthetic "<AccountId>:<Id>" composite — KashFlow's
       // reconciliation Id is only unique within an account.
       bankreconciliations: ['ReconKey'],
@@ -250,7 +255,6 @@ export async function ensureKashflowIndexes(db) {
       ensureUniqueKeyIndex('purchases', 'Id'),
       ensureUniqueKeyIndex('projects', 'Id'),
       ensureUniqueKeyIndex('bankaccounts', 'Id'),
-      ensureUniqueKeyIndex('banktransactions', 'Id'),
       ensureUniqueKeyIndex('bankreconciliations', 'ReconKey', 'string'),
       ensureUniqueKeyIndex('journals', 'Id'),
       ensureUniqueKeyIndex('products', 'Id'),
@@ -274,6 +278,10 @@ export async function ensureKashflowIndexes(db) {
       ensureSecondaryIndex('purchases', 'Number'),
       ensureSecondaryIndex('projects', 'Number'),
       ensureSecondaryIndex('bankaccounts', 'Code'),
+      // Downgrades the legacy unique `Id_1` to non-unique, which is what makes
+      // room for both halves of a transfer. Must happen before the first sync
+      // writes them or the second half fails with a duplicate key error.
+      ensureSecondaryIndex('banktransactions', 'Id'),
       ensureSecondaryIndex('journals', 'Number'),
       ensureSecondaryIndex('products', 'Code'),
       ensureSecondaryIndex('purchaseorders', 'Number'),
@@ -283,6 +291,9 @@ export async function ensureKashflowIndexes(db) {
 
     // Compound indexes serving hcs-app's bank reconciliation query paths.
     const compoundJobs = [
+      // The dedup key. Options mirror the hcs-schemas declaration exactly, or
+      // this and Mongoose's autoIndex fight over the same derived name.
+      ensureCompoundIndex('banktransactions', { AccountId: 1, Id: 1 }, { unique: true, sparse: true }),
       // Per-account unreconciled worklist, ordered newest first.
       ensureCompoundIndex('banktransactions', { AccountId: 1, Reconciled: 1, Date: -1 }),
       // Resolving a bank line to the document it settles.

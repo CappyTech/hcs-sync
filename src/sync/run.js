@@ -491,7 +491,11 @@ async function run(options = {}) {
     // Generic list upsert for entities with no detail phase. keyFields are
     // tried in order (e.g. Id then Code) per row, mirroring the nominal/bank
     // account blocks below.
-    const upsertSimpleList = async ({ model, rows, summaryKey, collectionName, keyFields, now }) => {
+    // `scope`, when given, is merged into every filter, making the effective key
+    // the composite (scope..., keyField). Bank transactions need this: KashFlow
+    // returns an internal transfer in both accounts' feeds, so the key has to be
+    // per-account or the two halves overwrite each other.
+    const upsertSimpleList = async ({ model, rows, summaryKey, collectionName, keyFields, now, scope }) => {
       if (!rows?.length) return;
       const up = createBulkUpserter(model, { captureUpserts: true, audit: auditOpts(collectionName) });
       const skip = createSkipCounter();
@@ -504,7 +508,7 @@ async function run(options = {}) {
           if (v != null && !(typeof v === 'string' && v.trim() === '')) { keyField = f; keyValue = v; break; }
         }
         if (keyField == null) { skip.incMissingKey(); continue; }
-        await up.push({ updateOne: { filter: { [keyField]: keyValue }, update: buildUpsertUpdate({ keyField, keyValue, payload: row, syncedAt: now, runId, model }), upsert: true } });
+        await up.push({ updateOne: { filter: { ...(scope || {}), [keyField]: keyValue }, update: buildUpsertUpdate({ keyField, keyValue, payload: row, syncedAt: now, runId, model }), upsert: true } });
       }
       await up.flush();
       mongoSummary[summaryKey] = addMongoStats(mongoSummary[summaryKey], up.getStats());
@@ -613,7 +617,26 @@ async function run(options = {}) {
           const txs = await kf.bankTransactions.listAll(accountId, { perpage: 200 });
           if (!txs?.length) continue;
           bankTransactionsTotal += txs.length;
-          await upsertSimpleList({ model: BankTransaction, rows: txs, summaryKey: 'bankTransactions', collectionName: 'banktransactions', keyFields: ['Id'], now });
+
+          // Stamp the row with the account whose feed returned it, and key on
+          // that plus Id.
+          //
+          // KashFlow's own `AccountId` cannot carry this. An internal transfer
+          // is returned by BOTH accounts' feeds — each rendered from that
+          // account's point of view (PaidIn/PaidOut swapped, Balance being that
+          // account's running balance, Type naming the *other* account) — but
+          // with the SAME `AccountId` in both payloads. It names the account the
+          // transaction was entered against, which for 105 rows here is not even
+          // one of the accounts KashFlow lists. So it does not identify the
+          // ledger line, and keying on Id alone made the two feeds overwrite
+          // each other every run: 422 documents churning hourly, with the larger
+          // account's half never surviving because it is synced first.
+          //
+          // The feed is the only authority on which account a line belongs to.
+          for (const t of txs) {
+            if (t && typeof t === 'object' && !Array.isArray(t)) t.AccountId = accountId;
+          }
+          await upsertSimpleList({ model: BankTransaction, rows: txs, summaryKey: 'bankTransactions', collectionName: 'banktransactions', keyFields: ['Id'], scope: { AccountId: accountId }, now });
 
           // Soft-delete anything KashFlow no longer returns for this account.
           //
