@@ -74,6 +74,7 @@ export async function recordChange(runId, change) {
     before: change.before ?? null,
     after: change.after ?? null,
     diff: change.diff ?? null,
+    meta: change.meta ?? null,
     reverted: false,
     revertNote: null,
   };
