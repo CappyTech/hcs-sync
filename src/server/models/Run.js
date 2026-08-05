@@ -12,6 +12,7 @@ const ChangeSchema = new mongoose.Schema(
     before: { type: mongoose.Schema.Types.Mixed, default: null },
     after: { type: mongoose.Schema.Types.Mixed, default: null },
     diff: { type: mongoose.Schema.Types.Mixed, default: null },
+    meta: { type: mongoose.Schema.Types.Mixed, default: null },
     reverted: { type: Boolean, default: false },
     revertNote: { type: String, default: null },
   },

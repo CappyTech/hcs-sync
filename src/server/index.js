@@ -512,6 +512,63 @@ function requireSyncApiKey(req, res, next) {
   next();
 }
 
+// Not a collection — a sub-tally of bankTransactions, so it must not be reported
+// as a resource in its own right.
+const NON_RESOURCE_COUNT_KEYS = new Set(['bankTransactionsSoftDeleted']);
+
+/**
+ * Summarise what a run actually changed.
+ *
+ * Two independent signals, because either one alone under-reports:
+ *
+ *  - **Count deltas** — a collection gained or lost documents. The set of
+ *    collections is derived from what the sync returns, never a hardcoded list:
+ *    `counts` carries 21 collections and the old hardcoded 8 silently omitted
+ *    bankTransactions, journals, countries, vatReturns and the rest, so real
+ *    changes in them were invisible to both the run summary and Discord.
+ *  - **Mongo write stats** — documents modified in place. A count delta cannot
+ *    see these at all: a run that rewrites 8,690 existing bank transactions and
+ *    adds none leaves the count identical and used to report "no changes".
+ */
+function summariseRunChanges(prev, curr, mongo) {
+  const names = new Set([
+    ...Object.keys(curr || {}),
+    ...Object.keys(prev || {}),
+    ...Object.keys(mongo || {}),
+  ]);
+
+  const out = [];
+  for (const name of names) {
+    if (NON_RESOURCE_COUNT_KEYS.has(name)) continue;
+    const before = prev ? prev[name] ?? null : null;
+    const after = curr ? curr[name] ?? null : null;
+    const stats = mongo?.[name] || null;
+    const upserted = Number(stats?.upserted) || 0;
+    const modified = Number(stats?.modified) || 0;
+    const countChanged = before !== after && !(before === null && after === null);
+    if (!countChanged && !upserted && !modified) continue;
+    out.push({ name, before, after, countChanged, upserted, modified });
+  }
+
+  // Largest write first, so the Discord field cap keeps the significant ones.
+  out.sort((a, b) => (b.upserted + b.modified) - (a.upserted + a.modified)
+    || a.name.localeCompare(b.name));
+  return out;
+}
+
+function formatRunChange(c) {
+  const parts = [];
+  if (c.countChanged) {
+    const diff = (c.after ?? 0) - (c.before ?? 0);
+    parts.push(`${c.before ?? '—'} → ${c.after ?? '—'} (${diff >= 0 ? '+' : ''}${diff})`);
+  } else {
+    if (c.after !== null) parts.push(String(c.after));
+    if (c.upserted) parts.push(`${c.upserted} added`);
+  }
+  if (c.modified) parts.push(`${c.modified} modified`);
+  return parts.join(' · ') || '—';
+}
+
 async function triggerSync({ requestedBy }) {
   if (isRunning) {
     return { started: false, reason: 'already-running', runId: null, promise: Promise.resolve(null) };
@@ -576,25 +633,25 @@ async function triggerSync({ requestedBy }) {
       lastError = null;
       progress.finish(lastCounts);
 
-      // Record count deltas vs previous counts as informational changes
+      // Record what changed (count deltas and in-place modifications) as
+      // informational changes.
       try {
         const prev = result?.previousCounts ?? countsBeforeRun;
         const curr = lastCounts || {};
-        const resources = ['customers','suppliers','projects','nominals','vatRates','invoices','quotes','purchases'];
-        resources.forEach((name) => {
-          const before = prev ? prev[name] ?? null : null;
-          const after = curr[name] ?? null;
-          if (before === null && after === null) return;
-          if (before === after) return;
+        summariseRunChanges(prev, curr, result?.mongo).forEach((c) => {
+          const reasons = [];
+          if (c.countChanged) reasons.push('count changed');
+          if (c.modified) reasons.push(`${c.modified} modified`);
           runStore.recordChange(runId, {
             entityType: 'metric',
-            entityId: name,
+            entityId: c.name,
             action: 'info',
-            reason: 'Resource count changed after sync',
+            reason: `Resource ${reasons.join(', ')} after sync`,
             source: 'system',
-            before,
-            after,
-            diff: [{ path: name, before, after }],
+            before: c.before,
+            after: c.after,
+            diff: [{ path: c.name, before: c.before, after: c.after }],
+            meta: { upserted: c.upserted, modified: c.modified },
           });
         });
       } catch {}
@@ -613,27 +670,32 @@ async function triggerSync({ requestedBy }) {
       try {
         const prev = result?.previousCounts ?? countsBeforeRun;
         const curr = lastCounts || {};
-        const resources = ['customers', 'suppliers', 'projects', 'nominals', 'vatRates', 'invoices', 'quotes', 'purchases'];
-        const deltaFields = [];
-        resources.forEach((name) => {
-          const before = prev ? prev[name] ?? null : null;
-          const after = curr[name] ?? null;
-          if (before === after) return;
-          if (before === null && after === null) return;
-          const diff = (after ?? 0) - (before ?? 0);
-          deltaFields.push({
-            name,
-            value: `${before ?? '—'} → ${after ?? '—'} (${diff >= 0 ? '+' : ''}${diff})`,
+        const changed = summariseRunChanges(prev, curr, result?.mongo);
+        const deltaFields = changed.map((c) => ({
+          name: c.name,
+          value: formatRunChange(c),
+          inline: true,
+        }));
+
+        const upsertTotal = changed.reduce((a, c) => a + c.upserted, 0);
+        const modifiedTotal = changed.reduce((a, c) => a + c.modified, 0);
+
+        if (deltaFields.length > 0) {
+          // Discord caps an embed at 25 fields; keep room for the summary fields.
+          const shown = deltaFields.slice(0, 22);
+          const fields = shown;
+          if (changed.length > shown.length) {
+            fields.push({
+              name: 'Not shown',
+              value: `+${changed.length - shown.length} more collection(s)`,
+              inline: true,
+            });
+          }
+          fields.push({
+            name: 'Totals',
+            value: `${upsertTotal} added · ${modifiedTotal} modified`,
             inline: true,
           });
-        });
-
-        const upserts = result?.mongoUpserts && typeof result.mongoUpserts === 'object' ? result.mongoUpserts : null;
-        const upsertTotal = upserts ? Object.values(upserts).reduce((a, b) => a + (Number(b) || 0), 0) : 0;
-
-        if (deltaFields.length > 0 || upsertTotal > 0) {
-          const fields = deltaFields.slice(0, 23); // leave room for the two summary fields (25 max)
-          if (upsertTotal > 0) fields.push({ name: 'Mongo upserts', value: String(upsertTotal), inline: true });
           fields.push({ name: 'Trigger', value: String(requestedBy || 'unknown'), inline: true });
           sendDiscord({
             ok: true,
@@ -684,6 +746,24 @@ app.set('views', path.join(__dirname, 'views/tailwindcss'));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// Static assets are mounted ahead of the CSRF middleware on purpose. The secret
+// cookie is minted by any request that arrives without one, and a browser fetches
+// `<link rel="manifest">` *without* credentials unless it is marked
+// crossorigin="use-credentials". So loading a page minted secret A into the form,
+// then the manifest fetch that followed minted secret B over the top of it, and the
+// POST failed with "Invalid CSRF token". Only responses that can carry a token
+// should mint one.
+// Serve static assets with no-store to avoid stale caching in admin dashboard
+app.use('/static', express.static(path.join(__dirname, 'public'), {
+  etag: false,
+  lastModified: false,
+  cacheControl: true,
+  maxAge: 0,
+  setHeaders: (res) => {
+    res.set('Cache-Control', 'no-store');
+  },
+}));
+
 // CSRF protection (double-submit style) using a per-client secret stored in an HttpOnly cookie.
 // This avoids server-side sessions while still protecting POST routes.
 const csrfTokens = new CsrfTokens();
@@ -732,16 +812,6 @@ app.use((req, res, next) => {
   if (!ok) return res.status(403).send('Invalid CSRF token');
   return next();
 });
-// Serve static assets with no-store to avoid stale caching in admin dashboard
-app.use('/static', express.static(path.join(__dirname, 'public'), {
-  etag: false,
-  lastModified: false,
-  cacheControl: true,
-  maxAge: 0,
-  setHeaders: (res) => {
-    res.set('Cache-Control', 'no-store');
-  },
-}));
 app.get('/health', (_req, res) => {
   const eff = getEffectiveCronConfig();
   const cronHealth = getCronHealth({
@@ -1328,4 +1398,4 @@ const server = app.listen(port, () => {
   })();
 });
 
-export { app, server };
+export { app, server, summariseRunChanges, formatRunChange };

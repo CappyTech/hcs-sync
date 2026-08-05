@@ -111,11 +111,15 @@ vi.mock('../src/server/runStore.js', () => ({
 
 let app;
 let server;
+let summariseRunChanges;
+let formatRunChange;
 
 beforeAll(async () => {
   const mod = await import('../src/server/index.js');
   app = mod.app;
   server = mod.server;
+  summariseRunChanges = mod.summariseRunChanges;
+  formatRunChange = mod.formatRunChange;
   // Give the listen callback a tick to settle
   await new Promise((r) => setTimeout(r, 50));
 });
@@ -395,6 +399,78 @@ describe('Express server routes', () => {
 
       expect(res.status).toBe(200);
       expect(res.body.ok).toBe(true);
+    });
+
+    // The secret cookie is minted by any request that arrives without one, and a
+    // browser fetches `<link rel="manifest">` without credentials. When /static
+    // sat behind this middleware, loading /login minted secret A into the form and
+    // the manifest fetch that followed minted secret B over the top, so the POST
+    // that came next failed with "Invalid CSRF token" — nobody could log in.
+    // Static assets must never mint a secret; only pages that can carry a token.
+    it('does not mint a CSRF secret for uncredentialed static asset requests', async () => {
+      for (const asset of ['/static/manifest.json', '/static/app.js']) {
+        const res = await supertest(app).get(asset);
+        expect(res.status).toBe(200);
+        expect(res.headers['set-cookie']).toBeUndefined();
+      }
+    });
+
+  });
+
+  // ── Run change summary ─────────────────────────────────────────────────
+
+  // Modelled on run 40d1f72a (05/08/2026 13:00). That run reported "Changes: 1"
+  // and a Discord alert naming only `purchases`, because the reporting list was
+  // hardcoded to 8 resources and keyed on count deltas alone — so 17 new bank
+  // transactions and 8,690 modified ones were both invisible.
+  describe('summariseRunChanges', () => {
+    const prev = { purchases: 14356, bankTransactions: 13849, suppliers: 950, journals: 400 };
+    const curr = {
+      purchases: 14359, bankTransactions: 13866, suppliers: 950, journals: 400,
+      bankTransactionsSoftDeleted: 2,
+    };
+    const mongo = {
+      purchases: { upserted: 3, modified: 14 },
+      bankTransactions: { upserted: 17, modified: 8690 },
+      suppliers: { upserted: 0, modified: 5 },
+      journals: { upserted: 0, modified: 0 },
+    };
+
+    it('reports collections outside the old hardcoded list', () => {
+      const names = summariseRunChanges(prev, curr, mongo).map((c) => c.name);
+      expect(names).toContain('bankTransactions');
+      expect(names).toContain('purchases');
+    });
+
+    it('reports in-place modifications when the count did not change', () => {
+      const suppliers = summariseRunChanges(prev, curr, mongo).find((c) => c.name === 'suppliers');
+      expect(suppliers).toBeDefined();
+      expect(suppliers.countChanged).toBe(false);
+      expect(suppliers.modified).toBe(5);
+      expect(formatRunChange(suppliers)).toContain('5 modified');
+    });
+
+    it('omits collections that neither changed count nor were modified', () => {
+      const names = summariseRunChanges(prev, curr, mongo).map((c) => c.name);
+      expect(names).not.toContain('journals');
+    });
+
+    it('omits the soft-delete tally, which is not a collection', () => {
+      const names = summariseRunChanges(prev, curr, mongo).map((c) => c.name);
+      expect(names).not.toContain('bankTransactionsSoftDeleted');
+    });
+
+    it('orders by write volume so the Discord field cap keeps the biggest', () => {
+      expect(summariseRunChanges(prev, curr, mongo)[0].name).toBe('bankTransactions');
+    });
+
+    it('formats a count delta alongside the modified tally', () => {
+      const bt = summariseRunChanges(prev, curr, mongo).find((c) => c.name === 'bankTransactions');
+      expect(formatRunChange(bt)).toBe('13849 → 13866 (+17) · 8690 modified');
+    });
+
+    it('stays silent on a genuine no-op run', () => {
+      expect(summariseRunChanges(prev, prev, { purchases: { upserted: 0, modified: 0 } })).toEqual([]);
     });
   });
 
