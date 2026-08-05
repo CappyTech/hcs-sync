@@ -2,6 +2,26 @@
 
 All notable changes to hcs-sync will be documented here. Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [0.10.3] - 2026-08-05
+
+Fixes a second login-page failure with the same shape as 0.10.2's — something the layout loads unconditionally breaking the page it loads on — and stops the run summary and Discord alert under-reporting what a sync changed.
+
+### Fixed
+- **`POST /login` failed with "Invalid CSRF token" on a fresh session.** The CSRF secret is minted by any request that arrives without the cookie, and `/static` was mounted *behind* that middleware. A browser fetches `<link rel="manifest">` **without credentials** unless it carries `crossorigin="use-credentials"`, which `layout.ejs` does not set. So `GET /login` minted secret A and rendered the form with `token(A)`; the manifest fetch that followed arrived with no cookie, minted secret B, and its `Set-Cookie` overwrote A; the submitted form still held `token(A)` and failed verification against B. The message was *Invalid* rather than *Missing* precisely because both halves were present — they were just from different generations. This hit any login where the cookie was absent or expired, i.e. every fresh one. `/static` is now mounted **ahead** of the CSRF middleware, so an asset fetch can never mint or overwrite the secret; only responses that can actually carry a token issue one. The verify middleware already skips `GET`/`HEAD`/`OPTIONS`, so static loses no protection.
+- **The run summary and Discord alert reported one changed collection when six had changed.** The list of collections to report was hardcoded — and duplicated in both places — as `['customers','suppliers','projects','nominals','vatRates','invoices','quotes','purchases']`, while `sync/run.js` returns **21**. `bankTransactions`, `bankAccounts`, `bankReconciliations`, `journals`, `countries`, `vatReturns`, `accountingPeriods`, `currencies` and the two category collections could never be reported whatever happened to them. Run `40d1f72a` added 17 bank transactions (13,849 → 13,866) and it was structurally invisible.
+- **In-place modifications never counted as a change at all.** The test was `if (before === after) return;`, so a collection whose document count is unchanged reported nothing however many documents were rewritten. That silenced 8,690 modified bank transactions in that one run, plus modifications to `suppliers`, `vatReturns`, `bankAccounts` and `projects`. Count deltas and Mongo write stats are now both consulted; either alone under-reports.
+- **`meta` was dropped twice over** — absent from `ChangeSchema` *and* from `recordChange`'s explicit field whitelist — so per-collection upserted/modified counts would have been silently discarded on the way to the database.
+
+### Changed
+- One `summariseRunChanges()` helper now backs both the run summary and the Discord alert, deriving collections from what the sync actually returns rather than a hardcoded subset. `bankTransactionsSoftDeleted` is excluded — it is a sub-tally of `bankTransactions`, not a collection in its own right. Results sort by write volume so Discord's 25-field cap keeps the significant ones, with a `+N more` overflow field and a `Totals` field. No-op runs stay silent, so a frequent cron does not become noisy.
+
+### Added
+- `tests/server.test.js` — `/static/*` must return no `Set-Cookie` (fails against the unfixed middleware order), and six cases on `summariseRunChanges` built from the real counts of run `40d1f72a`: collections outside the old hardcoded list are reported, modifications are reported when the count did not change, unchanged collections are omitted, the soft-delete tally is omitted, ordering is by write volume, and a genuine no-op stays silent.
+
+### Known issues
+- **~421 bank transactions are written twice per run and flip-flop between two representations.** An inter-account transfer appears in *both* accounts' feeds under the same transaction `Id`, presented from each account's own side, and `sync/run.js` upserts with `keyFields: ['Id']` — so the two views collide on one document and whichever account is fetched last wins. The two writes are exact inverses: `PaidIn`/`PaidOut` swap, `Balance` is the other account's running balance, and `Type` names the other account. Consequences: `/bank` sees an arbitrary side of every inter-account transfer, and this accounts for ~549,000 of the 702,797 rows in `audit_log`. The fix is a composite key mirroring the `ReconKey` (`"<AccountId>:<Id>"`) that `bankReconciliations` already uses for exactly this reason, but it is a keying and data migration affecting `bankmatches` and the `LIVE_BANK_LINE` filter, so it is deliberately **not** in this release.
+- Not a defect, for the avoidance of doubt: a run that adds backdated transactions rewrites the running `Balance` of every later transaction, which is why one run showed 8,269 documents modified with `Balance` as the only changed field. Now that reporting is fixed this is visible as a normal event.
+
 ## [0.10.2] - 2026-08-05
 
 Fixes a reload loop that made the login page impossible to use — a regression introduced by 0.10.1's own fix.
