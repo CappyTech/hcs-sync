@@ -51,6 +51,31 @@ async function createClient() {
     headers: defaultHeaders,
   });
 
+  /**
+   * KashFlow's SQL layer timing out, which it reports as a 400.
+   *
+   * The body is `{ Error: "-2146232060", Message: "Execution Timeout Expired. …" }`
+   * — a .NET SqlException surfaced verbatim, not a client error. It is entirely
+   * server-side, so `HTTP_TIMEOUT_MS` does not cover it and never will: the
+   * request completes promptly, carrying a failure.
+   *
+   * It hits the largest account (611594, ~8,400 transactions over ~40 paginated
+   * requests) roughly nightly. Without a retry, one bad page aborts that
+   * account for the whole run and 8,413 rows silently drop out of the fetch —
+   * the account looks stale for an hour and the Discord alert reads like mass
+   * deletion. Matched on the numeric code rather than the message text, which
+   * is human-readable prose and not a contract.
+   */
+  const SQL_TIMEOUT_CODE = '-2146232060';
+  const isTransientBackendTimeout = (err) => {
+    if (err.response?.status !== 400) return false;
+    const body = err.response?.data;
+    return String(body?.Error ?? '') === SQL_TIMEOUT_CODE;
+  };
+
+  const RETRY_DELAYS_MS = [2000, 8000];
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
   // Retry once on 401 by refreshing the session token
   http.interceptors.response.use(
     (res) => res,
@@ -71,6 +96,26 @@ async function createClient() {
           logger.error({ msg: e.message }, 'Re-auth attempt failed');
         }
       }
+      // Backed off rather than immediate: the timeout means KashFlow's database
+      // is already struggling, so retrying instantly tends to reproduce it.
+      if (isTransientBackendTimeout(err)) {
+        const attempt = original.__timeoutRetries || 0;
+        if (attempt < RETRY_DELAYS_MS.length) {
+          const delay = RETRY_DELAYS_MS[attempt];
+          original.__timeoutRetries = attempt + 1;
+          logger.warn(
+            { url, attempt: attempt + 1, of: RETRY_DELAYS_MS.length, delayMs: delay },
+            'KashFlow backend timeout; retrying',
+          );
+          await sleep(delay);
+          return http.request(original);
+        }
+        logger.error(
+          { url, attempts: RETRY_DELAYS_MS.length },
+          'KashFlow backend timeout persisted after retries',
+        );
+      }
+
       logger.error({ status, url, msg }, 'KashFlow API error');
       throw err;
     }
