@@ -33,6 +33,8 @@ import {
   prepareInvoiceForUpsert,
   prepareBankTransactionForUpsert,
   prepareBankReconciliationForUpsert,
+  BankTransaction,
+  SYNC_INTERNAL_FIELDS,
 } from '../src/server/models/kashflow.js';
 
 /** Pull the plain value a pipeline $set wrote for `field`. */
@@ -306,6 +308,42 @@ describe('bank transactions are keyed per account, not per KashFlow Id', () => {
   it('hashes one half identically across runs, so a steady state stops writing', () => {
     const row = { paidIn: 0, paidOut: 312.17, balance: -1494.24, type: 'Business Credit Card' };
     expect(hashFor(transferAsSeenBy(611594, row))).toBe(hashFor(transferAsSeenBy(611594, row)));
+  });
+
+  it('treats Balance as volatile, and still tells the two halves apart without it', () => {
+    // Balance is KashFlow's running balance, permuted between fetches among
+    // rows that share a Date — 196 phantom rewrites in one day on account
+    // 611594. Dropping it from the hash must not cost us the distinction
+    // between the two halves of a transfer, which is what the composite key
+    // exists to preserve. PaidIn/PaidOut/Type/AccountId carry that on their own.
+    expect(BankTransaction.syncConfig.volatileFields).toContain('Balance');
+
+    const volatileHashFor = (row) => setValue(
+      buildUpsertUpdate({
+        keyField: 'Id', keyValue: row.Id, payload: row, syncedAt: new Date(), model: BankTransaction,
+      }),
+      '_kfHash',
+    );
+    const main = transferAsSeenBy(611594, { paidIn: 0, paidOut: 312.17, balance: -1494.24, type: 'Business Credit Card' });
+    const sub  = transferAsSeenBy(938298, { paidIn: 312.17, paidOut: 0, balance: 28250.34, type: 'Heron Constructive Solutions LTD' });
+    expect(volatileHashFor(main)).not.toBe(volatileHashFor(sub));
+
+    // ...while a Balance-only difference on one half is no longer a change.
+    const permuted = transferAsSeenBy(611594, { paidIn: 0, paidOut: 312.17, balance: -9618.15, type: 'Business Credit Card' });
+    expect(volatileHashFor(main)).toBe(volatileHashFor(permuted));
+  });
+
+  it('keeps missingSince out of payloads and audit diffs', () => {
+    // The sweep's grace timer is sync-owned and never returned by KashFlow.
+    // deepDiff walks the union of stored and incoming keys, so if it were not
+    // skipped it would report 'removed' on every row, every run.
+    expect(SYNC_INTERNAL_FIELDS.has('missingSince')).toBe(true);
+    const pipeline = buildUpsertUpdate({
+      keyField: 'Id', keyValue: 1, payload: { Id: 1, missingSince: 'nonsense' },
+      syncedAt: new Date(), model: BankTransaction,
+    });
+    expect(pipeline[0].$set).not.toHaveProperty('missingSince');
+    expect(pipeline._rawSet).not.toHaveProperty('missingSince');
   });
 
   it('stamps rows with the feed account and scopes the upsert to it', async () => {

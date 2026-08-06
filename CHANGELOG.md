@@ -2,6 +2,32 @@
 
 All notable changes to hcs-sync will be documented here. Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [0.11.2] - 2026-08-06
+
+Both fixes here come from the same root cause: KashFlow paginates account 611594's ~8,400 transactions over ~40 requests and the order is not stable between fetches. What survived the 0.11.0 re-key was not the transfer bug returning — it was this.
+
+### Fixed
+- **A bank transaction is no longer soft-deleted on a single absence.** The sweep only ever ran after a successful, non-empty fetch, and both guards still hold — but neither covers a *partial* fetch, which throws nothing and comes back non-empty. Rows have simply gone missing between pages: `6717455` and `6717590` were soft-deleted at 10:00 on 2026-08-06 and returned an hour later, so for that hour two real ledger lines were excluded from `/bank` by hcs-app's `LIVE_BANK_LINE` filter while KashFlow still held them.
+
+  Absence is now corroborated before it counts. `missingSince` records the first run that fails to see a row, and only a row still missing after `BANK_SWEEP_GRACE_MS` (default 2h ⇒ two consecutive hourly runs) is soft-deleted. The window is measured in **time, not runs**, so two manual runs a minute apart cannot corroborate each other. Set it to `0` for the previous delete-on-first-absence behaviour. Rows that reappear have the timer cleared — including rows already soft-deleted, whose stale timer would otherwise turn the next missed page into an instant re-deletion.
+
+  The sweep moved out of the middle of `run()` into an exported `sweepMissingBankTransactions()`, because a guard nobody can call is a guard nobody can test.
+
+- **`Balance` no longer churns the whole collection.** KashFlow's running balance is computed per request, and it sorts by `Date` with no tiebreak — so rows sharing a date come back in a different order each fetch and their balances are **permuted among them**. On 2026-08-06 that rewrote 196 rows across 79 documents in seven hours, every batch reporting "data changed" to Discord and writing to `audit_log`, while not one accounting fact had moved. The audit trail shows the same document cycling between the same handful of values hour after hour.
+
+  `syncConfig.volatileFields` marks such a field. It is excluded from `_kfHash` **and** only rewritten when the hash moves — both halves are needed, since a field left out of the hash but still `$set` unconditionally changes the document anyway, and `modifiedCount` counts the write, not the hash. `bankTransaction.Balance` is the only field so marked. Nothing reads it: hcs-schemas declares it list-only and server-computed, and reconciliation works from `PaidIn`/`PaidOut` plus the account-level `BankBalance`.
+
+  Volatile fields are also skipped in audit diffing, via `pipeline._rawVolatile`. `deepDiff` walks the union of the stored document's keys and the incoming payload's, so a field merely omitted from `_rawSet` would be reported `removed` on every run — the same noise wearing a different hat.
+
+### Changed
+- `BANK_SWEEP_GRACE_MS` (default `7200000`) added to config.
+- `banktransactions` gains a sync-owned `missingSince` field, declared in hcs-sync rather than the shared schema because hcs-app never reads it. It is in `SYNC_INTERNAL_FIELDS`, so it reaches neither payload flattening nor audit diffs.
+
+### Migration
+No schema release required — `requiredSchemasVersion` stays **3.0.0** and hcs-app is unaffected.
+
+**Expect one large run on first deploy.** Removing `Balance` from the hash changes every stored `_kfHash`, so the first sync after this ships rewrites all ~13,900 bank transactions once and reports it as a data change. Runs after that should report `0 modified` on a quiet hour. If they do not, the remaining churn is real.
+
 ## [0.11.1] - 2026-08-06
 
 ### Fixed

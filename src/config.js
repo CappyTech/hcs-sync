@@ -18,6 +18,13 @@ const config = {
   cronSchedule: process.env.CRON_SCHEDULE || '0 * * * *',
   cronTimezone: process.env.CRON_TIMEZONE || 'Europe/London',
   cronHealthStaleMs: Number(process.env.CRON_HEALTH_STALE_MS || 0),
+
+  // How long a bank transaction must stay absent from KashFlow before the sweep
+  // soft-deletes it. KashFlow paginates the largest account over ~40 requests
+  // and has dropped individual rows between pages, so a single absence is not
+  // evidence of a deletion. Default 2h ⇒ two consecutive hourly runs must agree.
+  // Set to 0 to soft-delete on first absence (the pre-0.11.2 behaviour).
+  bankSweepGraceMs: Number(process.env.BANK_SWEEP_GRACE_MS ?? 2 * 60 * 60 * 1000),
 };
 
 export default config;

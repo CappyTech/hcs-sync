@@ -25,6 +25,11 @@ const syncOnlyFields = {
 export const SYNC_INTERNAL_FIELDS = new Set([
   '_id', '__v', 'data', 'uuid',
   'syncedAt', 'detailSyncedAt', 'createdAt', 'updatedAt', 'createdByRunId',
+  // missingSince — the bank soft-delete grace timer (see run.js). Sync-owned and
+  // never returned by KashFlow, so it must not reach the payload or the audit
+  // diff, which walks the union of stored and incoming keys and would otherwise
+  // report it 'removed' on every run.
+  'missingSince',
 ]);
 
 /** Build a Mongoose schema from shared entity definition + sync extras. */
@@ -303,7 +308,13 @@ export const BankAccount =
 
 // ── BankTransaction ─────────────────────────────────────────────────────
 
-const BankTransactionSchema = buildSchema(schemas.bankTransaction);
+// missingSince is declared here rather than in the shared schema because it is
+// hcs-sync's own bookkeeping: hcs-app never reads it. See the soft-delete sweep
+// in run.js — a row must be absent from KashFlow across a grace window, not one
+// fetch, before it is soft-deleted.
+const BankTransactionSchema = buildSchema(schemas.bankTransaction, {
+  missingSince: { type: Date, default: null },
+});
 
 /**
  * Mutate a bank transaction in-place, converting KashFlow's date string to a
@@ -325,6 +336,12 @@ BankTransactionSchema.statics.syncConfig = {
   keyField: 'Id',
   protectedFields: [],
   transform: prepareBankTransactionForUpsert,
+  // Balance is KashFlow's running balance, computed per request. Rows sharing a
+  // Date come back in an arbitrary order, so their balances are permuted between
+  // fetches and the value churns without any accounting fact changing. Treated
+  // as volatile: kept out of _kfHash and only rewritten when real content moves.
+  // hcs-schemas declares it list-only/server-computed and nothing reads it.
+  volatileFields: ['Balance'],
 };
 
 export const BankTransaction =

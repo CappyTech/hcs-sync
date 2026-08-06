@@ -36,6 +36,7 @@ import {
   preparePurchaseForUpsert,
   createSkipCounter,
   addMongoStats,
+  sweepMissingBankTransactions,
   SUPPLIER_PROTECTED_FIELDS,
 } from '../src/sync/run.js';
 
@@ -309,6 +310,232 @@ describe('buildUpsertUpdate()', () => {
       keyField: 'Id', keyValue: 1, payload: [1, 2, 3], syncedAt: new Date(),
     });
     expect(result[0].$set.Id).toEqual({ $literal: 1 });
+  });
+});
+
+// ── volatileFields ──
+// A volatile field is one KashFlow recomputes per request and can return
+// differently for unchanged data (bankTransaction.Balance). Both halves matter
+// and are pinned separately: excluded from the hash, AND written only when the
+// hash moves. Keeping only the first still rewrites the document every run,
+// because modifiedCount counts the write and not the hash.
+
+describe('buildUpsertUpdate() volatileFields', () => {
+  const model = { syncConfig: { keyField: 'Id', volatileFields: ['Balance'] } };
+  const build = (payload) => buildUpsertUpdate({
+    keyField: 'Id', keyValue: 1, payload, syncedAt: new Date(), model,
+  });
+
+  it('excludes volatile fields from the content hash', () => {
+    const a = build({ Name: 'X', Balance: 100 });
+    const b = build({ Name: 'X', Balance: 999 });
+    expect(a[0].$set._kfHash).toEqual(b[0].$set._kfHash);
+  });
+
+  it('still lets non-volatile fields change the hash', () => {
+    const a = build({ Name: 'X', Balance: 100 });
+    const b = build({ Name: 'Y', Balance: 100 });
+    expect(a[0].$set._kfHash).not.toEqual(b[0].$set._kfHash);
+  });
+
+  it('writes a volatile field only when the hash changes, keeping the stored value otherwise', () => {
+    const result = build({ Name: 'X', Balance: 100 });
+    const expr = result[0].$set.Balance;
+    expect(expr).toHaveProperty('$cond');
+    expect(expr.$cond.if).toEqual({ $ne: ['$_kfHash', result[0].$set._kfHash] });
+    expect(expr.$cond.then).toEqual({ $literal: 100 });
+    // On insert there is nothing stored, so the else branch must still supply
+    // the value rather than leaving the field off the new document.
+    expect(expr.$cond.else).toEqual({ $ifNull: ['$Balance', { $literal: 100 }] });
+  });
+
+  it('names volatile fields on _rawVolatile and keeps them out of _rawSet', () => {
+    const result = build({ Name: 'X', Balance: 100 });
+    expect(result._rawVolatile).toEqual(['Balance']);
+    expect(result._rawSet).not.toHaveProperty('Balance');
+    expect(result._rawSet.Name).toBe('X');
+  });
+
+  it('omits _rawVolatile entirely when the model declares none', () => {
+    const result = buildUpsertUpdate({
+      keyField: 'Id', keyValue: 1, payload: { Name: 'X', Balance: 100 }, syncedAt: new Date(),
+    });
+    expect(result._rawVolatile).toBeUndefined();
+    expect(result[0].$set.Balance).toEqual({ $literal: 100 });
+  });
+});
+
+// ── audit diffing of volatile fields ──
+// The second half of the volatileFields mechanism. deepDiff walks the union of
+// the stored document's keys and the incoming _rawSet, so a volatile field
+// simply left out of _rawSet reports as 'removed' on every run — the audit noise
+// this feature exists to remove, in a new form. _rawVolatile is what stops it.
+
+describe('createBulkUpserter() audit diffing', () => {
+  const auditRun = async (update, existing) => {
+    const inserted = [];
+    const collection = {
+      find: () => ({ lean: async () => [existing] }),
+      collection: {
+        bulkWrite: vi.fn().mockResolvedValue({ upsertedCount: 0, modifiedCount: 1, matchedCount: 1 }),
+      },
+    };
+    const upserter = createBulkUpserter(collection, {
+      batchSize: 1,
+      audit: {
+        collectionName: 'banktransactions',
+        runId: 'run-1',
+        auditCollection: { insertMany: async (docs) => { inserted.push(...docs); } },
+      },
+    });
+    await upserter.push({ updateOne: { filter: { Id: 1 }, update, upsert: true } });
+    await upserter.flush();
+    return inserted;
+  };
+
+  it('records no change when only a volatile field differs', async () => {
+    const update = buildUpsertUpdate({
+      keyField: 'Id', keyValue: 1, payload: { Name: 'X', Balance: 999 }, syncedAt: new Date(),
+      model: { syncConfig: { keyField: 'Id', volatileFields: ['Balance'] } },
+    });
+    const entries = await auditRun(update, { Id: 1, Name: 'X', Balance: 100, deletedAt: null, DeletedAt: null });
+    expect(entries).toHaveLength(0);
+  });
+
+  it('still records changes to real fields alongside a volatile one', async () => {
+    const update = buildUpsertUpdate({
+      keyField: 'Id', keyValue: 1, payload: { Name: 'Y', Balance: 999 }, syncedAt: new Date(),
+      model: { syncConfig: { keyField: 'Id', volatileFields: ['Balance'] } },
+    });
+    const entries = await auditRun(update, { Id: 1, Name: 'X', Balance: 100, deletedAt: null, DeletedAt: null });
+    expect(entries).toHaveLength(1);
+    expect(entries[0].changes.map(c => c.path)).toEqual(['Name']);
+  });
+
+  it('records a volatile field normally when the model declares none', async () => {
+    const update = buildUpsertUpdate({
+      keyField: 'Id', keyValue: 1, payload: { Name: 'X', Balance: 999 }, syncedAt: new Date(),
+    });
+    const entries = await auditRun(update, { Id: 1, Name: 'X', Balance: 100, deletedAt: null, DeletedAt: null });
+    expect(entries).toHaveLength(1);
+    expect(entries[0].changes.map(c => c.path)).toEqual(['Balance']);
+  });
+});
+
+// ── sweepMissingBankTransactions ──
+// The regression this guards: KashFlow paginates the largest account over ~40
+// requests and has dropped rows between pages. A single absence is a missed
+// page as often as a deletion, and acting on it hides live ledger lines from
+// /bank. Absence must therefore be corroborated across the grace window.
+
+/**
+ * Minimal in-memory stand-in for a Mongoose model, supporting only the query
+ * operators this sweep uses. Real enough that the tests exercise the filters
+ * rather than just asserting they were called.
+ */
+function fakeModel(docs) {
+  const matches = (doc, filter) => Object.entries(filter).every(([k, cond]) => {
+    const v = doc[k] ?? null;
+    if (cond !== null && typeof cond === 'object' && !(cond instanceof Date)) {
+      return Object.entries(cond).every(([op, arg]) => {
+        if (op === '$in') return arg.includes(v);
+        if (op === '$nin') return !arg.includes(v);
+        if (op === '$ne') return v !== arg;
+        if (op === '$lte') return v !== null && v <= arg;
+        throw new Error(`unsupported operator ${op}`);
+      });
+    }
+    return v === cond;
+  });
+  return {
+    docs,
+    async updateMany(filter, update) {
+      let modifiedCount = 0;
+      for (const doc of docs) {
+        if (!matches(doc, filter)) continue;
+        let changed = false;
+        for (const [k, v] of Object.entries(update.$set)) {
+          if (doc[k] !== v) { doc[k] = v; changed = true; }
+        }
+        if (changed) modifiedCount++;
+      }
+      return { modifiedCount };
+    },
+  };
+}
+
+describe('sweepMissingBankTransactions()', () => {
+  const t0 = new Date('2026-08-06T10:00:00Z');
+  const t1 = new Date('2026-08-06T11:00:00Z');
+  const t3 = new Date('2026-08-06T13:00:00Z');
+  const GRACE = 2 * 60 * 60 * 1000;
+  const row = (Id, extra = {}) => ({ Id, AccountId: 611594, deletedAt: null, missingSince: null, ...extra });
+
+  it('does not soft-delete a row missing from a single fetch', async () => {
+    const model = fakeModel([row(1), row(2)]);
+    const res = await sweepMissingBankTransactions({
+      model, accountId: 611594, seen: [1], now: t0, graceMs: GRACE,
+    });
+    expect(res).toEqual({ pending: 1, softDeleted: 0 });
+    expect(model.docs[1].deletedAt).toBeNull();
+    expect(model.docs[1].missingSince).toEqual(t0);
+  });
+
+  it('soft-deletes once the row is still missing after the grace window', async () => {
+    const model = fakeModel([row(1), row(2)]);
+    await sweepMissingBankTransactions({ model, accountId: 611594, seen: [1], now: t0, graceMs: GRACE });
+    const res = await sweepMissingBankTransactions({
+      model, accountId: 611594, seen: [1], now: t3, graceMs: GRACE,
+    });
+    expect(res.softDeleted).toBe(1);
+    expect(model.docs[1].deletedAt).toEqual(t3);
+  });
+
+  it('a row that reappears within the window is never deleted and its timer resets', async () => {
+    // The exact 2026-08-06 incident: absent at 10:00, back at 11:00.
+    const model = fakeModel([row(1), row(2)]);
+    await sweepMissingBankTransactions({ model, accountId: 611594, seen: [1], now: t0, graceMs: GRACE });
+    await sweepMissingBankTransactions({ model, accountId: 611594, seen: [1, 2], now: t1, graceMs: GRACE });
+    expect(model.docs[1].missingSince).toBeNull();
+    expect(model.docs[1].deletedAt).toBeNull();
+
+    // ...and the reset means a later single absence still gets a full window,
+    // rather than the stale timer making it an instant deletion.
+    const res = await sweepMissingBankTransactions({
+      model, accountId: 611594, seen: [1], now: t3, graceMs: GRACE,
+    });
+    expect(res).toEqual({ pending: 1, softDeleted: 0 });
+    expect(model.docs[1].deletedAt).toBeNull();
+  });
+
+  it('clears a stale timer on rows that are back but already soft-deleted', async () => {
+    const model = fakeModel([row(1), row(2, { deletedAt: t0, missingSince: t0 })]);
+    await sweepMissingBankTransactions({ model, accountId: 611594, seen: [1, 2], now: t3, graceMs: GRACE });
+    expect(model.docs[1].missingSince).toBeNull();
+  });
+
+  it('graceMs of 0 soft-deletes on first absence (the pre-0.11.2 behaviour)', async () => {
+    const model = fakeModel([row(1), row(2)]);
+    const res = await sweepMissingBankTransactions({
+      model, accountId: 611594, seen: [1], now: t0, graceMs: 0,
+    });
+    expect(res.softDeleted).toBe(1);
+    expect(model.docs[1].deletedAt).toEqual(t0);
+  });
+
+  it('does nothing when the fetch returned no ids', async () => {
+    const model = fakeModel([row(1), row(2)]);
+    const res = await sweepMissingBankTransactions({
+      model, accountId: 611594, seen: [], now: t0, graceMs: GRACE,
+    });
+    expect(res).toEqual({ pending: 0, softDeleted: 0 });
+    expect(model.docs.every(d => d.deletedAt === null)).toBe(true);
+  });
+
+  it('never touches another account', async () => {
+    const model = fakeModel([row(1), { ...row(9), AccountId: 572402 }]);
+    await sweepMissingBankTransactions({ model, accountId: 611594, seen: [1], now: t0, graceMs: 0 });
+    expect(model.docs[1].deletedAt).toBeNull();
   });
 });
 

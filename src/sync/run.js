@@ -62,19 +62,24 @@ function buildUpsertUpdate({ keyField, keyValue, payload, syncedAt, runId, model
   }
 
   const protectedSet = new Set(protectedFields || syncConfig.protectedFields || []);
+  const volatileSet = new Set(syncConfig.volatileFields || []);
   const flattened = {};
+  const volatile = {};
   for (const [k, v] of Object.entries(source)) {
     if (!k) continue;
     if (SYNC_INTERNAL_FIELDS.has(k)) continue;
     if (k.startsWith('$')) continue;
     if (k.includes('.') || k.includes('\u0000')) continue;
     if (protectedSet.has(k)) continue;
+    if (volatileSet.has(k)) { volatile[k] = v; continue; }
     flattened[k] = v;
   }
 
   // Compute a stable content hash so we can detect unchanged documents.
+  // Volatile fields are deliberately not part of it — see below.
   const newHash = computePayloadHash({ ...flattened, [keyField]: keyValue });
   const newUuid = crypto.randomUUID();
+  const hashChanged = { $ne: ['$_kfHash', { $literal: newHash }] };
 
   // Build an aggregation pipeline update (MongoDB 4.2+) so that timestamps
   // are only written when data actually changes:
@@ -94,9 +99,36 @@ function buildUpsertUpdate({ keyField, keyValue, payload, syncedAt, runId, model
   //   KashFlow has voided/deleted, absent for active records. Placed before the spread so
   //   it defaults to null for active records (KashFlow omits it) but is overridden by the
   //   KashFlow value when the record is genuinely deleted.
+  //
+  // Volatile fields (syncConfig.volatileFields) are server-computed values that
+  // KashFlow re-derives per request and can hand back differently for identical
+  // data. They are kept out of the hash AND only rewritten when the hash moves,
+  // because doing either alone still churns: a value excluded from the hash but
+  // still $set unconditionally changes the document anyway, and modifiedCount
+  // counts the write, not the hash.
+  //
+  // The concrete case is bankTransaction.Balance — KashFlow's running balance.
+  // It sorts by Date with no tiebreak, so rows sharing a date come back in a
+  // different order each fetch and their running balances are permuted among
+  // them. That rewrote ~200 rows an hour on the largest account, every one of
+  // them reporting "data changed" to Discord and filling audit_log, while no
+  // accounting fact had moved. Nothing reads the field: hcs-schemas declares it
+  // list-only and server-computed, and reconciliation works from PaidIn/PaidOut
+  // plus the account-level BankBalance.
+  //
+  // Refreshing on hash change (rather than insert-only) keeps the stored value
+  // roughly current for the row it belongs to without letting it drive a write
+  // on its own.
   const pipelineSet = {
     DeletedAt: { $literal: null },
     ...Object.fromEntries(Object.entries(flattened).map(([k, v]) => [k, { $literal: v }])),
+    ...Object.fromEntries(Object.entries(volatile).map(([k, v]) => [k, {
+      $cond: {
+        if:   hashChanged,
+        then: { $literal: v },
+        else: { $ifNull: [`$${k}`, { $literal: v }] },
+      },
+    }])),
     [keyField]: { $literal: keyValue },
     _kfHash: { $literal: newHash },
     deletedAt: { $literal: null },
@@ -106,7 +138,7 @@ function buildUpsertUpdate({ keyField, keyValue, payload, syncedAt, runId, model
     ...(runId ? { createdByRunId: { $ifNull: ['$createdByRunId', { $literal: String(runId) }] } } : {}),
     updatedAt: {
       $cond: {
-        if:   { $ne: ['$_kfHash', { $literal: newHash }] },
+        if:   hashChanged,
         then: '$$NOW',
         else: { $ifNull: ['$updatedAt', '$$NOW'] },
       },
@@ -115,9 +147,73 @@ function buildUpsertUpdate({ keyField, keyValue, payload, syncedAt, runId, model
 
   // pipeline._rawSet is a JS-only property (not serialised to BSON) that
   // the audit engine reads for deepDiff comparisons.
+  //
+  // pipeline._rawVolatile names the fields the audit must ignore. deepDiff walks
+  // the UNION of the stored document's keys and _rawSet's, so simply leaving a
+  // volatile field out of _rawSet would report it 'removed' on every single run
+  // — noisier than the churn this exists to stop.
   const pipeline = [{ $set: pipelineSet }, { $unset: 'data' }];
   pipeline._rawSet = { DeletedAt: null, ...flattened, [keyField]: keyValue, deletedAt: null };
+  if (volatileSet.size) pipeline._rawVolatile = [...volatileSet];
   return pipeline;
+}
+
+/**
+ * Soft-delete the bank transactions KashFlow has stopped returning for an
+ * account — but only once their absence has been corroborated over time.
+ *
+ * Without any sweep the mirror keeps deleted transactions forever, which is not
+ * cosmetic for reconciliation: a phantom line sits on the worklist looking
+ * perfectly reconcilable and can be matched against a document it never paid for.
+ *
+ * The caller must only reach here after a SUCCESSFUL, NON-EMPTY fetch — sweeping
+ * on a failed or empty response would mark an entire account's history deleted.
+ * Those two guards still matter, but they are not sufficient. The largest
+ * account's ~8,400 rows arrive over ~40 paginated requests, and individual rows
+ * have vanished from one run's pages while plainly still existing: 6717455 and
+ * 6717590 were soft-deleted at 10:00 on 2026-08-06 and returned an hour later,
+ * so for that hour two real ledger lines were hidden from /bank by hcs-app's
+ * LIVE_BANK_LINE filter. A partial fetch neither throws nor comes back empty, so
+ * it passes both existing guards untouched.
+ *
+ * Hence missingSince: the first run that fails to see a row records when, and
+ * only a row still missing after graceMs is soft-deleted. The window is measured
+ * in time rather than counted in runs so that two manual runs a minute apart
+ * cannot corroborate each other. graceMs of 0 restores the previous behaviour of
+ * deleting on first absence.
+ *
+ * Reappearance self-heals in two places: buildUpsertUpdate clears deletedAt on
+ * every upsert, and the timer reset below covers rows that are back but whose
+ * stale missingSince would otherwise make the next single missed page an
+ * instant deletion.
+ *
+ * @returns {Promise<{pending: number, softDeleted: number}>}
+ */
+export async function sweepMissingBankTransactions({ model, accountId, seen, now, graceMs = 0 }) {
+  const result = { pending: 0, softDeleted: 0 };
+  if (!seen?.length) return result;
+
+  const missing = { AccountId: accountId, Id: { $nin: seen }, deletedAt: null };
+
+  await model.updateMany(
+    { AccountId: accountId, Id: { $in: seen }, missingSince: { $ne: null } },
+    { $set: { missingSince: null } },
+  );
+
+  const firstAbsence = await model.updateMany(
+    { ...missing, missingSince: null },
+    { $set: { missingSince: now } },
+  );
+  result.pending = firstAbsence?.modifiedCount || 0;
+
+  const cutoff = new Date(now.getTime() - graceMs);
+  const confirmed = await model.updateMany(
+    { ...missing, missingSince: { $ne: null, $lte: cutoff } },
+    { $set: { deletedAt: now } },
+  );
+  result.softDeleted = confirmed?.modifiedCount || 0;
+
+  return result;
 }
 
 function createBulkUpserter(collection, batchSize = 250) {
@@ -225,7 +321,14 @@ function createBulkUpserter(collection, batchSize = 250) {
           continue;
         }
 
-        const changes = deepDiff(existing, setFields);
+        // Volatile fields are not written unless real content changed, so
+        // diffing them would report a change the write never made.
+        const volatileFields = Array.isArray(update) ? update._rawVolatile : null;
+        const changes = volatileFields?.length
+          ? deepDiff(existing, setFields, {
+            skipFields: new Set([...SYNC_INTERNAL_FIELDS, ...volatileFields]),
+          })
+          : deepDiff(existing, setFields);
         if (!changes.length) continue;
 
         auditEntries.push({
@@ -639,33 +742,20 @@ async function run(options = {}) {
           await upsertSimpleList({ model: BankTransaction, rows: txs, summaryKey: 'bankTransactions', collectionName: 'banktransactions', keyFields: ['Id'], scope: { AccountId: accountId }, now });
 
           // Soft-delete anything KashFlow no longer returns for this account.
-          //
-          // Without this the mirror keeps transactions deleted in KashFlow
-          // forever. That is not cosmetic for reconciliation: a phantom line
-          // sits on the worklist looking perfectly reconcilable, and can be
-          // matched against a document it never paid for.
-          //
-          // Only ever runs after a SUCCESSFUL, non-empty fetch. Sweeping on a
-          // failed or empty response would mark an entire account's history
-          // deleted, so both guards matter more than the feature does:
-          //   - a throw skips this entirely (we are inside the try)
-          //   - `if (!txs?.length) continue` above rules out an empty response
-          //
-          // Reappearance self-heals: buildUpsertUpdate sets deletedAt to null
-          // on every upsert, so a transaction KashFlow returns again is
-          // un-deleted without special handling.
+          // Reached only after a successful, non-empty fetch — see
+          // sweepMissingBankTransactions for why that is not enough on its own.
           const seen = txs.map(t => t?.Id).filter(v => v != null);
-          if (seen.length) {
-            const res = await BankTransaction.updateMany(
-              { AccountId: accountId, Id: { $nin: seen }, deletedAt: null },
-              { $set: { deletedAt: now } },
-            );
-            const n = res?.modifiedCount || 0;
-            if (n > 0) {
-              bankTransactionsSoftDeleted += n;
-              logger.info({ accountId, softDeleted: n }, 'Soft-deleted bank transactions no longer in KashFlow');
-              emitLog('info', 'Soft-deleted bank transactions no longer in KashFlow', { accountId, count: n });
-            }
+          const swept = await sweepMissingBankTransactions({
+            model: BankTransaction, accountId, seen, now, graceMs: config.bankSweepGraceMs,
+          });
+          if (swept.pending > 0) {
+            logger.info({ accountId, pending: swept.pending }, 'Bank transactions absent from KashFlow; awaiting grace window');
+            emitLog('info', 'Bank transactions absent from KashFlow; awaiting grace window', { accountId, count: swept.pending });
+          }
+          if (swept.softDeleted > 0) {
+            bankTransactionsSoftDeleted += swept.softDeleted;
+            logger.info({ accountId, softDeleted: swept.softDeleted }, 'Soft-deleted bank transactions no longer in KashFlow');
+            emitLog('info', 'Soft-deleted bank transactions no longer in KashFlow', { accountId, count: swept.softDeleted });
           }
         } catch (e) {
           logger.warn({ accountId, err: e.message }, 'Failed to fetch bank transactions for account');
