@@ -42,6 +42,13 @@ jobs:
 
       - run: npm ci --no-audit --no-fund
 
+      # Before the build, not after: the box deploys from :latest, so an image
+      # built against a stale schemas pin must never reach that tag. npm ci
+      # installs the commit pinned in package-lock.json, so merging hcs-schemas
+      # does not update this repo — that step has been missed twice.
+      - name: Check hcs-schemas version
+        run: node scripts/check-schemas-version.js
+
       - name: Security audit (prod deps)
         timeout-minutes: 3
         run: npm audit --omit=dev --audit-level=high

@@ -2,6 +2,20 @@
 
 All notable changes to hcs-sync will be documented here. Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [0.11.1] - 2026-08-06
+
+### Fixed
+- **KashFlow's own SQL timeout is now retried instead of aborting an account for the whole run.** The API returns `{ Error: "-2146232060", Message: "Execution Timeout Expired. …" }` with HTTP **400** — a .NET `SqlException` surfaced verbatim. It is entirely server-side, so `HTTP_TIMEOUT_MS` does not cover it and never will: the request completes promptly, carrying a failure.
+
+  It hits account 611594 (~8,400 transactions over ~40 paginated requests) roughly nightly, and one bad page aborted that account for the entire run — 8,413 rows silently absent from the fetch, the account an hour stale, and a Discord alert reading `13873 → 5460 (-8413)` as though the data had been deleted. Observed twice in two days, including the first run after 0.11.0 deployed.
+
+  Two backed-off retries (2s, 8s) — not immediate, since the timeout means KashFlow's database is already struggling. Matched on the **numeric** error code, not the message prose, so a genuine 400 still fails fast.
+
+  The soft-delete guard was never at risk here and still is not: a failed fetch skips the sweep, which is why no history was lost on any of these occasions.
+
+### Added
+- **`scripts/check-schemas-version.js`, run in CI before the build.** `@cappytech/hcs-schemas` is a git dependency, so `npm ci` installs the commit pinned in `package-lock.json` and merging schemas to its default branch changes nothing here. That step has now been missed twice — 0.10.0 shipped against schemas 2.0.0, and 0.11.0/hcs-app 6.21.0 were merged before their lockfile updates landed, publishing images pinned to 2.1.0 whose `bankTransaction` still declared the unique index on `Id` alone that those releases exist to replace. Documenting the three-step deploy prevented neither. The check compares the installed version against `requiredSchemasVersion` in package.json and fails the build with the exact fix command. It runs **before** the image is built, because the box deploys from `:latest`.
+
 ## [0.11.0] - 2026-08-05
 
 Requires **hcs-schemas 3.0.0**. Stores both halves of an internal transfer, which the mirror has been silently merging since bank transactions were first synced.

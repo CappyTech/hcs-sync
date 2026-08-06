@@ -212,6 +212,78 @@ describe('src/kashflow/client.js', () => {
     });
   });
 
+  // ── backend timeout retry ─────────────────────────────────────────────
+
+  describe('KashFlow backend timeout retry', () => {
+    /**
+     * The real payload: a .NET SqlException surfaced verbatim as a 400. It is
+     * server-side, so HTTP_TIMEOUT_MS cannot cover it. Untreated, one bad page
+     * aborts the whole account for the run — 8,413 rows silently missing from
+     * account 611594, roughly nightly.
+     */
+    const sqlTimeout = (config = {}) => ({
+      response: {
+        status: 400,
+        data: {
+          Message: 'Execution Timeout Expired.  The timeout period elapsed prior to completion of the operation or the server is not responding.',
+          Error: '-2146232060',
+        },
+      },
+      config: { url: '/bankaccounts/611594/transactions', headers: {}, baseURL: 'http://api', ...config },
+      message: 'Request failed with status code 400',
+    });
+
+    it('retries the request rather than failing the account', async () => {
+      vi.useFakeTimers();
+      try {
+        await createClient();
+        const errorHandler = mockHttp.interceptors.response.use.mock.calls[0][1];
+        mockHttp.request.mockResolvedValueOnce({ data: 'recovered' });
+
+        const promise = errorHandler(sqlTimeout());
+        await vi.runAllTimersAsync();
+        const result = await promise;
+
+        expect(mockHttp.request).toHaveBeenCalledTimes(1);
+        expect(result.data).toBe('recovered');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('gives up after the configured attempts instead of retrying forever', async () => {
+      vi.useFakeTimers();
+      try {
+        await createClient();
+        const errorHandler = mockHttp.interceptors.response.use.mock.calls[0][1];
+
+        // Already exhausted: two delays are configured.
+        const promise = errorHandler(sqlTimeout({ __timeoutRetries: 2 }));
+        await vi.runAllTimersAsync();
+
+        await expect(promise).rejects.toBeDefined();
+        expect(mockHttp.request).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('does not retry a genuine 400', async () => {
+      // Matched on the numeric SQL code, not the status: a real validation
+      // error must still fail fast rather than being retried twice.
+      await createClient();
+      const errorHandler = mockHttp.interceptors.response.use.mock.calls[0][1];
+
+      const err = {
+        response: { status: 400, data: { Message: 'Invalid parameter', Error: 'BadRequest' } },
+        config: { url: '/customers', headers: {}, baseURL: 'http://api' },
+        message: 'Request failed with status code 400',
+      };
+      await expect(errorHandler(err)).rejects.toBeDefined();
+      expect(mockHttp.request).not.toHaveBeenCalled();
+    });
+  });
+
   // ── 401 interceptor actual retry ──────────────────────────────────────
 
   describe('401 interceptor retry', () => {
