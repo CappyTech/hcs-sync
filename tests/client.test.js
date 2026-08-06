@@ -252,20 +252,16 @@ describe('src/kashflow/client.js', () => {
     });
 
     it('gives up after the configured attempts instead of retrying forever', async () => {
-      vi.useFakeTimers();
-      try {
-        await createClient();
-        const errorHandler = mockHttp.interceptors.response.use.mock.calls[0][1];
+      await createClient();
+      const errorHandler = mockHttp.interceptors.response.use.mock.calls[0][1];
 
-        // Already exhausted: two delays are configured.
-        const promise = errorHandler(sqlTimeout({ __timeoutRetries: 2 }));
-        await vi.runAllTimersAsync();
-
-        await expect(promise).rejects.toBeDefined();
-        expect(mockHttp.request).not.toHaveBeenCalled();
-      } finally {
-        vi.useRealTimers();
-      }
+      // No fake timers here: with the retries already exhausted this rejects
+      // synchronously, and awaiting a timer flush before attaching the
+      // rejection handler leaves the promise briefly unhandled — which Vitest
+      // reports as an unhandled rejection and fails the run on, while still
+      // printing every test as passed.
+      await expect(errorHandler(sqlTimeout({ __timeoutRetries: 2 }))).rejects.toBeDefined();
+      expect(mockHttp.request).not.toHaveBeenCalled();
     });
 
     it('does not retry a genuine 400', async () => {
