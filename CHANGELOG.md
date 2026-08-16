@@ -2,6 +2,20 @@
 
 All notable changes to hcs-sync will be documented here. Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [0.11.3] - 2026-08-16
+
+A partial run reported itself as a clean one. On 2026-08-16 the 01:00 sync posted an emerald **Completed** embed reading `bankTransactions 13955 → 5522 (-8433)`, then `+8433` at 02:00. Nothing was deleted at any point — the collection held 13,955 live rows throughout — but the only place that said so was a `warn` line in the container log.
+
+### Fixed
+- **`counts.bankTransactions` is now the stored count, not the fetch tally.** Every other entry in `counts` is a fetch tally harmlessly, because those fetches are all-or-nothing for the run. Bank transactions are fetched per account and a single account is *allowed* to fail, so the tally drops by that account's entire ledger while the collection is untouched — and `summariseRunChanges` diffs consecutive runs' counts, turning a skipped account into a phantom deletion and its recovery into a phantom insertion. The per-run fetch tally is kept as `bankTransactionsFetched`, excluded from change reporting like `bankTransactionsSoftDeleted`.
+
+- **A skipped account now alerts, in red.** `run()` returns `partial.bankTransactions` naming the accounts it could not read; the run resolves as before, since one bad account must not abort the other twenty entities. The alert is a distinct **Completed with warnings** embed that names the accounts and states plainly that their stored transactions are unchanged — the obvious reading of a bank alert is that rows vanished, and they cannot have: the soft-delete sweep only runs after a successful, non-empty fetch. The run log records `warn` rather than `success`.
+
+### Changed
+- **The KashFlow SQL-timeout retry goes to four attempts** (2s/8s/20s/45s, was two at 2s/8s). Measured over three days of logs: 25 of these timeouts fired and 23 cleared on the first or second retry, but the 2 that exhausted the pair were both on account 611594 and both on the 01:00 run — they cluster 00:00–03:00, when KashFlow's database is evidently busiest. Each attempt costs ~30s server-side, so the worst case is ~3 minutes on one account against an hourly cron. Note this is *not* covered by `HTTP_TIMEOUT_MS` and never will be: the request completes promptly, carrying a server-side failure as a 400.
+
+`listAll` remains all-or-nothing across pages, and that is deliberate rather than wasteful — see the comment on it. A partial page list feeds `sweepMissingBankTransactions`, which would present thousands of real rows as deleted from KashFlow.
+
 ## [0.11.2] - 2026-08-06
 
 Both fixes here come from the same root cause: KashFlow paginates account 611594's ~8,400 transactions over ~40 requests and the order is not stable between fetches. What survived the 0.11.0 re-key was not the transfer bug returning — it was this.

@@ -514,7 +514,7 @@ function requireSyncApiKey(req, res, next) {
 
 // Not a collection — a sub-tally of bankTransactions, so it must not be reported
 // as a resource in its own right.
-const NON_RESOURCE_COUNT_KEYS = new Set(['bankTransactionsSoftDeleted']);
+const NON_RESOURCE_COUNT_KEYS = new Set(['bankTransactionsSoftDeleted', 'bankTransactionsFetched']);
 
 /**
  * Summarise what a run actually changed.
@@ -663,10 +663,24 @@ async function triggerSync({ requestedBy }) {
         error: null,
       });
 
-      recordRunLog('success', 'Sync completed successfully', { counts: lastCounts });
+      if (result?.partial?.bankTransactions?.length) {
+        recordRunLog('warn', 'Sync completed with warnings', {
+          counts: lastCounts,
+          bankAccountsNotFetched: result.partial.bankTransactions.map((f) => f.accountId),
+        });
+      } else {
+        recordRunLog('success', 'Sync completed successfully', { counts: lastCounts });
+      }
 
       // Discord alert — only for runs that actually changed data; silent on no-op
       // success to keep a frequent cron quiet. Failures always alert (see .catch).
+      //
+      // A run that skipped an account is neither: nothing changed, but the run
+      // is not clean either. Before this, a per-account bank fetch failure was
+      // visible ONLY as a warn line in the container log — the run resolved,
+      // Discord said "Completed", and the only outward sign was a nonsense
+      // count delta on a green embed. It now alerts in its own right, in red.
+      const partialBank = result?.partial?.bankTransactions || [];
       try {
         const prev = result?.previousCounts ?? countsBeforeRun;
         const curr = lastCounts || {};
@@ -680,7 +694,33 @@ async function triggerSync({ requestedBy }) {
         const upsertTotal = changed.reduce((a, c) => a + c.upserted, 0);
         const modifiedTotal = changed.reduce((a, c) => a + c.modified, 0);
 
-        if (deltaFields.length > 0) {
+        if (partialBank.length > 0) {
+          const accounts = partialBank.map((f) => f.accountId).join(', ');
+          const fields = deltaFields.slice(0, 20);
+          fields.push({
+            name: 'Bank accounts not fetched',
+            value: accounts,
+            inline: true,
+          });
+          fields.push({
+            name: 'Reason',
+            value: String(partialBank[0]?.message || 'unknown').slice(0, 200),
+            inline: true,
+          });
+          fields.push({ name: 'Trigger', value: String(requestedBy || 'unknown'), inline: true });
+          sendDiscord({
+            ok: false,
+            title: 'Heron CS | Sync — Completed with warnings',
+            // Say plainly what did NOT happen, because the obvious reading of a
+            // bank alert is that rows vanished. They cannot have: the
+            // soft-delete sweep only runs after a successful, non-empty fetch,
+            // so a skipped account leaves its stored ledger exactly as it was.
+            description: `${partialBank.length} bank account(s) could not be read from KashFlow. `
+              + 'Their stored transactions are unchanged — nothing was deleted. '
+              + 'The next successful run will pick them up.',
+            fields,
+          }).catch(() => {});
+        } else if (deltaFields.length > 0) {
           // Discord caps an embed at 25 fields; keep room for the summary fields.
           const shown = deltaFields.slice(0, 22);
           const fields = shown;

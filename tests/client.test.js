@@ -260,8 +260,32 @@ describe('src/kashflow/client.js', () => {
       // rejection handler leaves the promise briefly unhandled — which Vitest
       // reports as an unhandled rejection and fails the run on, while still
       // printing every test as passed.
-      await expect(errorHandler(sqlTimeout({ __timeoutRetries: 2 }))).rejects.toBeDefined();
+      await expect(errorHandler(sqlTimeout({ __timeoutRetries: 4 }))).rejects.toBeDefined();
       expect(mockHttp.request).not.toHaveBeenCalled();
+    });
+
+    // Pinning the depth, not just "it retries". Two attempts was measured as
+    // insufficient: over three days, 25 of these fired and 2 exhausted the pair
+    // — both on 611594, both on the 01:00 run — and each exhaustion cost that
+    // account's entire fetch for the hour. Lowering this silently reinstates
+    // that, and the only symptom is an alert an hour later.
+    it('retries four times before giving up', async () => {
+      vi.useFakeTimers();
+      try {
+        await createClient();
+        const errorHandler = mockHttp.interceptors.response.use.mock.calls[0][1];
+        mockHttp.request.mockResolvedValueOnce({ data: 'recovered' });
+
+        // The fourth attempt: still retried, where two attempts would have
+        // given up and dropped the account.
+        const promise = errorHandler(sqlTimeout({ __timeoutRetries: 3 }));
+        await vi.runAllTimersAsync();
+
+        expect((await promise).data).toBe('recovered');
+        expect(mockHttp.request).toHaveBeenCalledTimes(1);
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it('does not retry a genuine 400', async () => {
