@@ -73,7 +73,14 @@ async function createClient() {
     return String(body?.Error ?? '') === SQL_TIMEOUT_CODE;
   };
 
-  const RETRY_DELAYS_MS = [2000, 8000];
+  // Four attempts, not two. Measured over three days of logs: 25 of these
+  // timeouts fired, 23 cleared on the first or second retry and 2 exhausted the
+  // pair — both on 611594, both on the 01:00 run, when KashFlow's database is
+  // evidently busiest (they cluster 00:00–03:00). Each attempt costs ~30s
+  // server-side, so the worst case here is ~3 minutes on one account against an
+  // hourly cron and a run that already takes ~4 minutes. Cheap insurance
+  // against losing a whole account's fetch for an hour.
+  const RETRY_DELAYS_MS = [2000, 8000, 20000, 45000];
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
   // Retry once on 401 by refreshing the session token
@@ -132,6 +139,12 @@ async function createClient() {
     return normalizeList(res.data);
   };
 
+  // All-or-nothing on purpose: a page that fails discards the pages already
+  // collected. That looks wasteful and is not — bank transactions feed
+  // sweepMissingBankTransactions, which soft-deletes anything the fetch did not
+  // return for that account. Handing back a partial list would present ~8,000
+  // real rows as deleted from KashFlow. The caller must never see a short list
+  // it cannot distinguish from a complete one.
   const listAllInternal = async (path, params = {}) => {
     let items = [];
     let url = path;

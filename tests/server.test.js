@@ -472,6 +472,31 @@ describe('Express server routes', () => {
     it('stays silent on a genuine no-op run', () => {
       expect(summariseRunChanges(prev, prev, { purchases: { upserted: 0, modified: 0 } })).toEqual([]);
     });
+
+    // `bankTransactionsFetched` is the per-run fetch tally kept alongside the
+    // stored count. It is a diagnostic, not a collection, and it swings by a
+    // whole account whenever one fails — exactly the phantom delta that made
+    // 2026-08-16 01:08 read as "-8433". It must never reach the alert.
+    it('omits the fetch tally, which is not a collection', () => {
+      const names = summariseRunChanges(
+        { ...prev, bankTransactionsFetched: 13955 },
+        { ...curr, bankTransactionsFetched: 5522 },
+        mongo,
+      ).map((c) => c.name);
+      expect(names).not.toContain('bankTransactionsFetched');
+    });
+
+    // The whole point of counting stored rows instead of fetched ones: when an
+    // account times out, the collection is untouched, so there is no delta to
+    // report and the only thing worth saying is that an account was skipped.
+    it('reports no bankTransactions count delta when an account was skipped', () => {
+      const skipped = summariseRunChanges(
+        { bankTransactions: 13955, bankTransactionsFetched: 13955 },
+        { bankTransactions: 13955, bankTransactionsFetched: 5522 },
+        null,
+      );
+      expect(skipped).toEqual([]);
+    });
   });
 
   // ── POST /run ──────────────────────────────────────────────────────────

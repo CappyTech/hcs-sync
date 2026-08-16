@@ -710,6 +710,10 @@ async function run(options = {}) {
     // Best-effort: a failing account is logged and skipped so it never breaks the run.
     let bankTransactionsTotal = 0;
     let bankTransactionsSoftDeleted = 0;
+    // Accounts whose fetch failed outright. Kept rather than only logged: it is
+    // the difference between "the collection shrank" and "we did not look", and
+    // without it the run reports a clean success — see the counts block below.
+    const bankTransactionFailures = [];
     if (mongoEnabled && bankAccountsRaw?.length) {
       setStage('banktransactions:fetch');
       const now = new Date();
@@ -758,6 +762,7 @@ async function run(options = {}) {
             emitLog('info', 'Soft-deleted bank transactions no longer in KashFlow', { accountId, count: swept.softDeleted });
           }
         } catch (e) {
+          bankTransactionFailures.push({ accountId, message: e.message });
           logger.warn({ accountId, err: e.message }, 'Failed to fetch bank transactions for account');
           emitLog('warn', 'Failed to fetch bank transactions for account', { accountId, message: e.message });
         }
@@ -766,6 +771,7 @@ async function run(options = {}) {
         accounts: bankAccountsRaw.length,
         transactions: bankTransactionsTotal,
         softDeleted: bankTransactionsSoftDeleted,
+        failedAccounts: bankTransactionFailures.map((f) => f.accountId),
       });
     }
 
@@ -1139,6 +1145,29 @@ async function run(options = {}) {
       })(),
     ]);
 
+    // `counts.bankTransactions` must be what is STORED, not what was fetched.
+    //
+    // Every other entry in `counts` is a fetch tally and that is harmless,
+    // because those fetches are all-or-nothing for the run. Bank transactions
+    // are fetched per account and a single account is allowed to fail, so the
+    // fetch tally drops by that account's whole ledger while the collection is
+    // untouched. Downstream, `summariseRunChanges` diffs consecutive runs'
+    // counts, so on 2026-08-16 a 611594 timeout published
+    // "bankTransactions 13955 → 5522 (-8433)" on an emerald *Completed* embed,
+    // then "+8433" an hour later when the next fetch succeeded — two alerts
+    // describing mass deletion and recovery, neither of which happened. The
+    // stored count is stable across a partial fetch, which is exactly the
+    // property the alert needs.
+    let bankTransactionsStored = null;
+    if (mongoEnabled && BankTransaction) {
+      try {
+        bankTransactionsStored = await BankTransaction.countDocuments({ deletedAt: null });
+      } catch (e) {
+        // Fall back to the fetch tally rather than losing the field entirely.
+        logger.warn({ err: e.message }, 'Failed to count stored bank transactions');
+      }
+    }
+
     progress.setItemTotal('nominals', (nominals || []).length);
     progress.setItemDone('nominals', (nominals || []).length);
     logger.info({ nominalsCount: nominals?.length || 0 }, 'Fetched nominals');
@@ -1150,7 +1179,8 @@ async function run(options = {}) {
       nominals: nominals?.length || 0,
       vatRates: vatRatesRaw?.length || 0,
       bankAccounts: bankAccountsRaw?.length || 0,
-      bankTransactions: bankTransactionsTotal,
+      bankTransactions: bankTransactionsStored ?? bankTransactionsTotal,
+      bankTransactionsFetched: bankTransactionsTotal,
       bankTransactionsSoftDeleted,
       bankReconciliations: bankReconciliationsTotal,
       journals: journalsRaw?.length || 0,
@@ -1173,7 +1203,17 @@ async function run(options = {}) {
     const previousCounts = null; // placeholder for future persisted state
     const mongo = mongoEnabled ? mongoSummary : null;
     const mongoUpserts = mongoEnabled ? mongoDetails : null;
-    return { counts, previousCounts, mongo, mongoUpserts };
+    return {
+      counts,
+      previousCounts,
+      mongo,
+      mongoUpserts,
+      // Accounts the run could not read. The run still resolves — one bad
+      // account must not abort the other twenty entities — but the caller needs
+      // this to alert, otherwise a partial run is indistinguishable from a
+      // clean one at every level above the log.
+      partial: { bankTransactions: bankTransactionFailures },
+    };
   } catch (err) {
     emitLog('error', 'Sync runner failed', { message: err?.message || null, status: err?.response?.status || null });
     throw err;
