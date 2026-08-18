@@ -471,6 +471,33 @@ function addMongoStats(target, stats) {
   return target;
 }
 
+/**
+ * Replace this run's count for every collection whose KashFlow fetch failed with
+ * the previous run's count, so a transient fetch error is neither reported nor
+ * persisted as a drop to zero.
+ *
+ * A failed fetch means we did not observe the collection this run — not that it
+ * emptied. Carrying the prior count forward makes before === after downstream, so
+ * summariseRunChanges emits no delta, and it also stops the mirror-image phantom
+ * on recovery (a real 0 stored this run would read as "0 → 40" next run). A
+ * collection with no prior count (nothing to carry) is left untouched.
+ *
+ * Pure and side-effect-free: returns a new object, mutates neither argument.
+ *
+ * @param {object|null} prev   previous run's counts
+ * @param {object|null} curr   this run's counts
+ * @param {Iterable<string>} failed  count-keys whose fetch failed this run
+ * @returns {object} counts with failed-fetch collections carried forward
+ */
+function carryForwardFailedCounts(prev, curr, failed) {
+  const out = { ...(curr || {}) };
+  if (!prev) return out;
+  for (const name of failed || []) {
+    if (prev[name] != null) out[name] = prev[name];
+  }
+  return out;
+}
+
 async function run(options = {}) {
   const runId = options?.runId ? String(options.runId) : null;
   const recordLog = typeof options?.recordLog === 'function' ? options.recordLog : null;
@@ -539,8 +566,18 @@ async function run(options = {}) {
     const auditOpts = (collectionName) => auditCol ? { auditCollection: auditCol, runId, collectionName } : null;
 
     setStage('fetch:lists');
-    const listOrEmpty = (label, promise) =>
-      promise.catch((e) => { logger.warn({ err: e.message }, `Failed to fetch ${label}`); return []; });
+    // Collects the count-keys whose KashFlow list fetch failed this run. A failed
+    // fetch is caught below and turned into an empty array so the run continues,
+    // but empty-from-failure is NOT the same as genuinely-empty: without this set
+    // the two are indistinguishable downstream, and a transient failure reads as a
+    // collection dropping to zero — a phantom "-40" data-loss delta on Discord.
+    // The client already retries KashFlow's SQL timeout for every request; this
+    // covers whatever transient failure survives that (network blips, 5xx, an
+    // exhausted retry). The count carry-forward keyed off this set (see
+    // carryForwardFailedCounts) is what keeps such a run from reporting a delta.
+    const failedFetches = new Set();
+    const listOrEmpty = (key, label, promise) =>
+      promise.catch((e) => { logger.warn({ err: e.message }, `Failed to fetch ${label}`); failedFetches.add(key); return []; });
 
     const [
       customers, suppliers, projects, nominals, vatRatesRaw, bankAccountsRaw,
@@ -552,18 +589,29 @@ async function run(options = {}) {
       kf.suppliers.listAll({ perpage: 200 }),
       kf.projects.listAll({ perpage: 200 }),
       kf.nominals.list(),
-      listOrEmpty('VAT rates', kf.vatRates.list()),
-      listOrEmpty('bank accounts', kf.bankAccounts.list()),
-      listOrEmpty('journals', kf.journals.listAll({ perpage: 200 })),
-      listOrEmpty('products', kf.products.listAll({ perpage: 200 })),
-      listOrEmpty('purchase orders', kf.purchaseOrders.listAll({ perpage: 200 })),
-      listOrEmpty('quote categories', kf.quoteCategories.list()),
-      listOrEmpty('purchase order categories', kf.purchaseOrderCategories.list()),
-      listOrEmpty('currencies', kf.currencies.list()),
-      listOrEmpty('countries', kf.countries.list()),
-      listOrEmpty('accounting periods', kf.accountingPeriods.list()),
-      listOrEmpty('VAT returns', kf.vatReturns.list()),
+      listOrEmpty('vatRates', 'VAT rates', kf.vatRates.list()),
+      listOrEmpty('bankAccounts', 'bank accounts', kf.bankAccounts.list()),
+      listOrEmpty('journals', 'journals', kf.journals.listAll({ perpage: 200 })),
+      listOrEmpty('products', 'products', kf.products.listAll({ perpage: 200 })),
+      listOrEmpty('purchaseOrders', 'purchase orders', kf.purchaseOrders.listAll({ perpage: 200 })),
+      listOrEmpty('quoteCategories', 'quote categories', kf.quoteCategories.list()),
+      listOrEmpty('purchaseOrderCategories', 'purchase order categories', kf.purchaseOrderCategories.list()),
+      listOrEmpty('currencies', 'currencies', kf.currencies.list()),
+      listOrEmpty('countries', 'countries', kf.countries.list()),
+      listOrEmpty('accountingPeriods', 'accounting periods', kf.accountingPeriods.list()),
+      listOrEmpty('vatReturns', 'VAT returns', kf.vatReturns.list()),
     ]);
+
+    // Bank transactions and reconciliations are fetched per bank account, and
+    // both phases are gated on a non-empty bankAccounts list. So when the
+    // bankAccounts fetch fails, those two never run and their counts read as 0
+    // for reasons that have nothing to do with KashFlow's actual data — the same
+    // phantom-delta trap. Mark them failed too so their counts are carried
+    // forward rather than reported as a drop.
+    if (failedFetches.has('bankAccounts')) {
+      failedFetches.add('bankTransactions');
+      failedFetches.add('bankReconciliations');
+    }
 
     const customerCodes = (customers || []).map(pickCode).filter((x) => !isMissingKey(x));
     const supplierCodes = (suppliers || []).map(pickCode).filter((x) => !isMissingKey(x));
@@ -1213,6 +1261,12 @@ async function run(options = {}) {
       // this to alert, otherwise a partial run is indistinguishable from a
       // clean one at every level above the log.
       partial: { bankTransactions: bankTransactionFailures },
+      // Count-keys whose list fetch failed this run (empty result came from an
+      // error, not from KashFlow genuinely holding nothing). The caller carries
+      // their previous counts forward so a transient failure is not reported as a
+      // drop to zero. Includes bankTransactions/bankReconciliations when the
+      // bankAccounts fetch they depend on failed.
+      failedFetches: [...failedFetches],
     };
   } catch (err) {
     emitLog('error', 'Sync runner failed', { message: err?.message || null, status: err?.response?.status || null });
@@ -1245,5 +1299,6 @@ export {
   preparePurchaseForUpsert,
   createSkipCounter,
   addMongoStats,
+  carryForwardFailedCounts,
   SUPPLIER_PROTECTED_FIELDS,
 };

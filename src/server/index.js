@@ -10,7 +10,7 @@ import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import CsrfTokens from 'csrf';
 import logger from '../util/logger.js';
-import runSync from '../sync/run.js';
+import runSync, { carryForwardFailedCounts } from '../sync/run.js';
 import { pullSingleEntity, debugEntity, ENTITY_CONFIG } from '../sync/pull.js';
 import { SHAPE_ENDPOINTS, captureShape } from '../sync/shapes.js';
 import progress from './progress.js';
@@ -629,7 +629,14 @@ async function triggerSync({ requestedBy }) {
     .then((result) => {
       lastRun = Date.now();
       isRunning = false;
-      lastCounts = result && result.counts ? result.counts : lastCounts;
+      // Carry prior counts forward for any collection whose KashFlow fetch failed
+      // this run, before lastCounts feeds change recording, Discord and history.
+      // Otherwise a transient fetch failure reads as a drop to zero (and its
+      // recovery as a spurious jump back) — see carryForwardFailedCounts.
+      const prevCounts = result?.previousCounts ?? countsBeforeRun ?? lastCounts;
+      lastCounts = result && result.counts
+        ? carryForwardFailedCounts(prevCounts, result.counts, result.failedFetches || [])
+        : lastCounts;
       lastError = null;
       progress.finish(lastCounts);
 
