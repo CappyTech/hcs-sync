@@ -37,6 +37,7 @@ import {
   createSkipCounter,
   addMongoStats,
   sweepMissingBankTransactions,
+  carryForwardFailedCounts,
   SUPPLIER_PROTECTED_FIELDS,
 } from '../src/sync/run.js';
 
@@ -862,5 +863,57 @@ describe('addMongoStats()', () => {
   it('handles missing fields in stats gracefully', () => {
     const result = addMongoStats(null, {});
     expect(result).toEqual({ attemptedOps: 0, affected: 0, upserted: 0, matched: 0, modified: 0 });
+  });
+});
+
+// ── carryForwardFailedCounts ──
+
+describe('carryForwardFailedCounts()', () => {
+  it('carries the prior count forward for a failed fetch (no phantom drop)', () => {
+    const prev = { bankAccounts: 9, vatReturns: 40, invoices: 100 };
+    const curr = { bankAccounts: 0, vatReturns: 0, invoices: 100 };
+    const out = carryForwardFailedCounts(prev, curr, ['bankAccounts', 'vatReturns']);
+    // The failed collections read as their prior counts, so before === after
+    // downstream and no delta is reported.
+    expect(out).toEqual({ bankAccounts: 9, vatReturns: 40, invoices: 100 });
+  });
+
+  it('reports a genuine change when the collection was fetched successfully', () => {
+    const prev = { bankAccounts: 9 };
+    const curr = { bankAccounts: 10 };
+    // bankAccounts fetched fine this run, so it is not in the failed set.
+    const out = carryForwardFailedCounts(prev, curr, []);
+    expect(out).toEqual({ bankAccounts: 10 });
+  });
+
+  it('prevents the mirror-image phantom on recovery', () => {
+    // A run where the failed collection was carried forward last time; this run
+    // recovers. Because last run stored 9 (not 0), recovery to 9 is a no-op.
+    const prev = { vatReturns: 40 };
+    const curr = { vatReturns: 40 };
+    const out = carryForwardFailedCounts(prev, curr, []);
+    expect(out.vatReturns).toBe(40);
+  });
+
+  it('leaves a failed collection untouched when there is no prior count', () => {
+    const prev = { invoices: 5 };
+    const curr = { bankAccounts: 0, invoices: 5 };
+    const out = carryForwardFailedCounts(prev, curr, ['bankAccounts']);
+    // Nothing to carry forward, so the observed 0 stands.
+    expect(out.bankAccounts).toBe(0);
+  });
+
+  it('returns curr unchanged when prev is null (first run)', () => {
+    const curr = { bankAccounts: 0 };
+    const out = carryForwardFailedCounts(null, curr, ['bankAccounts']);
+    expect(out).toEqual({ bankAccounts: 0 });
+  });
+
+  it('does not mutate its arguments', () => {
+    const prev = { bankAccounts: 9 };
+    const curr = { bankAccounts: 0 };
+    carryForwardFailedCounts(prev, curr, ['bankAccounts']);
+    expect(prev).toEqual({ bankAccounts: 9 });
+    expect(curr).toEqual({ bankAccounts: 0 });
   });
 });

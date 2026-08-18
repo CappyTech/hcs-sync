@@ -2,6 +2,16 @@
 
 All notable changes to hcs-sync will be documented here. Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [0.11.4] - 2026-08-18
+
+The 0.11.3 fix covered bank transactions, which are fetched per account and are allowed to fail one account at a time. But every *other* list is fetched through `listOrEmpty`, which catches a failure and returns `[]` — indistinguishable from KashFlow genuinely holding nothing. On 2026-08-18 the 06:07 cron posted `bankAccounts 9 → 0 (-9)`, `bankReconciliations 1 → 0 (-1)` and `vatReturns 40 → 0 (-40)`, then restored them at 08:06 and 09:05. Nothing was deleted at any point: `upsertSimpleList` no-ops on empty rows, and only bank transactions have a sweep. The three list fetches had simply failed and recovered.
+
+### Fixed
+- **A failed list fetch is now distinguished from an empty result, and no longer reported as a drop to zero.** `listOrEmpty` records the count-key of each fetch that fails into a `failedFetches` set; `run()` returns it, and the server carries the previous run's count forward for those collections before counts feed change reporting, Discord and history. So a transient failure reports no delta — and because the carried value is what gets persisted, the collection's recovery on the next run does not fire a mirror-image phantom jump either. Extracted as the pure, unit-tested helper `carryForwardFailedCounts`.
+- **A failed `bankAccounts` fetch no longer zeroes its dependent phases silently.** Bank transactions and reconciliations are fetched per account and both phases are gated on a non-empty `bankAccounts` list, so when that list fails they never run and their counts read 0 for reasons unrelated to KashFlow's data. Both are now marked failed alongside `bankAccounts` so their counts are carried forward too — matching the exact 06:07 → 08:06 pattern observed.
+
+No extra retry layer was added: the KashFlow client already retries the server-side SQL timeout for every request (four attempts since 0.11.3), and blanket-retrying unknown errors would risk masking genuine ones. The carry-forward makes any residual transient failure non-alarming and non-destructive, which is the actual goal.
+
 ## [0.11.3] - 2026-08-16
 
 A partial run reported itself as a clean one. On 2026-08-16 the 01:00 sync posted an emerald **Completed** embed reading `bankTransactions 13955 → 5522 (-8433)`, then `+8433` at 02:00. Nothing was deleted at any point — the collection held 13,955 live rows throughout — but the only place that said so was a `warn` line in the container log.
