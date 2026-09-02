@@ -255,6 +255,18 @@ async function createClient() {
           .get(`/bankaccounts/${accountId}/reconciliations/metadata`)
           .then((r) => r.data),
     },
+    // Read-only, like the rest of this client. Bank feeds are the connections
+    // KashFlow pulls statement lines from; their response shape is undocumented
+    // in Swagger, which is why exposing them for the shape sampler is useful.
+    bankFeeds: {
+      list: (params = {}) => listInternal('/bankfeeds', params),
+      get: (id) => http.get(`/bankfeeds/${id}`).then((r) => r.data),
+    },
+    // GET-only VAT settings singleton (the detailed one — FRS nominals, cash
+    // accounting, MOSS, lock-transaction). No collection; `get` returns the object.
+    vatSettings: {
+      get: () => http.get('/vat/settings').then((r) => r.data),
+    },
     journals: {
       list: (params = {}) => listInternal('/journals', params),
       listAll: (params = {}) => listAllInternal('/journals', params),

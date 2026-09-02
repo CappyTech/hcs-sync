@@ -2,6 +2,16 @@
 
 All notable changes to hcs-sync will be documented here. Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [0.13.0] - 2026-09-02
+
+### Added
+- **Three more entities can now be shape-sampled, so the debug page covers anything we might need to see the shape of.** 0.12.0 wired up the ten entities the client could already reach; this adds the ones that needed new **read-only** client methods, in the same read-only spirit as the rest of the client:
+  - `bankFeeds` — `GET /bankfeeds` and `GET /bankfeeds/{id}`. Its response shape is undocumented in KashFlow's Swagger, which is exactly what this sampler is for; the detail key is a best guess and is skipped if absent.
+  - `vatSettings` — `GET /vat/settings`, the detailed VAT settings singleton (FRS nominals, cash accounting, MOSS, lock-transaction). Not a collection, so `list` returns the object and `buildShapeReport` shapes it directly.
+  - `notes` — object-scoped (`GET /{objectType}/{objectNumber}/notes`), so there is no top-level collection. The sampler walks the first 25 purchases and shapes the first one that actually carries notes; most carry none and an empty sample shapes nothing.
+
+  What stays out, and why: `withholding-tax` has no read endpoint (POST-only), so there is no response to shape; the reconciliation and transaction *mutation* endpoints remain absent from the client entirely (some DELETE the source bank transaction on success); and KashFlow's operational/config tags (Dashboard, Dropbox, GoCardless, Branding, SSO, ViaPost and the like) are not data we sync or document. This change only samples reads.
+
 ## [0.12.0] - 2026-09-02
 
 ### Added

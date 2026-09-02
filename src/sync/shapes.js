@@ -178,6 +178,36 @@ export const SHAPE_ENDPOINTS = {
     list: (kf) => kf.accountingPeriods.list(),
     listPath: '/accountingperiods',
   },
+  bankFeeds: {
+    list: (kf) => kf.bankFeeds.list(),
+    // Shape is undocumented in Swagger, so the detail key is a best guess; if
+    // 'Id' is absent firstKey returns undefined and no detail is sampled.
+    detail: (kf, items) => firstKey(items, 'Id') && kf.bankFeeds.get(firstKey(items, 'Id')),
+    detailPath: '/bankfeeds/{id}',
+    listPath: '/bankfeeds',
+  },
+  // A GET singleton, not a collection — `list` returns the settings object and
+  // buildShapeReport shapes it directly (no detail fetch).
+  vatSettings: {
+    list: (kf) => kf.vatSettings.get(),
+    listPath: '/vat/settings',
+  },
+  // Notes are scoped to an object, so there is no top-level collection. Sample
+  // the first purchase that actually carries notes — most carry none, and an
+  // empty sample shapes nothing. Bounded to 25 purchases to cap the fan-out.
+  notes: {
+    list: async (kf) => {
+      const purchases = await kf.purchases.list({ perpage: 25 });
+      for (const p of (purchases || []).slice(0, 25)) {
+        if (p?.Number == null) continue;
+        const rows = await kf.notes.list('purchases', p.Number);
+        const arr = Array.isArray(rows) ? rows : (rows?.Data || []);
+        if (arr.length) return arr;
+      }
+      return [];
+    },
+    listPath: '/{objectType}/{objectNumber}/notes',
+  },
 };
 
 /**
