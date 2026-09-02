@@ -1343,8 +1343,19 @@ app.post('/debug/shape', requireAdmin, pullLimiter, async (req, res) => {
     const result = await captureShape(entity);
     res.json({ ok: true, ...result });
   } catch (err) {
-    logger.error({ entity, err: err.message }, 'Shape capture failed');
-    res.status(500).json({ ok: false, message: err.message || 'Shape capture failed' });
+    // Surface which KashFlow call failed and what it said — a bare "Request
+    // failed with status code 400" is useless for diagnosing an unverified
+    // endpoint. axios errors carry the request config and the response body.
+    const resp = err.response;
+    const cfg = err.config || {};
+    const where = resp ? ` (${(cfg.method || 'get').toUpperCase()} ${cfg.url} → ${resp.status})` : '';
+    const body = resp?.data;
+    const bodyStr = body
+      ? (typeof body === 'object' ? JSON.stringify(body) : String(body)).slice(0, 400)
+      : '';
+    const message = `${err.message}${where}${bodyStr ? `: ${bodyStr}` : ''}`;
+    logger.error({ entity, url: cfg.url, status: resp?.status, body }, 'Shape capture failed');
+    res.status(500).json({ ok: false, message });
   }
 });
 app.post('/debug', requireAdmin, pullLimiter, async (req, res) => {

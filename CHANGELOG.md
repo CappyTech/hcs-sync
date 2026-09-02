@@ -2,6 +2,11 @@
 
 All notable changes to hcs-sync will be documented here. Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [0.14.1] - 2026-09-02
+
+### Fixed
+- **A failed shape capture now says which KashFlow call failed and what it returned**, instead of a bare `Request failed with status code 400`. The `POST /debug/shape` handler now folds the axios request method/URL and the response body into the message the debug page shows — e.g. `Request failed with status code 400 (GET /vat/settings → 400): {"Error":"…"}` — and logs the same `url`, `status` and `body`. That makes an unverified endpoint self-diagnosing rather than opaque; the failing URL was already in the container logs via the client's error interceptor, but the page swallowed it.
+
 ## [0.14.0] - 2026-09-02
 
 ### Added
