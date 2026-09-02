@@ -267,6 +267,14 @@ async function createClient() {
     vatSettings: {
       get: () => http.get('/vat/settings').then((r) => r.data),
     },
+    // Read-only. Bulk payments have no list endpoint and Create/Update/Delete
+    // are writes this mirror never issues — only the by-number read is exposed,
+    // for shape-sampling a bulk payment record (BulkPayment_Get). objectType is
+    // 'purchases' or 'invoices'.
+    bulkPayments: {
+      get: (objectType, number) =>
+        http.get(`/${objectType}/bulk/payments/${number}`).then((r) => r.data),
+    },
     journals: {
       list: (params = {}) => listInternal('/journals', params),
       listAll: (params = {}) => listAllInternal('/journals', params),

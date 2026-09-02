@@ -2,6 +2,13 @@
 
 All notable changes to hcs-sync will be documented here. Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [0.14.0] - 2026-09-02
+
+### Added
+- **The bulk payment record can now be shape-sampled, to pin down the response shape hcs-app's new bulk-payment feature reads back.** hcs-app builds `BulkPayment_Create` (`POST /purchases/bulk/payments`) from KashFlow's incomplete Swagger, and guesses which response field carries the new bulk-payment number. The sampler cannot exercise Create — it is a write that would book a real payment — so it samples the **read** side instead: a new read-only client method `bulkPayments.get(objectType, number)` (`GET /{objectType}/bulk/payments/{number}`, BulkPayment_Get) and a `bulkPayments` shape entry.
+
+  Bulk payments have no list endpoint and a number only exists on a purchase settled by one, so the sampler resolves a `PaymentLines.BulkPaymentNumber` from a purchase — fetching detail for up to 25 paid candidates — then GETs that one payment. It returns nothing until a bulk payment actually exists to sample, so the first real payment hcs-app books (whose create response hcs-app already logs) is what makes this capturable. Create/Update/Delete stay absent from the client — this is read-only, like the rest of it.
+
 ## [0.13.0] - 2026-09-02
 
 ### Added

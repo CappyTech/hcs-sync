@@ -192,6 +192,30 @@ export const SHAPE_ENDPOINTS = {
     list: (kf) => kf.vatSettings.get(),
     listPath: '/vat/settings',
   },
+  // Bulk payments have no list endpoint, and Create is a write we must never
+  // call, so the record shape is sampled from BulkPayment_Get. A bulk payment
+  // number only exists on a purchase settled by one, so resolve it from a
+  // purchase's PaymentLines — fetching detail for up to 25 paid candidates —
+  // then GET that one payment. Returns [] until a bulk payment exists to sample.
+  bulkPayments: {
+    list: async (kf) => {
+      const purchases = await kf.purchases.list({ perpage: 100 });
+      const paid = (purchases || []).filter((p) => (p?.TotalPaidAmount ?? 0) > 0).slice(0, 25);
+      for (const p of paid) {
+        if (p?.Number == null) continue;
+        const detail = await kf.purchases.get(p.Number);
+        const num = (detail?.PaymentLines || [])
+          .map((l) => l?.BulkPaymentNumber)
+          .find((n) => n != null);
+        if (num != null) {
+          const bp = await kf.bulkPayments.get('purchases', num);
+          if (bp) return bp;
+        }
+      }
+      return [];
+    },
+    listPath: '/purchases/bulk/payments/{number}',
+  },
   // Notes are scoped to an object, so there is no top-level collection. Sample
   // the first purchase that actually carries notes — most carry none, and an
   // empty sample shapes nothing. Bounded to 25 purchases to cap the fan-out.
