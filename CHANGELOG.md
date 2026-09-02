@@ -2,6 +2,15 @@
 
 All notable changes to hcs-sync will be documented here. Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [0.12.0] - 2026-09-02
+
+### Added
+- **The debug page's Response Shapes sampler now reaches every list-able KashFlow endpoint the client supports.** It offered ten entities while the client exposes twenty, so half the API surface could not be sampled to feed hcs-app's `apiDocsConfig.js`. Added `bankTransactions`, `journals`, `products`, `purchaseOrders`, `vatReturns`, `currencies`, `quoteCategories`, `purchaseOrderCategories`, `countries` and `accountingPeriods` to `SHAPE_ENDPOINTS` — the single map the debug dropdown, the `POST /debug/shape` route and the `npm run shapes` CLI all read, so no other wiring changes.
+
+  `bankTransactions` mirrors the existing account-scoped `bankReconciliations` entry: the list resolves the first bank account that actually has rows (an empty sample shapes nothing), and the detail fetch recovers the account id the same way, since it is absent from the payload. The four list-only reference collections carry no detail fetch.
+
+  Two things stay out on purpose. `notes` is not a top-level collection — it needs an `objectType`/`objectNumber` context — so it does not fit the sample-a-list model. The reconciliation and transaction *mutation* endpoints remain absent from the client entirely (some DELETE the source bank transaction on success); this change only samples reads.
+
 ## [0.11.4] - 2026-08-18
 
 The 0.11.3 fix covered bank transactions, which are fetched per account and are allowed to fail one account at a time. But every *other* list is fetched through `listOrEmpty`, which catches a failure and returns `[]` — indistinguishable from KashFlow genuinely holding nothing. On 2026-08-18 the 06:07 cron posted `bankAccounts 9 → 0 (-9)`, `bankReconciliations 1 → 0 (-1)` and `vatReturns 40 → 0 (-40)`, then restored them at 08:06 and 09:05. Nothing was deleted at any point: `upsertSimpleList` no-ops on empty rows, and only bank transactions have a sweep. The three list fetches had simply failed and recovered.

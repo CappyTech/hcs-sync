@@ -72,6 +72,35 @@ export const SHAPE_ENDPOINTS = {
     detailPath: '/bankaccounts/{id}',
     listPath: '/bankaccounts',
   },
+  // Transactions are scoped under an account (like reconciliations below), so
+  // the list resolves the first account that actually has rows.
+  bankTransactions: {
+    list: async (kf) => {
+      const accounts = await kf.bankAccounts.list();
+      for (const account of accounts || []) {
+        if (account?.Id == null) continue;
+        const rows = await kf.bankTransactions.list(account.Id, { perpage: 50 });
+        if (rows?.length) return rows;
+      }
+      return [];
+    },
+    detail: async (kf, items) => {
+      const first = (items || []).find((r) => r?.Id != null);
+      if (!first) return undefined;
+      // AccountId is not in the payload; recover it the same way the list did.
+      const accounts = await kf.bankAccounts.list();
+      for (const account of accounts || []) {
+        if (account?.Id == null) continue;
+        const rows = await kf.bankTransactions.list(account.Id, { perpage: 50 });
+        if ((rows || []).some((r) => r?.Id === first.Id)) {
+          return kf.bankTransactions.get(account.Id, first.Id);
+        }
+      }
+      return undefined;
+    },
+    detailPath: '/bankaccounts/{bankaccountId}/transactions/{transactionId}',
+    listPath: '/bankaccounts/{bankaccountId}/transactions',
+  },
   // Reconciliations are scoped under an account, so the list resolves an
   // account first. Preference goes to an account that actually has
   // reconciliations — most here have none, and an empty sample shapes nothing.
@@ -101,6 +130,53 @@ export const SHAPE_ENDPOINTS = {
     },
     detailPath: '/bankaccounts/{bankaccountId}/reconciliations/{reconciliationId}',
     listPath: '/bankaccounts/{bankaccountId}/reconciliations',
+  },
+  journals: {
+    list: (kf) => kf.journals.list({ perpage: 50 }),
+    detail: (kf, items) => firstKey(items, 'Number') && kf.journals.get(firstKey(items, 'Number')),
+    detailPath: '/journals/{number}',
+    listPath: '/journals',
+  },
+  products: {
+    list: (kf) => kf.products.list({ perpage: 50 }),
+    detail: (kf, items) => firstKey(items, 'Id') && kf.products.get(firstKey(items, 'Id')),
+    detailPath: '/products/{id}',
+    listPath: '/products',
+  },
+  purchaseOrders: {
+    list: (kf) => kf.purchaseOrders.list({ perpage: 50 }),
+    detail: (kf, items) => firstKey(items, 'Number') && kf.purchaseOrders.get(firstKey(items, 'Number')),
+    detailPath: '/purchaseorders/{number}',
+    listPath: '/purchaseorders',
+  },
+  vatReturns: {
+    list: (kf) => kf.vatReturns.list(),
+    detail: (kf, items) => firstKey(items, 'Id') && kf.vatReturns.get(firstKey(items, 'Id')),
+    detailPath: '/vatreturns/{id}',
+    listPath: '/vatreturns',
+  },
+  currencies: {
+    list: (kf) => kf.currencies.list(),
+    detail: (kf, items) => firstKey(items, 'Id') && kf.currencies.get(firstKey(items, 'Id')),
+    detailPath: '/currencies/{id}',
+    listPath: '/currencies',
+  },
+  // List-only reference collections (no per-item detail endpoint we sync).
+  quoteCategories: {
+    list: (kf) => kf.quoteCategories.list(),
+    listPath: '/quotecategories',
+  },
+  purchaseOrderCategories: {
+    list: (kf) => kf.purchaseOrderCategories.list(),
+    listPath: '/purchaseordercategories',
+  },
+  countries: {
+    list: (kf) => kf.countries.list(),
+    listPath: '/countries',
+  },
+  accountingPeriods: {
+    list: (kf) => kf.accountingPeriods.list(),
+    listPath: '/accountingperiods',
   },
 };
 
