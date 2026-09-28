@@ -1,7 +1,7 @@
 # Copilot instructions (hcs-sync)
 
 ## Big picture
-- Node.js 20 + ESM project (`"type": "module"`): use `import`/`export` and include `.js` in relative imports.
+- Node.js 24 + ESM project (`"type": "module"`): use `import`/`export` and include `.js` in relative imports.
 - Express “admin dashboard” + sync runner:
   - Server entrypoint: `src/server/index.js` (Express + EJS views + static assets).
   - Sync runner: `src/sync/run.js` (fetches KashFlow resources and reports progress).

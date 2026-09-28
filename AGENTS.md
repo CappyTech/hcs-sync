@@ -10,7 +10,7 @@ hcs-sync is a dedicated **KashFlow accounting data sync service** for **Heron Co
 
 ## Repository Guidelines
 
-- Use Node.js 20.
+- Use Node.js 24.
 - Install dependencies with `npm install`.
 - Run `npm run lint` (ESLint) and `npm test` (Vitest) before committing.
 - Ensure `git status` reports a clean working tree before you finish.

@@ -2,7 +2,7 @@ import { connectMongoose, isMongooseEnabled } from '../db/mongoose.js';
 import Run from './models/Run.js';
 
 function newId() {
-  // Node 20 has global crypto.randomUUID().
+  // Node 24 has global crypto.randomUUID().
   return globalThis.crypto?.randomUUID?.() || `${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
 }
 

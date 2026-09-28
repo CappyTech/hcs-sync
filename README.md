@@ -26,7 +26,7 @@ It runs at `sync.heroncs.co.uk` and is deliberately **KashFlow-specific and repl
 
 | Layer | Technology |
 |-------|------------|
-| Runtime | Node.js 20+ **ESM** (built & run on Node 24 in Docker) |
+| Runtime | Node.js 24+ **ESM** |
 | Web framework | Express 4 |
 | Views | EJS + Tailwind CSS 3 (built locally to `src/server/public/styles.css`) |
 | Database | MongoDB — accessed via both the native `mongodb` driver and Mongoose 8 (writes to the shared **REST namespace**) |
@@ -175,7 +175,7 @@ Each capability from three angles: **Dev** (how it's built), **User** (what an a
 
 ## Development Deployment
 
-Requires **Node.js 20+**. MongoDB is optional (without it, sync runs fetch-only).
+Requires **Node.js 24+**. MongoDB is optional (without it, sync runs fetch-only).
 
 ```bash
 cp .env.example .env        # configure KashFlow creds, Mongo, SSO, Turnstile
