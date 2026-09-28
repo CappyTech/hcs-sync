@@ -28,18 +28,24 @@ import {
   pickNumber,
   pickId,
   isMissingKey,
-  toDate,
-  computeCisTaxPeriod,
-  buildUpsertUpdate,
   createPool,
-  createBulkUpserter,
-  preparePurchaseForUpsert,
   createSkipCounter,
   addMongoStats,
-  sweepMissingBankTransactions,
   carryForwardFailedCounts,
-  SUPPLIER_PROTECTED_FIELDS,
 } from '../src/sync/run.js';
+import {
+  buildUpsertUpdate,
+  createBulkUpserter,
+  sweepMissingBankTransactions,
+} from '../src/sync/upsert.js';
+import {
+  Supplier,
+  toDate,
+  computeCisTaxPeriod,
+  preparePurchaseForUpsert,
+} from '../src/server/models/kashflow.js';
+
+const SUPPLIER_PROTECTED_FIELDS = Supplier.syncConfig.protectedFields;
 
 // ── pickCode ──
 

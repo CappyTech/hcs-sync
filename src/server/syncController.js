@@ -181,7 +181,7 @@ export async function triggerSync({ requestedBy }) {
       // this run, before lastCounts feeds change recording, Discord and history.
       // Otherwise a transient fetch failure reads as a drop to zero (and its
       // recovery as a spurious jump back) — see carryForwardFailedCounts.
-      const prevCounts = result?.previousCounts ?? countsBeforeRun ?? lastCounts;
+      const prevCounts = countsBeforeRun ?? lastCounts;
       lastCounts = result && result.counts
         ? carryForwardFailedCounts(prevCounts, result.counts, result.failedFetches || [])
         : lastCounts;
@@ -191,7 +191,7 @@ export async function triggerSync({ requestedBy }) {
       // Record what changed (count deltas and in-place modifications) as
       // informational changes.
       try {
-        const prev = result?.previousCounts ?? countsBeforeRun;
+        const prev = countsBeforeRun;
         const curr = lastCounts || {};
         summariseRunChanges(prev, curr, result?.mongo).forEach((c) => {
           const reasons = [];
@@ -227,7 +227,7 @@ export async function triggerSync({ requestedBy }) {
         recordRunLog('success', 'Sync completed successfully', { counts: lastCounts });
       }
 
-      notifyRunCompleted({ result, prevCounts: result?.previousCounts ?? countsBeforeRun, counts: lastCounts, requestedBy });
+      notifyRunCompleted({ result, prevCounts: countsBeforeRun, counts: lastCounts, requestedBy });
 
       return result;
     })

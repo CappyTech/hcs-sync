@@ -2,7 +2,7 @@ import logger from '../util/logger.js';
 import createClient from '../kashflow/client.js';
 import { connectMongoose, isMongooseEnabled } from '../db/mongoose.js';
 import { SYNCED_ENTITIES, pullTypeOf } from './entities.js';
-import { buildUpsertUpdate } from './run.js';
+import { buildUpsertUpdate, applyDetailSyncedAt } from './upsert.js';
 
 export { ENTITY_CONFIG };
 
@@ -53,11 +53,6 @@ export async function pullSingleEntity(entityType, entityId) {
     throw new Error(`KashFlow returned no data for ${entityType} ${entityId}`);
   }
 
-  // Apply model transform if one exists (e.g. preparePurchaseForUpsert)
-  if (model.syncConfig?.transform) {
-    model.syncConfig.transform(full);
-  }
-
   const id = full[keyField] ?? full.Id ?? full.id;
   if (id == null) {
     throw new Error(`Response missing key field "${keyField}"`);
@@ -66,7 +61,10 @@ export async function pullSingleEntity(entityType, entityId) {
   // Read existing document for comparison
   const existing = await model.findOne({ [keyField]: id }).lean();
 
-  // Build and execute upsert
+  // Built exactly as the full sync builds it: buildUpsertUpdate applies the
+  // model's syncConfig.transform and clears the legacy deletedAt flag (KashFlow
+  // just returned this entity, so it demonstrably exists). Unlike the full
+  // sync, a pull always stamps detailSyncedAt — see applyDetailSyncedAt.
   const now = new Date();
   const update = buildUpsertUpdate({
     keyField,
@@ -74,13 +72,7 @@ export async function pullSingleEntity(entityType, entityId) {
     payload: full,
     model,
   });
-  update[0].$set.detailSyncedAt = { $literal: now };
-  update._rawSet.detailSyncedAt = now;
-  // KashFlow just returned this entity, so it demonstrably exists — clear any
-  // legacy soft-delete flag (nothing in the current sync ever clears it, and
-  // downstream apps filter on deletedAt: null).
-  update[0].$set.deletedAt = { $literal: null };
-  update._rawSet.deletedAt = null;
+  applyDetailSyncedAt(update, now, { onlyIfChanged: false });
 
   // Use native MongoDB driver — Mongoose 8's bulkWrite casting silently
   // drops complex array sub-documents (LineItems, PaymentLines) during cast.
