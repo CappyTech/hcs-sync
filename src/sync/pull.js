@@ -1,29 +1,28 @@
 import logger from '../util/logger.js';
 import createClient from '../kashflow/client.js';
 import { connectMongoose, isMongooseEnabled } from '../db/mongoose.js';
-import {
-  Customer, Supplier, Invoice, Quote, Purchase, Project,
-  Journal, Product, PurchaseOrder, VatReturn,
-} from '../server/models/kashflow.js';
+import { SYNCED_ENTITIES, pullTypeOf } from './entities.js';
 import { buildUpsertUpdate } from './run.js';
 
 export { ENTITY_CONFIG };
 
 /**
- * Map of entity types to their model, client method, and key config.
+ * Pullable entity types, keyed by their /api/pull type (see pullTypeOf).
+ *
+ * Derived from each model's syncConfig: an entity is pullable when it declares
+ * a lookupField. The client resource shares the entity's summaryKey
+ * (kf.purchaseOrders, kf.vatReturns, ...).
  */
-const ENTITY_CONFIG = {
-  purchase:  { model: Purchase,  getMethod: 'purchases',  keyField: 'Id', lookupField: 'Number' },
-  invoice:   { model: Invoice,   getMethod: 'invoices',   keyField: 'Id', lookupField: 'Number' },
-  quote:     { model: Quote,     getMethod: 'quotes',     keyField: 'Id', lookupField: 'Number' },
-  customer:  { model: Customer,  getMethod: 'customers',  keyField: 'Id', lookupField: 'Code'   },
-  supplier:  { model: Supplier,  getMethod: 'suppliers',  keyField: 'Id', lookupField: 'Code'   },
-  project:   { model: Project,   getMethod: 'projects',   keyField: 'Id', lookupField: 'Number' },
-  journal:   { model: Journal,   getMethod: 'journals',   keyField: 'Id', lookupField: 'Number' },
-  product:   { model: Product,   getMethod: 'products',   keyField: 'Id', lookupField: 'Code'   },
-  purchaseorder: { model: PurchaseOrder, getMethod: 'purchaseOrders', keyField: 'Id', lookupField: 'Number' },
-  vatreturn: { model: VatReturn, getMethod: 'vatReturns', keyField: 'Id', lookupField: 'Id'     },
-};
+const ENTITY_CONFIG = Object.fromEntries(
+  SYNCED_ENTITIES
+    .filter((e) => e.lookupField)
+    .map((e) => [pullTypeOf(e.summaryKey), {
+      model: e.model,
+      getMethod: e.summaryKey,
+      keyField: e.model.syncConfig.keyField,
+      lookupField: e.lookupField,
+    }]),
+);
 
 /**
  * Fetch and upsert a single entity from KashFlow by its Number (or Code).

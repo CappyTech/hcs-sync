@@ -6,8 +6,9 @@ import config from '../config.js';
 import progress from '../server/progress.js';
 import { connectMongoose, isMongooseEnabled } from '../db/mongoose.js';
 import { ensureKashflowIndexes } from '../db/mongo.js';
-import { Customer, Supplier, Invoice, Quote, Purchase, Project, Nominal, VATRate, BankAccount, BankTransaction, BankReconciliation, Journal, Product, PurchaseOrder, QuoteCategory, PurchaseOrderCategory, Currency, Country, AccountingPeriod, VatReturn, SYNC_INTERNAL_FIELDS, toDate, computeCisTaxPeriod, preparePurchaseForUpsert } from '../server/models/kashflow.js';
+import { Customer, Supplier, Invoice, Quote, Purchase, Project, Nominal, VATRate, BankAccount, BankTransaction, BankReconciliation, SYNC_INTERNAL_FIELDS, toDate, computeCisTaxPeriod, preparePurchaseForUpsert } from '../server/models/kashflow.js';
 import deepDiff, { stableStringify } from '../util/deepDiff.js';
+import { describeEntity, LIST_ONLY_MODELS } from './entities.js';
 
 function computePayloadHash(data) {
   return crypto.createHash('sha256').update(stableStringify(data)).digest('hex').slice(0, 16);
@@ -632,15 +633,19 @@ async function fetchLists(kf, failedFetches) {
 
 /**
  * Generic list upsert for entities with no detail phase. The key is picked per
- * row — by default the first of `keyFields` present (e.g. Id, then Code).
+ * row — by default the first present of the model's keyField and
+ * fallbackKeyFields (e.g. Id, then Code). The run-summary key and audit
+ * collection come from the model's syncConfig.
  *
  * `scope`, when given, is merged into every filter, making the effective key
  * the composite (scope..., keyField). Bank transactions need this: KashFlow
  * returns an internal transfer in both accounts' feeds, so the key has to be
  * per-account or the two halves overwrite each other.
  */
-async function upsertSimpleList(ctx, { model, rows, summaryKey, collectionName, keyFields, pickKey = firstPresentKey(keyFields), scope, label }) {
+async function upsertSimpleList(ctx, { model, rows, pickKey, scope, label }) {
   if (!rows?.length) return;
+  const { summaryKey, collectionName, keyFields } = describeEntity(model);
+  pickKey ??= firstPresentKey(keyFields);
   const up = createBulkUpserter(model, { captureUpserts: true, audit: ctx.auditOpts(collectionName) });
   const skip = createSkipCounter();
   for (const row of rows) {
@@ -657,19 +662,6 @@ async function upsertSimpleList(ctx, { model, rows, summaryKey, collectionName, 
     ctx.emitLog('warn', `Skipped ${summaryKey} upserts with missing key`, { count: skip.getMissingKey() });
   }
 }
-
-// Entities whose list payload is all there is — no detail phase.
-const LIST_ONLY_ENTITIES = [
-  { model: Journal,               summaryKey: 'journals',                collectionName: 'journals',                keyFields: ['Id', 'Number'] },
-  { model: Product,               summaryKey: 'products',                collectionName: 'products',                keyFields: ['Id', 'Code'] },
-  { model: PurchaseOrder,         summaryKey: 'purchaseOrders',          collectionName: 'purchaseorders',          keyFields: ['Id', 'Number'] },
-  { model: QuoteCategory,         summaryKey: 'quoteCategories',         collectionName: 'quotecategories',         keyFields: ['Number'] },
-  { model: PurchaseOrderCategory, summaryKey: 'purchaseOrderCategories', collectionName: 'purchaseordercategories', keyFields: ['Number'] },
-  { model: Currency,              summaryKey: 'currencies',              collectionName: 'currencies',              keyFields: ['Id', 'Code'] },
-  { model: Country,               summaryKey: 'countries',               collectionName: 'countries',               keyFields: ['Id', 'Code'] },
-  { model: AccountingPeriod,      summaryKey: 'accountingPeriods',       collectionName: 'accountingperiods',       keyFields: ['Id'] },
-  { model: VatReturn,             summaryKey: 'vatReturns',              collectionName: 'vatreturns',              keyFields: ['Id'] },
-];
 
 /** KashFlow returns VATRate as a string; store it as a number and stamp the country. */
 function normaliseVatRate(row) {
@@ -692,10 +684,10 @@ async function upsertListPhase(ctx, lists) {
     .filter((row) => typeof row === 'object' && row != null)
     .map(normaliseVatRate);
   await Promise.all([
-    ...LIST_ONLY_ENTITIES.map((spec) => upsertSimpleList(ctx, { ...spec, rows: lists[spec.summaryKey] })),
-    upsertSimpleList(ctx, { model: Nominal, rows: lists.nominals, summaryKey: 'nominals', collectionName: 'nominals', pickKey: pickIdOrCode, label: 'nominals list' }),
-    upsertSimpleList(ctx, { model: VATRate, rows: vatRateRows, summaryKey: 'vatRates', collectionName: 'vatrates', keyFields: ['VATId'] }),
-    upsertSimpleList(ctx, { model: BankAccount, rows: lists.bankAccounts, summaryKey: 'bankAccounts', collectionName: 'bankaccounts', pickKey: pickIdOrCode }),
+    ...LIST_ONLY_MODELS.map((model) => upsertSimpleList(ctx, { model, rows: lists[model.syncConfig.summaryKey] })),
+    upsertSimpleList(ctx, { model: Nominal, rows: lists.nominals, pickKey: pickIdOrCode, label: 'nominals list' }),
+    upsertSimpleList(ctx, { model: VATRate, rows: vatRateRows }),
+    upsertSimpleList(ctx, { model: BankAccount, rows: lists.bankAccounts, pickKey: pickIdOrCode }),
   ]);
 }
 
@@ -740,7 +732,7 @@ async function syncBankTransactions(ctx, kf, bankAccounts) {
       for (const t of txs) {
         if (t && typeof t === 'object' && !Array.isArray(t)) t.AccountId = accountId;
       }
-      await upsertSimpleList(ctx, { model: BankTransaction, rows: txs, summaryKey: 'bankTransactions', collectionName: 'banktransactions', keyFields: ['Id'], scope: { AccountId: accountId } });
+      await upsertSimpleList(ctx, { model: BankTransaction, rows: txs, scope: { AccountId: accountId } });
 
       // Soft-delete anything KashFlow no longer returns for this account.
       // Reached only after a successful, non-empty fetch — see
@@ -816,7 +808,7 @@ async function syncBankReconciliations(ctx, kf, bankAccounts) {
       if (!rows.length) continue;
 
       total += rows.length;
-      await upsertSimpleList(ctx, { model: BankReconciliation, rows, summaryKey: 'bankReconciliations', collectionName: 'bankreconciliations', keyFields: ['ReconKey'] });
+      await upsertSimpleList(ctx, { model: BankReconciliation, rows });
     } catch (e) {
       // Best-effort, matching the bank-transaction loop: a failing account is
       // logged and skipped so it never breaks the run.
@@ -842,7 +834,7 @@ const capitalise = (s) => s.charAt(0).toUpperCase() + s.slice(1);
  * Fetch each item's full detail from KashFlow and upsert it.
  *
  * @param {object} opts
- * @param {string} opts.summaryKey   run-summary / progress key, e.g. 'invoices'
+ * @param {import('mongoose').Model} opts.model  its syncConfig names the run-summary key
  * @param {string} opts.noun         singular, for log lines, e.g. 'invoice'
  * @param {Array}  opts.items        what fetchDetail is called with
  * @param {(item) => Promise<object>} opts.fetchDetail
@@ -854,13 +846,14 @@ const capitalise = (s) => s.charAt(0).toUpperCase() + s.slice(1);
  * @param {string} [opts.progressLogLabel]  when set, logs progress every 5%
  */
 async function upsertDetails(ctx, {
-  model, summaryKey, collectionName, noun, items, concurrency,
+  model, noun, items, concurrency,
   fetchDetail, resolveKey, prepare,
   stampDetailSyncedAt = false,
   tolerateErrors = true,
   logContext = (item) => ({ item }),
   progressLogLabel,
 }) {
+  const { summaryKey, collectionName } = describeEntity(model);
   progress.setItemTotal(summaryKey, items.length);
   progress.setItemDone(summaryKey, 0);
   const upserter = createBulkUpserter(model, { captureUpserts: true, audit: ctx.auditOpts(collectionName) });
@@ -914,7 +907,7 @@ async function upsertDetails(ctx, {
  * progress bar is simply marked complete.
  */
 async function syncParentDetails(ctx, { mongoEnabled, keys, skippedTotal = keys.length, ...opts }) {
-  const { summaryKey } = opts;
+  const { summaryKey } = describeEntity(opts.model);
   if (!mongoEnabled || keys.length === 0) {
     progress.setItemTotal(summaryKey, skippedTotal);
     progress.setItemDone(summaryKey, skippedTotal);
@@ -962,9 +955,10 @@ async function listPerParent(ctx, { summaryKey, parent, parentCodes, parentsTota
  * @returns {Promise<number>} documents listed
  */
 async function syncDocuments(ctx, {
-  mongoEnabled, model, summaryKey, collectionName, noun,
+  mongoEnabled, model, noun,
   parent, parentCodes, parentsTotal, listFn, getFn, prepare, onListed,
 }) {
+  const { summaryKey } = describeEntity(model);
   const listed = await listPerParent(ctx, { summaryKey, parent, parentCodes, parentsTotal, listFn });
   if (onListed) onListed(listed);
   const { total, entries, skippedMissingId } = listed;
@@ -975,7 +969,7 @@ async function syncDocuments(ctx, {
     logger.info({ count: entries.length, concurrency: detailConcurrency }, `Starting ${noun} detail fanout`);
     ctx.emitLog('info', `Starting ${noun} detail fanout`, { count: entries.length, concurrency: detailConcurrency });
     await upsertDetails(ctx, {
-      model, summaryKey, collectionName, noun,
+      model, noun,
       items: entries,
       concurrency: detailConcurrency,
       fetchDetail: ({ number }) => getFn(number),
@@ -1010,7 +1004,7 @@ async function syncPurchases(ctx, kf, { mongoEnabled, suppliers, supplierCodes }
   let listedWithNumber = 0;
 
   const total = await syncDocuments(ctx, {
-    mongoEnabled, model: Purchase, summaryKey: 'purchases', collectionName: 'purchases', noun: 'purchase',
+    mongoEnabled, model: Purchase, noun: 'purchase',
     parent: 'supplier', parentCodes: supplierCodes, parentsTotal: (suppliers || []).length,
     listFn: (code) => kf.purchases.listAll({ perpage: 200, supplierCode: code }),
     getFn: (number) => kf.purchases.get(number),
@@ -1057,20 +1051,20 @@ async function runDetailPhases(ctx, kf, { mongoEnabled, lists, customerCodes, su
 
   const [, , , invoicesTotal, quotesTotal, purchasesTotal] = await Promise.all([
     syncParentDetails(ctx, {
-      mongoEnabled, keys: customerCodes, model: Customer, summaryKey: 'customers', collectionName: 'customers', noun: 'customer',
+      mongoEnabled, keys: customerCodes, model: Customer, noun: 'customer',
       concurrency, tolerateErrors: false, logContext: (code) => ({ customerCode: code }),
       fetchDetail: (code) => kf.customers.get(code),
       resolveKey: (full) => { const id = pickId(full); return id == null ? null : { keyField: 'Id', keyValue: id }; },
     }),
     syncParentDetails(ctx, {
-      mongoEnabled, keys: supplierCodes, model: Supplier, summaryKey: 'suppliers', collectionName: 'suppliers', noun: 'supplier',
+      mongoEnabled, keys: supplierCodes, model: Supplier, noun: 'supplier',
       concurrency, tolerateErrors: false, logContext: (code) => ({ supplierCode: code }),
       fetchDetail: (code) => kf.suppliers.get(code),
       resolveKey: (full) => { const id = pickId(full); return id == null ? null : { keyField: 'Id', keyValue: id }; },
     }),
     syncParentDetails(ctx, {
       mongoEnabled, keys: projectNumbers, skippedTotal: (projects || []).length,
-      model: Project, summaryKey: 'projects', collectionName: 'projects', noun: 'project',
+      model: Project, noun: 'project',
       concurrency: detailConcurrency, logContext: (number) => ({ projectNumber: number }),
       fetchDetail: (number) => kf.projects.get(number),
       resolveKey: (full, number) => {
@@ -1079,13 +1073,13 @@ async function runDetailPhases(ctx, kf, { mongoEnabled, lists, customerCodes, su
       },
     }).then(() => logger.info({ projectsCount: projects?.length || 0 }, 'Fetched projects')),
     syncDocuments(ctx, {
-      mongoEnabled, model: Invoice, summaryKey: 'invoices', collectionName: 'invoices', noun: 'invoice',
+      mongoEnabled, model: Invoice, noun: 'invoice',
       parent: 'customer', parentCodes: customerCodes, parentsTotal: (customers || []).length,
       listFn: (code) => kf.invoices.listAll({ perpage: 200, customerCode: code }),
       getFn: (number) => kf.invoices.get(number),
     }),
     syncDocuments(ctx, {
-      mongoEnabled, model: Quote, summaryKey: 'quotes', collectionName: 'quotes', noun: 'quote',
+      mongoEnabled, model: Quote, noun: 'quote',
       parent: 'customer', parentCodes: customerCodes, parentsTotal: (customers || []).length,
       listFn: (code) => kf.quotes.listAll({ perpage: 200, customerCode: code }),
       getFn: (number) => kf.quotes.get(number),

@@ -691,6 +691,72 @@ describe('Express server routes', () => {
     });
   });
 
+  // ── GET /history/:id collection drilldown and audit filter ─────────────
+
+  describe('GET /history/:id collection names', () => {
+    // The run page links drilldowns by run-summary key ('vatRates') and audit
+    // filters by Mongo collection name ('vatrates'). Both must resolve to the
+    // real collection; a single hand-kept allowlist conflated the two.
+    async function fetchRunPage(query) {
+      const { isMongoEnabled, getMongoDb } = await import('../src/db/mongo.js');
+      const runStoreMock = (await import('../src/server/runStore.js')).default;
+      const queried = [];
+      const fakeCursor = (docs) => ({
+        sort: () => fakeCursor(docs),
+        limit: () => fakeCursor(docs),
+        toArray: async () => docs,
+      });
+      isMongoEnabled.mockReturnValue(true);
+      getMongoDb.mockResolvedValue({
+        collection: (name) => ({
+          find: (filter) => {
+            queried.push({ name, filter });
+            return fakeCursor(name === 'audit_log' ? [] : [{ VATId: 1 }]);
+          },
+        }),
+      });
+      runStoreMock.getRun.mockResolvedValueOnce({
+        id: 'run-9', status: 'finished', startedAt: new Date().toISOString(), changes: [], logs: [],
+        summary: {
+          mongo: { vatRates: { upserted: 1 } },
+          mongoUpserts: { vatRates: { filters: [{ VATId: 1 }] } },
+        },
+      });
+      try {
+        const res = await supertest(app)
+          .get(`/history/run-9?${query}`)
+          .set('Cookie', `hcs_sso=${makeSsoToken()}`);
+        return { res, queried };
+      } finally {
+        isMongoEnabled.mockReturnValue(false);
+      }
+    }
+
+    it('drills into a camelCase summary key via its real collection', async () => {
+      const { res, queried } = await fetchRunPage('mongoCollection=vatRates&mongoType=upserted');
+      expect(res.status).toBe(200);
+      const docsQuery = queried.find((q) => q.name !== 'audit_log');
+      expect(docsQuery).toEqual({ name: 'vatrates', filter: { $or: [{ VATId: 1 }] } });
+    });
+
+    it('accepts collections beyond the original eight', async () => {
+      const { queried } = await fetchRunPage('mongoCollection=bankTransactions&mongoType=upserted');
+      expect(queried.map((q) => q.name)).toContain('banktransactions');
+    });
+
+    it('filters the audit trail by Mongo collection name', async () => {
+      const { queried } = await fetchRunPage('auditCollection=vatrates');
+      expect(queried.find((q) => q.name === 'audit_log').filter).toEqual({ runId: 'run-9', collection: 'vatrates' });
+    });
+
+    it('rejects names that are not synced collections', async () => {
+      const { queried } = await fetchRunPage('mongoCollection=users&mongoType=upserted&auditCollection=users');
+      // No document query at all, and the audit filter falls back to "all".
+      expect(queried.map((q) => q.name)).toEqual(['audit_log']);
+      expect(queried[0].filter).toEqual({ runId: 'run-9' });
+    });
+  });
+
   // ── POST /dedup success (Mongo enabled) ────────────────────────────────
 
   describe('POST /dedup success', () => {

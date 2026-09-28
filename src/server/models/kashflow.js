@@ -7,6 +7,21 @@ import schemas from '@cappytech/hcs-schemas';
  * Each schema extends the shared field definitions with sync-specific metadata
  * (syncedAt, createdByRunId), uses strict: false so undeclared KashFlow fields
  * are still persisted, and adds syncConfig statics for the sync engine.
+ *
+ * syncConfig is the one place an entity's sync metadata is declared; the sync
+ * engine (src/sync/entities.js), the manual pull and the history page all
+ * derive from it:
+ *
+ *   summaryKey        key in run counts, the Mongo write summary and Discord
+ *                     (the collection name comes from the model itself)
+ *   keyField          upsert key; fallbackKeyFields are tried in order when a
+ *                     row lacks it
+ *   listOnly          the list payload is all there is — no detail phase
+ *   lookupField       what KashFlow's detail endpoint is addressed by; its
+ *                     presence makes the entity pullable on demand
+ *   protectedFields   never overwritten by a sync
+ *   volatileFields    kept out of the content hash (see buildUpsertUpdate)
+ *   transform         normalises a payload before upsert
  */
 
 const { uuidField } = schemas;
@@ -47,7 +62,9 @@ function buildSchema(entity, extraFields = {}, schemaOpts = {}) {
 const CustomerSchema = buildSchema(schemas.customer);
 
 CustomerSchema.statics.syncConfig = {
+  summaryKey: 'customers',
   keyField: 'Id',
+  lookupField: 'Code',
   protectedFields: [],
 };
 
@@ -59,7 +76,9 @@ export const Customer =
 const SupplierSchema = buildSchema(schemas.supplier);
 
 SupplierSchema.statics.syncConfig = {
+  summaryKey: 'suppliers',
   keyField: 'Id',
+  lookupField: 'Code',
   protectedFields: ['Subcontractor', 'IsSubcontractor', 'CISRate', 'CISNumber'],
 };
 
@@ -113,7 +132,9 @@ export function prepareInvoiceForUpsert(item) {
 }
 
 InvoiceSchema.statics.syncConfig = {
+  summaryKey: 'invoices',
   keyField: 'Id',
+  lookupField: 'Number',
   protectedFields: [],
   transform: prepareInvoiceForUpsert,
 };
@@ -126,7 +147,9 @@ export const Invoice =
 const QuoteSchema = buildSchema(schemas.quote);
 
 QuoteSchema.statics.syncConfig = {
+  summaryKey: 'quotes',
   keyField: 'Id',
+  lookupField: 'Number',
   protectedFields: [],
 };
 
@@ -237,7 +260,9 @@ export function preparePurchaseForUpsert(item) {
 }
 
 PurchaseSchema.statics.syncConfig = {
+  summaryKey: 'purchases',
   keyField: 'Id',
+  lookupField: 'Number',
   protectedFields: ['SubmissionDate'],
   transform: preparePurchaseForUpsert,
 };
@@ -253,7 +278,9 @@ const ProjectSchema = buildSchema(schemas.project, {
 });
 
 ProjectSchema.statics.syncConfig = {
+  summaryKey: 'projects',
   keyField: 'Id',
+  lookupField: 'Number',
   fallbackKeyField: 'Number',
   protectedFields: [],
 };
@@ -266,6 +293,7 @@ export const Project =
 const NominalSchema = buildSchema(schemas.nominal);
 
 NominalSchema.statics.syncConfig = {
+  summaryKey: 'nominals',
   keyField: 'Id',
   fallbackKeyField: 'Code',
   protectedFields: [],
@@ -286,6 +314,7 @@ export const Note =
 const VATRateSchema = buildSchema(schemas.vatRate);
 
 VATRateSchema.statics.syncConfig = {
+  summaryKey: 'vatRates',
   keyField: 'VATId',
   protectedFields: [],
 };
@@ -298,6 +327,7 @@ export const VATRate =
 const BankAccountSchema = buildSchema(schemas.bankAccount);
 
 BankAccountSchema.statics.syncConfig = {
+  summaryKey: 'bankAccounts',
   keyField: 'Id',
   fallbackKeyField: 'Code',
   protectedFields: [],
@@ -333,6 +363,7 @@ export function prepareBankTransactionForUpsert(item) {
 }
 
 BankTransactionSchema.statics.syncConfig = {
+  summaryKey: 'bankTransactions',
   keyField: 'Id',
   protectedFields: [],
   transform: prepareBankTransactionForUpsert,
@@ -394,6 +425,7 @@ export function prepareBankReconciliationForUpsert(item) {
 
 if (BankReconciliationSchema) {
   BankReconciliationSchema.statics.syncConfig = {
+    summaryKey: 'bankReconciliations',
     keyField: 'ReconKey',
     protectedFields: [],
     transform: prepareBankReconciliationForUpsert,
@@ -410,7 +442,11 @@ export const BankReconciliation = BankReconciliationSchema
 const JournalSchema = buildSchema(schemas.journal);
 
 JournalSchema.statics.syncConfig = {
+  summaryKey: 'journals',
   keyField: 'Id',
+  fallbackKeyFields: ['Number'],
+  listOnly: true,
+  lookupField: 'Number',
   fallbackKeyField: 'Number',
   protectedFields: [],
 };
@@ -423,7 +459,11 @@ export const Journal =
 const ProductSchema = buildSchema(schemas.product);
 
 ProductSchema.statics.syncConfig = {
+  summaryKey: 'products',
   keyField: 'Id',
+  fallbackKeyFields: ['Code'],
+  listOnly: true,
+  lookupField: 'Code',
   fallbackKeyField: 'Code',
   protectedFields: [],
 };
@@ -436,7 +476,11 @@ export const Product =
 const PurchaseOrderSchema = buildSchema(schemas.purchaseOrder);
 
 PurchaseOrderSchema.statics.syncConfig = {
+  summaryKey: 'purchaseOrders',
   keyField: 'Id',
+  fallbackKeyFields: ['Number'],
+  listOnly: true,
+  lookupField: 'Number',
   fallbackKeyField: 'Number',
   protectedFields: [],
 };
@@ -449,7 +493,9 @@ export const PurchaseOrder =
 const QuoteCategorySchema = buildSchema(schemas.quoteCategory);
 
 QuoteCategorySchema.statics.syncConfig = {
+  summaryKey: 'quoteCategories',
   keyField: 'Number',
+  listOnly: true,
   protectedFields: [],
 };
 
@@ -459,7 +505,9 @@ export const QuoteCategory =
 const PurchaseOrderCategorySchema = buildSchema(schemas.purchaseOrderCategory);
 
 PurchaseOrderCategorySchema.statics.syncConfig = {
+  summaryKey: 'purchaseOrderCategories',
   keyField: 'Number',
+  listOnly: true,
   protectedFields: [],
 };
 
@@ -471,7 +519,10 @@ export const PurchaseOrderCategory =
 const CurrencySchema = buildSchema(schemas.currency);
 
 CurrencySchema.statics.syncConfig = {
+  summaryKey: 'currencies',
   keyField: 'Id',
+  fallbackKeyFields: ['Code'],
+  listOnly: true,
   fallbackKeyField: 'Code',
   protectedFields: [],
 };
@@ -484,7 +535,10 @@ export const Currency =
 const CountrySchema = buildSchema(schemas.country);
 
 CountrySchema.statics.syncConfig = {
+  summaryKey: 'countries',
   keyField: 'Id',
+  fallbackKeyFields: ['Code'],
+  listOnly: true,
   fallbackKeyField: 'Code',
   protectedFields: [],
 };
@@ -497,7 +551,9 @@ export const Country =
 const AccountingPeriodSchema = buildSchema(schemas.accountingPeriod);
 
 AccountingPeriodSchema.statics.syncConfig = {
+  summaryKey: 'accountingPeriods',
   keyField: 'Id',
+  listOnly: true,
   protectedFields: [],
 };
 
@@ -509,7 +565,10 @@ export const AccountingPeriod =
 const VatReturnSchema = buildSchema(schemas.vatReturn);
 
 VatReturnSchema.statics.syncConfig = {
+  summaryKey: 'vatReturns',
   keyField: 'Id',
+  listOnly: true,
+  lookupField: 'Id',
   protectedFields: [],
 };
 
