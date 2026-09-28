@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { runDedup } from '../src/db/dedup.js';
 
 // ---------------------------------------------------------------------------
@@ -139,7 +139,7 @@ describe('src/db/dedup.js – runDedup()', () => {
       invoices: { aggregateResult },
     });
 
-    const result = await runDedup(db, { dryRun: false, log: noop });
+    await runDedup(db, { dryRun: false, log: noop });
 
     const invoiceCol = db._getCol('invoices');
     const deleteFilter = invoiceCol.deleteMany.mock.calls[0][0];

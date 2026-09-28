@@ -29,8 +29,8 @@ import cronstrue from 'cronstrue';
 const app = express();
 const port = Number(process.env.PORT || 3000);
 
-const __serverFilename = fileURLToPath(import.meta.url);
-const __serverDirname = path.dirname(__serverFilename);
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 function findRepoRoot(startDir) {
   let dir = startDir;
@@ -51,7 +51,7 @@ function findRepoRoot(startDir) {
   return startDir;
 }
 
-const REPO_ROOT = findRepoRoot(__serverDirname);
+const REPO_ROOT = findRepoRoot(__dirname);
 
 const APP_BUILD = (() => {
   const envCommit = (
@@ -111,6 +111,14 @@ const APP_BUILD = (() => {
 
 const IS_PROD = process.env.NODE_ENV === 'production';
 
+// Default to secure cookies; set COOKIE_SECURE=false only for local HTTP dev.
+const COOKIE_SECURE = String(process.env.COOKIE_SECURE || 'true').toLowerCase() !== 'false';
+const SSO_COOKIE_NAME = 'hcs_sso';
+
+function ssoCookieOptions(overrides = {}) {
+  return { httpOnly: true, secure: COOKIE_SECURE, sameSite: 'lax', path: '/', ...overrides };
+}
+
 // Turnstile CAPTCHA is skipped outside production (local dev has no Cloudflare
 // keys) or when explicitly bypassed via SKIP_TURNSTILE=true.
 const SKIP_TURNSTILE = process.env.SKIP_TURNSTILE === 'true' || !IS_PROD;
@@ -132,6 +140,11 @@ let lastCounts = null;
 let lastError = null;
 const logs = [];
 const LOGS_CAP = 500;
+
+function pushLog(entry) {
+  logs.unshift(entry);
+  if (logs.length > LOGS_CAP) logs.length = LOGS_CAP;
+}
 
 // Allowlist of MongoDB collection names reachable via dashboard query params.
 // Any mongoCollection / auditCollection query value not in this set is rejected.
@@ -184,6 +197,15 @@ async function loadSettingsIntoCache() {
 
 function getEffectiveCronConfig() {
   return { ...cronConfig };
+}
+
+function currentCronHealth(eff = getEffectiveCronConfig()) {
+  return getCronHealth({
+    enabled: eff.enabled,
+    schedule: eff.schedule,
+    timezone: eff.timezone,
+    staleMs: eff.healthStaleMs,
+  });
 }
 
 function applyCronConfig() {
@@ -345,7 +367,7 @@ const QUIET_PATHS = new Set(['/status', '/health', '/cron/health']);
 app.use((req, res, next) => {
   const startNs = process.hrtime.bigint();
   // Sanitise the inbound request ID to prevent log injection via crafted headers.
-  const rawRequestId = String(req.headers['x-request-id'] || '').replace(/[^a-zA-Z0-9\-]/g, '').slice(0, 64);
+  const rawRequestId = String(req.headers['x-request-id'] || '').replace(/[^a-zA-Z0-9-]/g, '').slice(0, 64);
   const requestId = rawRequestId || makeRequestId();
 
   req.requestId = requestId;
@@ -441,7 +463,7 @@ function sanitiseNext(raw) {
 }
 
 function verifySsoCookie(req) {
-  const token = req.cookies?.hcs_sso;
+  const token = req.cookies?.[SSO_COOKIE_NAME];
   if (!token) return null;
   const secret = SSO_JWT_SECRET;
   if (!secret) return null;
@@ -569,6 +591,86 @@ function formatRunChange(c) {
   return parts.join(' · ') || '—';
 }
 
+/**
+ * Post the Discord alert for a successful run.
+ */
+function notifyRunCompleted({ result, prevCounts, counts, requestedBy }) {
+  // Discord alert — only for runs that actually changed data; silent on no-op
+  // success to keep a frequent cron quiet. Failures always alert (see the
+  // .catch in triggerSync).
+  //
+  // A run that skipped an account is neither: nothing changed, but the run
+  // is not clean either. Before this, a per-account bank fetch failure was
+  // visible ONLY as a warn line in the container log — the run resolved,
+  // Discord said "Completed", and the only outward sign was a nonsense
+  // count delta on a green embed. It now alerts in its own right, in red.
+  const partialBank = result?.partial?.bankTransactions || [];
+  try {
+    const changed = summariseRunChanges(prevCounts, counts || {}, result?.mongo);
+    const deltaFields = changed.map((c) => ({
+      name: c.name,
+      value: formatRunChange(c),
+      inline: true,
+    }));
+
+    const upsertTotal = changed.reduce((a, c) => a + c.upserted, 0);
+    const modifiedTotal = changed.reduce((a, c) => a + c.modified, 0);
+
+    if (partialBank.length > 0) {
+      const accounts = partialBank.map((f) => f.accountId).join(', ');
+      const fields = deltaFields.slice(0, 20);
+      fields.push({
+        name: 'Bank accounts not fetched',
+        value: accounts,
+        inline: true,
+      });
+      fields.push({
+        name: 'Reason',
+        value: String(partialBank[0]?.message || 'unknown').slice(0, 200),
+        inline: true,
+      });
+      fields.push({ name: 'Trigger', value: String(requestedBy || 'unknown'), inline: true });
+      sendDiscord({
+        ok: false,
+        title: 'Heron CS | Sync — Completed with warnings',
+        // Say plainly what did NOT happen, because the obvious reading of a
+        // bank alert is that rows vanished. They cannot have: the
+        // soft-delete sweep only runs after a successful, non-empty fetch,
+        // so a skipped account leaves its stored ledger exactly as it was.
+        description: `${partialBank.length} bank account(s) could not be read from KashFlow. `
+          + 'Their stored transactions are unchanged — nothing was deleted. '
+          + 'The next successful run will pick them up.',
+        fields,
+      }).catch(() => {});
+    } else if (deltaFields.length > 0) {
+      // Discord caps an embed at 25 fields; keep room for the summary fields.
+      const shown = deltaFields.slice(0, 22);
+      const fields = shown;
+      if (changed.length > shown.length) {
+        fields.push({
+          name: 'Not shown',
+          value: `+${changed.length - shown.length} more collection(s)`,
+          inline: true,
+        });
+      }
+      fields.push({
+        name: 'Totals',
+        value: `${upsertTotal} added · ${modifiedTotal} modified`,
+        inline: true,
+      });
+      fields.push({ name: 'Trigger', value: String(requestedBy || 'unknown'), inline: true });
+      sendDiscord({
+        ok: true,
+        title: 'Heron CS | Sync — Completed',
+        description: 'Sync completed with data changes.',
+        fields,
+      }).catch(() => {});
+    }
+  } catch (e) {
+    logger.warn({ err: { message: e?.message } }, 'Failed to build Discord success alert');
+  }
+}
+
 async function triggerSync({ requestedBy }) {
   if (isRunning) {
     return { started: false, reason: 'already-running', runId: null, promise: Promise.resolve(null) };
@@ -603,8 +705,7 @@ async function triggerSync({ requestedBy }) {
   const runId = currentRunId;
 
   const recordRunLog = (level, message, meta) => {
-    logs.unshift({ time: Date.now(), level, message, meta: { ...(meta || {}), runId } });
-    if (logs.length > LOGS_CAP) logs.length = LOGS_CAP;
+    pushLog({ time: Date.now(), level, message, meta: { ...(meta || {}), runId } });
     Promise.resolve(
       runStore.recordLog(runId, {
         level,
@@ -679,81 +780,7 @@ async function triggerSync({ requestedBy }) {
         recordRunLog('success', 'Sync completed successfully', { counts: lastCounts });
       }
 
-      // Discord alert — only for runs that actually changed data; silent on no-op
-      // success to keep a frequent cron quiet. Failures always alert (see .catch).
-      //
-      // A run that skipped an account is neither: nothing changed, but the run
-      // is not clean either. Before this, a per-account bank fetch failure was
-      // visible ONLY as a warn line in the container log — the run resolved,
-      // Discord said "Completed", and the only outward sign was a nonsense
-      // count delta on a green embed. It now alerts in its own right, in red.
-      const partialBank = result?.partial?.bankTransactions || [];
-      try {
-        const prev = result?.previousCounts ?? countsBeforeRun;
-        const curr = lastCounts || {};
-        const changed = summariseRunChanges(prev, curr, result?.mongo);
-        const deltaFields = changed.map((c) => ({
-          name: c.name,
-          value: formatRunChange(c),
-          inline: true,
-        }));
-
-        const upsertTotal = changed.reduce((a, c) => a + c.upserted, 0);
-        const modifiedTotal = changed.reduce((a, c) => a + c.modified, 0);
-
-        if (partialBank.length > 0) {
-          const accounts = partialBank.map((f) => f.accountId).join(', ');
-          const fields = deltaFields.slice(0, 20);
-          fields.push({
-            name: 'Bank accounts not fetched',
-            value: accounts,
-            inline: true,
-          });
-          fields.push({
-            name: 'Reason',
-            value: String(partialBank[0]?.message || 'unknown').slice(0, 200),
-            inline: true,
-          });
-          fields.push({ name: 'Trigger', value: String(requestedBy || 'unknown'), inline: true });
-          sendDiscord({
-            ok: false,
-            title: 'Heron CS | Sync — Completed with warnings',
-            // Say plainly what did NOT happen, because the obvious reading of a
-            // bank alert is that rows vanished. They cannot have: the
-            // soft-delete sweep only runs after a successful, non-empty fetch,
-            // so a skipped account leaves its stored ledger exactly as it was.
-            description: `${partialBank.length} bank account(s) could not be read from KashFlow. `
-              + 'Their stored transactions are unchanged — nothing was deleted. '
-              + 'The next successful run will pick them up.',
-            fields,
-          }).catch(() => {});
-        } else if (deltaFields.length > 0) {
-          // Discord caps an embed at 25 fields; keep room for the summary fields.
-          const shown = deltaFields.slice(0, 22);
-          const fields = shown;
-          if (changed.length > shown.length) {
-            fields.push({
-              name: 'Not shown',
-              value: `+${changed.length - shown.length} more collection(s)`,
-              inline: true,
-            });
-          }
-          fields.push({
-            name: 'Totals',
-            value: `${upsertTotal} added · ${modifiedTotal} modified`,
-            inline: true,
-          });
-          fields.push({ name: 'Trigger', value: String(requestedBy || 'unknown'), inline: true });
-          sendDiscord({
-            ok: true,
-            title: 'Heron CS | Sync — Completed',
-            description: 'Sync completed with data changes.',
-            fields,
-          }).catch(() => {});
-        }
-      } catch (e) {
-        logger.warn({ err: { message: e?.message } }, 'Failed to build Discord success alert');
-      }
+      notifyRunCompleted({ result, prevCounts: result?.previousCounts ?? countsBeforeRun, counts: lastCounts, requestedBy });
 
       return result;
     })
@@ -786,8 +813,6 @@ async function triggerSync({ requestedBy }) {
 }
 
 // EJS setup
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views/tailwindcss'));
 app.use(express.json());
@@ -815,8 +840,6 @@ app.use('/static', express.static(path.join(__dirname, 'public'), {
 // This avoids server-side sessions while still protecting POST routes.
 const csrfTokens = new CsrfTokens();
 const csrfCookieName = 'hcs_sync_csrf_secret';
-// Default to secure cookies; set COOKIE_SECURE=false only for local HTTP dev.
-const csrfCookieSecure = String(process.env.COOKIE_SECURE || 'true').toLowerCase() !== 'false';
 
 app.use((req, res, next) => {
   // Ensure a stable secret per client.
@@ -826,7 +849,7 @@ app.use((req, res, next) => {
     res.cookie(csrfCookieName, secret, {
       httpOnly: true,
       sameSite: 'lax',
-      secure: csrfCookieSecure,
+      secure: COOKIE_SECURE,
       path: '/',
     });
   }
@@ -860,24 +883,12 @@ app.use((req, res, next) => {
   return next();
 });
 app.get('/health', (_req, res) => {
-  const eff = getEffectiveCronConfig();
-  const cronHealth = getCronHealth({
-    enabled: eff.enabled,
-    schedule: eff.schedule,
-    timezone: eff.timezone,
-    staleMs: eff.healthStaleMs,
-  });
+  const cronHealth = currentCronHealth();
   res.json({ status: 'ok', isRunning, lastRun, cron: cronHealth });
 });
 
 app.get('/cron/health', (_req, res) => {
-  const eff = getEffectiveCronConfig();
-  const cronHealth = getCronHealth({
-    enabled: eff.enabled,
-    schedule: eff.schedule,
-    timezone: eff.timezone,
-    staleMs: eff.healthStaleMs,
-  });
+  const cronHealth = currentCronHealth();
 
   const isOk = cronHealth.status === 'ok' || cronHealth.status === 'disabled';
   res.status(isOk ? 200 : 503).json(cronHealth);
@@ -897,12 +908,7 @@ app.get('/status', (_req, res) => {
 
 app.get('/', (req, res) => {
   const eff = getEffectiveCronConfig();
-  const cronHealth = getCronHealth({
-    enabled: eff.enabled,
-    schedule: eff.schedule,
-    timezone: eff.timezone,
-    staleMs: eff.healthStaleMs,
-  });
+  const cronHealth = currentCronHealth(eff);
   const cronNextRunAt = computeNextCronRunAtMs(eff);
 
   // Show dedup result banner when redirected back from POST /dedup
@@ -923,12 +929,7 @@ app.get('/', (req, res) => {
 
 app.get('/settings', requireAdmin, async (req, res) => {
   const eff = getEffectiveCronConfig();
-  const cronHealth = getCronHealth({
-    enabled: eff.enabled,
-    schedule: eff.schedule,
-    timezone: eff.timezone,
-    staleMs: eff.healthStaleMs,
-  });
+  const cronHealth = currentCronHealth(eff);
   res.render('layout', {
     title: 'Settings',
     content: 'pages/settings',
@@ -1046,13 +1047,10 @@ app.post('/login', loginLimiter, async (req, res) => {
         SSO_JWT_SECRET,
         { algorithm: 'HS256', audience: 'hcs-sync', issuer: 'hcs-app', expiresIn: '8h' },
       );
-      res.cookie('hcs_sso', devToken, {
-        httpOnly: true,
+      res.cookie(SSO_COOKIE_NAME, devToken, ssoCookieOptions({
         secure: false, // local dev runs on plain http
-        sameSite: 'lax',
-        path: '/',
         maxAge: 8 * 60 * 60 * 1000,
-      });
+      }));
       return res.redirect(next);
     }
     logger.error('[login] HCS_SYNC_API_KEY is not set — cannot validate credentials');
@@ -1095,22 +1093,13 @@ app.post('/login', loginLimiter, async (req, res) => {
   }
 
   const ttlSec = Number(tokenData.expiresIn || 60 * 60 * 8);
-  const cookieSecure = String(process.env.COOKIE_SECURE || 'true').toLowerCase() !== 'false';
-
-  res.cookie('hcs_sso', tokenData.token, {
-    httpOnly: true,
-    secure: cookieSecure,
-    sameSite: 'lax',
-    path: '/',
-    maxAge: ttlSec * 1000,
-  });
+  res.cookie(SSO_COOKIE_NAME, tokenData.token, ssoCookieOptions({ maxAge: ttlSec * 1000 }));
 
   return res.redirect(next);
 });
 
 app.get('/logout', (req, res) => {
-  const cookieSecure = String(process.env.COOKIE_SECURE || 'true').toLowerCase() !== 'false';
-  res.clearCookie('hcs_sso', { httpOnly: true, secure: cookieSecure, sameSite: 'lax', path: '/' });
+  res.clearCookie(SSO_COOKIE_NAME, ssoCookieOptions());
   return res.redirect('/login');
 });
 
@@ -1181,142 +1170,123 @@ app.get('/dedup/status', requireAdmin, (_req, res) => {
 });
 
 // History pages
-app.get('/history', requireAdmin, (_req, res) => {
-  runStore
-    .listRuns()
-    .then((runs) => {
-      res.render('layout', { title: 'Sync History', content: 'pages/history', runs, isRunning, lastRun, counts: lastCounts, lastError });
-    })
-    .catch((err) => {
-      const msg = err?.message || 'Failed to load history';
-      res.status(500).send(msg);
-    });
+app.get('/history', requireAdmin, async (_req, res) => {
+  try {
+    const runs = await runStore.listRuns();
+    res.render('layout', { title: 'Sync History', content: 'pages/history', runs, isRunning, lastRun, counts: lastCounts, lastError });
+  } catch (err) {
+    res.status(500).send(err?.message || 'Failed to load history');
+  }
 });
-app.get('/history/:id', requireAdmin, (req, res) => {
-  runStore
-    .getRun(req.params.id)
-    .then(async (run) => {
-      if (!run) return res.status(404).send('Run not found');
 
-      const mongoCollectionRaw = String(req.query?.mongoCollection || '');
-      const mongoCollection = ALLOWED_MONGO_COLLECTIONS.has(mongoCollectionRaw) ? mongoCollectionRaw : '';
-      const mongoType = String(req.query?.mongoType || '');
-      let mongoDocs = null;
-      let mongoDocsError = null;
-      let mongoDocsSource = null;
-      const mongoUpsertedCount = Number(run?.summary?.mongo?.[mongoCollection]?.upserted ?? 0);
+/**
+ * Load the documents a run inserted into `collection`, for the run page's
+ * drilldown. Prefers the upsert filters captured during the run and falls back
+ * to the createdByRunId tag for Mongo-compatible servers that don't return
+ * upsertedIds from bulkWrite.
+ *
+ * @returns {Promise<{docs: object[]|null, source: string|null, error: string|null}>}
+ */
+async function loadUpsertedDocs(run, collection) {
+  if (!isMongoEnabled()) {
+    return { docs: null, source: null, error: 'MongoDB is not configured on the server (cannot load docs).' };
+  }
+  const filters = run?.summary?.mongoUpserts?.[collection]?.filters || [];
+  const [query, source] = filters.length
+    ? [{ $or: filters }, 'filters']
+    : [{ createdByRunId: run.id }, 'createdByRunId'];
+  try {
+    const db = await getMongoDb();
+    const docs = await db.collection(collection).find(query, { limit: 200 }).toArray();
+    return { docs, source, error: null };
+  } catch (err) {
+    return { docs: null, source: null, error: err?.message || 'Failed to load Mongo documents.' };
+  }
+}
 
-      if (mongoCollectionRaw && !mongoCollection) {
-        mongoDocsError = 'Invalid collection name.';
+/** Audit trail entries for a run, optionally narrowed to one collection. */
+async function loadAuditEntries(runId, collection) {
+  if (!isMongoEnabled()) return { entries: [], error: null };
+  try {
+    const db = await getMongoDb();
+    const filter = { runId };
+    if (collection) filter.collection = collection;
+    const entries = await db
+      .collection('audit_log')
+      .find(filter)
+      .sort({ timestamp: 1 })
+      .limit(500)
+      .toArray();
+    return { entries, error: null };
+  } catch (err) {
+    return { entries: [], error: err?.message || 'Failed to load audit trail.' };
+  }
+}
+
+app.get('/history/:id', requireAdmin, async (req, res) => {
+  try {
+    const run = await runStore.getRun(req.params.id);
+    if (!run) return res.status(404).send('Run not found');
+
+    const mongoCollectionRaw = String(req.query?.mongoCollection || '');
+    const mongoCollection = ALLOWED_MONGO_COLLECTIONS.has(mongoCollectionRaw) ? mongoCollectionRaw : '';
+    const mongoType = String(req.query?.mongoType || '');
+    let mongoDocs = null;
+    let mongoDocsError = null;
+    let mongoDocsSource = null;
+    const mongoUpsertedCount = Number(run?.summary?.mongo?.[mongoCollection]?.upserted ?? 0);
+
+    if (mongoCollectionRaw && !mongoCollection) {
+      mongoDocsError = 'Invalid collection name.';
+    }
+
+    if (mongoCollection && mongoType === 'upserted') {
+      ({ docs: mongoDocs, source: mongoDocsSource, error: mongoDocsError } = await loadUpsertedDocs(run, mongoCollection));
+
+      if (!mongoDocsError && Array.isArray(mongoDocs) && mongoDocs.length === 0 && mongoUpsertedCount > 0) {
+        mongoDocsError =
+          'This run reports inserted documents, but the server could not locate them for drilldown. ' +
+          'If this run was created before insert tagging was added, re-run a sync to enable drilldown.';
       }
+    }
 
-      if (mongoCollection && mongoType === 'upserted') {
-        const upserts = run?.summary?.mongoUpserts?.[mongoCollection] || null;
-        const filters = upserts?.filters || [];
+    const auditCollectionRaw = String(req.query?.auditCollection || '');
+    const auditCollection = (auditCollectionRaw && ALLOWED_MONGO_COLLECTIONS.has(auditCollectionRaw)) ? auditCollectionRaw : '';
+    const { entries: auditEntries, error: auditError } = await loadAuditEntries(run.id, auditCollection);
 
-        const fallbackByRunId = async () => {
-          if (!isMongoEnabled()) {
-            mongoDocsError = 'MongoDB is not configured on the server (cannot load docs).';
-            return;
-          }
-          try {
-            const db = await getMongoDb();
-            mongoDocs = await db
-              .collection(mongoCollection)
-              .find({ createdByRunId: run.id }, { limit: 200 })
-              .toArray();
-            mongoDocsSource = 'createdByRunId';
-          } catch (err) {
-            mongoDocsError = err?.message || 'Failed to load Mongo documents.';
-          }
-        };
-
-        if (filters.length) {
-          if (!isMongoEnabled()) {
-            mongoDocsError = 'MongoDB is not configured on the server (cannot load docs).';
-          } else {
-            try {
-              const db = await getMongoDb();
-              mongoDocs = await db
-                .collection(mongoCollection)
-                .find({ $or: filters }, { limit: 200 })
-                .toArray();
-              mongoDocsSource = 'filters';
-            } catch (err) {
-              mongoDocsError = err?.message || 'Failed to load Mongo documents.';
-            }
-          }
-        } else {
-          // Fallback for Mongo-compatible servers that don't return upsertedIds
-          // for bulkWrite: we tag inserted docs with createdByRunId.
-          await fallbackByRunId();
-        }
-
-        if (!mongoDocsError && Array.isArray(mongoDocs) && mongoDocs.length === 0 && mongoUpsertedCount > 0) {
-          mongoDocsError =
-            'This run reports inserted documents, but the server could not locate them for drilldown. ' +
-            'If this run was created before insert tagging was added, re-run a sync to enable drilldown.';
-        }
-      }
-
-      // Fetch audit trail entries for this run from audit_log collection.
-      let auditEntries = [];
-      let auditError = null;
-      const auditCollectionRaw = String(req.query?.auditCollection || '');
-      const auditCollection = (auditCollectionRaw && ALLOWED_MONGO_COLLECTIONS.has(auditCollectionRaw)) ? auditCollectionRaw : '';
-      if (isMongoEnabled()) {
-        try {
-          const db = await getMongoDb();
-          const filter = { runId: run.id };
-          if (auditCollection) filter.collection = auditCollection;
-          auditEntries = await db
-            .collection('audit_log')
-            .find(filter)
-            .sort({ timestamp: 1 })
-            .limit(500)
-            .toArray();
-        } catch (err) {
-          auditError = err?.message || 'Failed to load audit trail.';
-        }
-      }
-
-      res.render('layout', {
-        title: 'Run Details',
-        content: 'pages/run',
-        run,
-        isRunning,
-        lastRun,
-        counts: lastCounts,
-        lastError,
-        mongoCollection,
-        mongoType,
-        mongoDocs,
-        mongoDocsError,
-        mongoDocsSource,
-        mongoUpsertedCount,
-        auditEntries,
-        auditError,
-        auditCollection,
-      });
-    })
-    .catch((err) => {
-      const msg = err?.message || 'Failed to load run';
-      res.status(500).send(msg);
+    res.render('layout', {
+      title: 'Run Details',
+      content: 'pages/run',
+      run,
+      isRunning,
+      lastRun,
+      counts: lastCounts,
+      lastError,
+      mongoCollection,
+      mongoType,
+      mongoDocs,
+      mongoDocsError,
+      mongoDocsSource,
+      mongoUpsertedCount,
+      auditEntries,
+      auditError,
+      auditCollection,
     });
+  } catch (err) {
+    res.status(500).send(err?.message || 'Failed to load run');
+  }
 });
-// Revert and manual pull endpoints (no DB writes yet)
-app.post('/history/:id/revert/:changeId', requireAdmin, (req, res) => {
+
+// Revert endpoint (records the revert; no DB writes to synced data yet)
+app.post('/history/:id/revert/:changeId', requireAdmin, async (req, res) => {
   const note = req.body?.note || '';
-  runStore
-    .revertChange(req.params.id, req.params.changeId, note)
-    .then((out) => {
-      if (!out.ok) return res.status(400).send(out.message || 'Revert failed');
-      res.redirect(`/history/${req.params.id}`);
-    })
-    .catch((err) => {
-      const msg = err?.message || 'Revert failed';
-      res.status(500).send(msg);
-    });
+  try {
+    const out = await runStore.revertChange(req.params.id, req.params.changeId, note);
+    if (!out.ok) return res.status(400).send(out.message || 'Revert failed');
+    res.redirect(`/history/${req.params.id}`);
+  } catch (err) {
+    res.status(500).send(err?.message || 'Revert failed');
+  }
 });
 app.get('/debug', requireAdmin, (req, res) => {
   const entityTypes = Object.entries(ENTITY_CONFIG).map(([type, cfg]) => ({
@@ -1371,51 +1341,33 @@ app.post('/debug', requireAdmin, pullLimiter, async (req, res) => {
     res.status(500).json({ ok: false, message: err.message || 'Debug failed' });
   }
 });
-app.post('/pull', requireAdmin, pullLimiter, async (req, res) => {
-  const { entityType, entityId } = req.body || {};
-  if (!entityType || entityId == null) {
-    return res.status(400).json({ ok: false, message: 'entityType and entityId are required' });
-  }
-  const pushLog = (entry) => {
-    logs.unshift(entry);
-    if (logs.length > LOGS_CAP) logs.length = LOGS_CAP;
+// Shared by the dashboard's "Pull & Sync" button and the machine API below.
+function makePullHandler({ label, logMeta = {}, includeDebug = false }) {
+  return async (req, res) => {
+    const { entityType, entityId } = req.body || {};
+    if (!entityType || entityId == null) {
+      return res.status(400).json({ ok: false, message: 'entityType and entityId are required' });
+    }
+    pushLog({ time: Date.now(), level: 'info', message: `${label} pull started: ${entityType} ${entityId}`, meta: { entityType, entityId, ...logMeta } });
+    try {
+      const result = await pullSingleEntity(entityType, entityId);
+      pushLog({ time: Date.now(), level: 'success', message: `${label} pull complete: ${entityType} ${entityId} — ${result.action}`, meta: { entityType, entityId, action: result.action, ...(includeDebug ? { debug: result.debug } : {}), ...logMeta } });
+      res.json(result);
+    } catch (err) {
+      logger.error({ entityType, entityId, err: err.message }, `${label} pull failed`);
+      pushLog({ time: Date.now(), level: 'error', message: `${label} pull failed: ${entityType} ${entityId} — ${err.message}`, meta: { entityType, entityId, error: err.message, ...logMeta } });
+      res.status(500).json({ ok: false, message: err.message || 'Pull failed' });
+    }
   };
-  pushLog({ time: Date.now(), level: 'info', message: `Manual pull started: ${entityType} ${entityId}`, meta: { entityType, entityId } });
-  try {
-    const result = await pullSingleEntity(entityType, entityId);
-    pushLog({ time: Date.now(), level: 'success', message: `Manual pull complete: ${entityType} ${entityId} — ${result.action}`, meta: { entityType, entityId, action: result.action, debug: result.debug } });
-    res.json(result);
-  } catch (err) {
-    logger.error({ entityType, entityId, err: err.message }, 'Manual pull failed');
-    pushLog({ time: Date.now(), level: 'error', message: `Manual pull failed: ${entityType} ${entityId} — ${err.message}`, meta: { entityType, entityId, error: err.message } });
-    res.status(500).json({ ok: false, message: err.message || 'Pull failed' });
-  }
-});
+}
+
+app.post('/pull', requireAdmin, pullLimiter, makePullHandler({ label: 'Manual', includeDebug: true }));
 
 // ── Machine-to-machine API ───────────────────────────────────────────────
 // Key-authenticated equivalent of the dashboard's "Pull & Sync" button, so
 // hcs-app can refresh a single entity from KashFlow on demand (e.g. after
 // marking a project Complete via the KashFlow API).
-app.post('/api/pull', requireSyncApiKey, pullLimiter, async (req, res) => {
-  const { entityType, entityId } = req.body || {};
-  if (!entityType || entityId == null) {
-    return res.status(400).json({ ok: false, message: 'entityType and entityId are required' });
-  }
-  const pushLog = (entry) => {
-    logs.unshift(entry);
-    if (logs.length > LOGS_CAP) logs.length = LOGS_CAP;
-  };
-  pushLog({ time: Date.now(), level: 'info', message: `API pull started: ${entityType} ${entityId}`, meta: { entityType, entityId, via: 'api' } });
-  try {
-    const result = await pullSingleEntity(entityType, entityId);
-    pushLog({ time: Date.now(), level: 'success', message: `API pull complete: ${entityType} ${entityId} — ${result.action}`, meta: { entityType, entityId, action: result.action, via: 'api' } });
-    res.json(result);
-  } catch (err) {
-    logger.error({ entityType, entityId, err: err.message }, 'API pull failed');
-    pushLog({ time: Date.now(), level: 'error', message: `API pull failed: ${entityType} ${entityId} — ${err.message}`, meta: { entityType, entityId, error: err.message, via: 'api' } });
-    res.status(500).json({ ok: false, message: err.message || 'Pull failed' });
-  }
-});
+app.post('/api/pull', requireSyncApiKey, pullLimiter, makePullHandler({ label: 'API', logMeta: { via: 'api' } }));
 
 // Final error handler (logs uncaught route errors)
 app.use((err, req, res, next) => {

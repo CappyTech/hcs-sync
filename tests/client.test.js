@@ -308,7 +308,7 @@ describe('src/kashflow/client.js', () => {
 
   describe('401 interceptor retry', () => {
     it('retries with a fresh token on 401', async () => {
-      const kf = await createClient();
+      await createClient();
       // Get the error interceptor
       const errorHandler = mockHttp.interceptors.response.use.mock.calls[0][1];
 
@@ -327,7 +327,7 @@ describe('src/kashflow/client.js', () => {
     });
 
     it('does not retry twice (marks __retried)', async () => {
-      const kf = await createClient();
+      await createClient();
       const errorHandler = mockHttp.interceptors.response.use.mock.calls[0][1];
 
       const err = {
@@ -339,7 +339,7 @@ describe('src/kashflow/client.js', () => {
     });
 
     it('does not retry non-401 errors', async () => {
-      const kf = await createClient();
+      await createClient();
       const errorHandler = mockHttp.interceptors.response.use.mock.calls[0][1];
 
       const err = {

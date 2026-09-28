@@ -12,7 +12,7 @@ hcs-sync is a dedicated **KashFlow accounting data sync service** for **Heron Co
 
 - Use Node.js 20.
 - Install dependencies with `npm install`.
-- Run the tests with `npm test` (Vitest) before committing.
+- Run `npm run lint` (ESLint) and `npm test` (Vitest) before committing.
 - Ensure `git status` reports a clean working tree before you finish.
 - Entry point is `src/server/index.js`.
 - All KashFlow API logic lives in `src/kashflow/`.

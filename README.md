@@ -52,7 +52,6 @@ src/
     runStore.js             # Persisted run history, logs, change records, revert
     settingsStore.js        # DB-backed runtime settings (cron schedule, etc.)
     progress.js             # Live run progress state (for dashboard polling)
-    changeLog.js            # Change/audit record helpers
     models/
       kashflow.js           # Mongoose models for the REST namespace (schema contract)
       Run.js                # Sync run history schema
@@ -226,6 +225,7 @@ The container is built from a multi-stage [`Dockerfile`](Dockerfile): stage 1 co
 ## Testing
 
 ```bash
+npm run lint        # ESLint
 npm test            # Vitest (unit + Supertest HTTP tests)
 npm run test:watch  # watch mode
 ```

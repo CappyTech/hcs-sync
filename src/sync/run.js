@@ -36,7 +36,7 @@ function createPool(limit, label, handler, onProgress) {
   };
 }
 
-function buildUpsertUpdate({ keyField, keyValue, payload, syncedAt, runId, model, protectedFields }) {
+function buildUpsertUpdate({ keyField, keyValue, payload, runId, model, protectedFields }) {
   const source = payload && typeof payload === 'object' && !Array.isArray(payload) ? payload : {};
   const syncConfig = model?.syncConfig || {};
 
@@ -216,6 +216,118 @@ export async function sweepMissingBankTransactions({ model, accountId, seen, now
   return result;
 }
 
+function extractUpsertedEntries(out) {
+  if (!out) return [];
+  // Mongoose 8 / mongodb driver 6: upsertedIds is a plain object keyed by op index
+  // e.g. { "0": ObjectId(...), "5": ObjectId(...) }
+  if (out.upsertedIds && typeof out.upsertedIds === 'object' && !Array.isArray(out.upsertedIds)) {
+    return Object.entries(out.upsertedIds).map(([idx, _id]) => ({ index: Number(idx), _id }));
+  }
+  // Fallback: some drivers return an array of { index, _id } directly
+  if (Array.isArray(out.upsertedIds)) return out.upsertedIds;
+  if (typeof out.getUpsertedIds === 'function') return out.getUpsertedIds() || [];
+  return [];
+}
+
+/** Batch-read existing documents before the bulkWrite for audit diffing. */
+async function preReadForAudit(collection, audit, opsToWrite) {
+  if (!audit?.auditCollection) return null;
+  try {
+    const filters = opsToWrite.map((op) => op?.updateOne?.filter).filter(Boolean);
+    if (!filters.length) return null;
+    const query = collection.find({ $or: filters });
+    const existingDocs = typeof query.lean === 'function'
+      ? await query.lean()
+      : await query.toArray();
+    const docMap = new Map();
+    for (const doc of existingDocs) {
+      for (const f of filters) {
+        const fKeys = Object.keys(f);
+        const matches = fKeys.every((k) => doc[k] != null && String(doc[k]) === String(f[k]));
+        if (matches) {
+          docMap.set(JSON.stringify(f), doc);
+          break;
+        }
+      }
+    }
+    return docMap;
+  } catch (err) {
+    logger.warn({ err: err?.message }, 'Audit pre-read failed (non-fatal)');
+    return null;
+  }
+}
+
+/**
+ * Compute diffs using the pre-read map and write audit entries.
+ * @returns {Promise<{creates: number, changes: number}>} audit entries produced, by action
+ */
+async function writeAuditEntries(audit, opsToWrite, docMap, upsertedEntries) {
+  const counts = { creates: 0, changes: 0 };
+  if (!audit?.auditCollection || !docMap) return counts;
+  try {
+    const upsertedSet = new Set((upsertedEntries || []).map((e) => e?.index));
+    const auditEntries = [];
+    const now = new Date();
+
+    for (let i = 0; i < opsToWrite.length; i++) {
+      const op = opsToWrite[i];
+      const filter = op?.updateOne?.filter;
+      if (!filter) continue;
+      // Pipeline updates store raw payload on _rawSet (not serialised to BSON);
+      // legacy updates use $set directly.
+      const update = op?.updateOne?.update;
+      const setFields = Array.isArray(update) ? update._rawSet : update?.$set;
+      if (!setFields) continue;
+
+      const filterKey = JSON.stringify(filter);
+      const existing = docMap.get(filterKey) || null;
+      const isCreate = !existing || upsertedSet.has(i);
+
+      if (isCreate) {
+        auditEntries.push({
+          collection: audit.collectionName,
+          documentId: filter.Id ?? filter.Code ?? filter.Number ?? null,
+          filter,
+          runId: audit.runId || null,
+          action: 'create',
+          changes: [],
+          timestamp: now,
+        });
+        counts.creates++;
+        continue;
+      }
+
+      // Volatile fields are not written unless real content changed, so
+      // diffing them would report a change the write never made.
+      const volatileFields = Array.isArray(update) ? update._rawVolatile : null;
+      const changes = volatileFields?.length
+        ? deepDiff(existing, setFields, {
+          skipFields: new Set([...SYNC_INTERNAL_FIELDS, ...volatileFields]),
+        })
+        : deepDiff(existing, setFields);
+      if (!changes.length) continue;
+
+      auditEntries.push({
+        collection: audit.collectionName,
+        documentId: filter.Id ?? filter.Code ?? filter.Number ?? null,
+        filter,
+        runId: audit.runId || null,
+        action: 'update',
+        changes,
+        timestamp: now,
+      });
+      counts.changes++;
+    }
+
+    if (auditEntries.length) {
+      await audit.auditCollection.insertMany(auditEntries, { ordered: false });
+    }
+  } catch (err) {
+    logger.warn({ err: err?.message, collection: audit.collectionName }, 'Audit write failed (non-fatal)');
+  }
+  return counts;
+}
+
 function createBulkUpserter(collection, batchSize = 250) {
   const options = typeof batchSize === 'object' && batchSize !== null ? batchSize : null;
   const resolvedBatchSize = options ? Number(options.batchSize || 250) : Number(batchSize || 250);
@@ -237,118 +349,11 @@ function createBulkUpserter(collection, batchSize = 250) {
   const upsertedFilters = [];
   let upsertedFiltersTruncated = false;
 
-  const extractUpsertedEntries = (out) => {
-    if (!out) return [];
-    // Mongoose 8 / mongodb driver 6: upsertedIds is a plain object keyed by op index
-    // e.g. { "0": ObjectId(...), "5": ObjectId(...) }
-    if (out.upsertedIds && typeof out.upsertedIds === 'object' && !Array.isArray(out.upsertedIds)) {
-      return Object.entries(out.upsertedIds).map(([idx, _id]) => ({ index: Number(idx), _id }));
-    }
-    // Fallback: some drivers return an array of { index, _id } directly
-    if (Array.isArray(out.upsertedIds)) return out.upsertedIds;
-    if (typeof out.getUpsertedIds === 'function') return out.getUpsertedIds() || [];
-    return [];
-  };
-
   const applyResult = (out) => {
     upserted += out?.upsertedCount || 0;
     modified += out?.modifiedCount || 0;
     matched += out?.matchedCount || 0;
     affected += (out?.upsertedCount || 0) + (out?.matchedCount || 0);
-  };
-
-  /** Batch-read existing documents before the bulkWrite for audit diffing. */
-  const preReadForAudit = async (opsToWrite) => {
-    if (!audit?.auditCollection) return null;
-    try {
-      const filters = opsToWrite.map((op) => op?.updateOne?.filter).filter(Boolean);
-      if (!filters.length) return null;
-      const query = collection.find({ $or: filters });
-      const existingDocs = typeof query.lean === 'function'
-        ? await query.lean()
-        : await query.toArray();
-      const docMap = new Map();
-      for (const doc of existingDocs) {
-        for (const f of filters) {
-          const fKeys = Object.keys(f);
-          const matches = fKeys.every((k) => doc[k] != null && String(doc[k]) === String(f[k]));
-          if (matches) {
-            docMap.set(JSON.stringify(f), doc);
-            break;
-          }
-        }
-      }
-      return docMap;
-    } catch (err) {
-      logger.warn({ err: err?.message }, 'Audit pre-read failed (non-fatal)');
-      return null;
-    }
-  };
-
-  /** Compute diffs using the pre-read map and write audit entries. */
-  const writeAuditEntries = async (opsToWrite, docMap, upsertedEntries) => {
-    if (!audit?.auditCollection || !docMap) return;
-    try {
-      const upsertedSet = new Set((upsertedEntries || []).map((e) => e?.index));
-      const auditEntries = [];
-      const now = new Date();
-
-      for (let i = 0; i < opsToWrite.length; i++) {
-        const op = opsToWrite[i];
-        const filter = op?.updateOne?.filter;
-        if (!filter) continue;
-        // Pipeline updates store raw payload on _rawSet (not serialised to BSON);
-        // legacy updates use $set directly.
-        const update = op?.updateOne?.update;
-        const setFields = Array.isArray(update) ? update._rawSet : update?.$set;
-        if (!setFields) continue;
-
-        const filterKey = JSON.stringify(filter);
-        const existing = docMap.get(filterKey) || null;
-        const isCreate = !existing || upsertedSet.has(i);
-
-        if (isCreate) {
-          auditEntries.push({
-            collection: audit.collectionName,
-            documentId: filter.Id ?? filter.Code ?? filter.Number ?? null,
-            filter,
-            runId: audit.runId || null,
-            action: 'create',
-            changes: [],
-            timestamp: now,
-          });
-          auditedCreates++;
-          continue;
-        }
-
-        // Volatile fields are not written unless real content changed, so
-        // diffing them would report a change the write never made.
-        const volatileFields = Array.isArray(update) ? update._rawVolatile : null;
-        const changes = volatileFields?.length
-          ? deepDiff(existing, setFields, {
-            skipFields: new Set([...SYNC_INTERNAL_FIELDS, ...volatileFields]),
-          })
-          : deepDiff(existing, setFields);
-        if (!changes.length) continue;
-
-        auditEntries.push({
-          collection: audit.collectionName,
-          documentId: filter.Id ?? filter.Code ?? filter.Number ?? null,
-          filter,
-          runId: audit.runId || null,
-          action: 'update',
-          changes,
-          timestamp: now,
-        });
-        auditedChanges++;
-      }
-
-      if (auditEntries.length) {
-        await audit.auditCollection.insertMany(auditEntries, { ordered: false });
-      }
-    } catch (err) {
-      logger.warn({ err: err?.message, collection: audit.collectionName }, 'Audit write failed (non-fatal)');
-    }
   };
 
   const enqueueWrite = async (opsToWrite) => {
@@ -361,7 +366,7 @@ function createBulkUpserter(collection, batchSize = 250) {
 
     writeChain = writeChain.then(async () => {
       // Pre-read for audit before the write so we capture the "before" state.
-      const preReadDocs = audit ? await preReadForAudit(opsToWrite) : null;
+      const preReadDocs = audit ? await preReadForAudit(collection, audit, opsToWrite) : null;
 
       // Pipeline updates handle timestamps internally via $ifNull / $cond.
       // Only inject timestamps for legacy non-pipeline updates.
@@ -398,7 +403,9 @@ function createBulkUpserter(collection, batchSize = 250) {
 
       // Post-write: compute diffs and write audit entries.
       if (preReadDocs) {
-        await writeAuditEntries(opsToWrite, preReadDocs, upsertedEntries);
+        const audited = await writeAuditEntries(audit, opsToWrite, preReadDocs, upsertedEntries);
+        auditedCreates += audited.creates;
+        auditedChanges += audited.changes;
       }
     });
     await writeChain;
@@ -498,6 +505,9 @@ function carryForwardFailedCounts(prev, curr, failed) {
   return out;
 }
 
+// TODO: split into per-phase helpers — the six entity pipelines below are
+// near-identical copies. Exempted until then so lint stays green.
+// eslint-disable-next-line max-lines-per-function
 async function run(options = {}) {
   const runId = options?.runId ? String(options.runId) : null;
   const recordLog = typeof options?.recordLog === 'function' ? options.recordLog : null;
@@ -646,7 +656,7 @@ async function run(options = {}) {
     // the composite (scope..., keyField). Bank transactions need this: KashFlow
     // returns an internal transfer in both accounts' feeds, so the key has to be
     // per-account or the two halves overwrite each other.
-    const upsertSimpleList = async ({ model, rows, summaryKey, collectionName, keyFields, now, scope }) => {
+    const upsertSimpleList = async ({ model, rows, summaryKey, collectionName, keyFields, scope }) => {
       if (!rows?.length) return;
       const up = createBulkUpserter(model, { captureUpserts: true, audit: auditOpts(collectionName) });
       const skip = createSkipCounter();
@@ -659,7 +669,7 @@ async function run(options = {}) {
           if (v != null && !(typeof v === 'string' && v.trim() === '')) { keyField = f; keyValue = v; break; }
         }
         if (keyField == null) { skip.incMissingKey(); continue; }
-        await up.push({ updateOne: { filter: { ...(scope || {}), [keyField]: keyValue }, update: buildUpsertUpdate({ keyField, keyValue, payload: row, syncedAt: now, runId, model }), upsert: true } });
+        await up.push({ updateOne: { filter: { ...(scope || {}), [keyField]: keyValue }, update: buildUpsertUpdate({ keyField, keyValue, payload: row, runId, model }), upsert: true } });
       }
       await up.flush();
       mongoSummary[summaryKey] = addMongoStats(mongoSummary[summaryKey], up.getStats());
@@ -685,17 +695,16 @@ async function run(options = {}) {
 
     if (mongoEnabled) {
       setStage('upsert:lists');
-      const now = new Date();
       await Promise.all([
-        upsertSimpleList({ model: Journal,               rows: journalsRaw,                summaryKey: 'journals',                collectionName: 'journals',                keyFields: ['Id', 'Number'], now }),
-        upsertSimpleList({ model: Product,               rows: productsRaw,                summaryKey: 'products',                collectionName: 'products',                keyFields: ['Id', 'Code'],   now }),
-        upsertSimpleList({ model: PurchaseOrder,         rows: purchaseOrdersRaw,          summaryKey: 'purchaseOrders',          collectionName: 'purchaseorders',          keyFields: ['Id', 'Number'], now }),
-        upsertSimpleList({ model: QuoteCategory,         rows: quoteCategoriesRaw,         summaryKey: 'quoteCategories',         collectionName: 'quotecategories',         keyFields: ['Number'],       now }),
-        upsertSimpleList({ model: PurchaseOrderCategory, rows: purchaseOrderCategoriesRaw, summaryKey: 'purchaseOrderCategories', collectionName: 'purchaseordercategories', keyFields: ['Number'],       now }),
-        upsertSimpleList({ model: Currency,              rows: currenciesRaw,              summaryKey: 'currencies',              collectionName: 'currencies',              keyFields: ['Id', 'Code'],   now }),
-        upsertSimpleList({ model: Country,               rows: countriesRaw,               summaryKey: 'countries',               collectionName: 'countries',               keyFields: ['Id', 'Code'],   now }),
-        upsertSimpleList({ model: AccountingPeriod,      rows: accountingPeriodsRaw,       summaryKey: 'accountingPeriods',       collectionName: 'accountingperiods',       keyFields: ['Id'],           now }),
-        upsertSimpleList({ model: VatReturn,             rows: vatReturnsRaw,              summaryKey: 'vatReturns',              collectionName: 'vatreturns',              keyFields: ['Id'],           now }),
+        upsertSimpleList({ model: Journal,               rows: journalsRaw,                summaryKey: 'journals',                collectionName: 'journals',                keyFields: ['Id', 'Number'] }),
+        upsertSimpleList({ model: Product,               rows: productsRaw,                summaryKey: 'products',                collectionName: 'products',                keyFields: ['Id', 'Code'] }),
+        upsertSimpleList({ model: PurchaseOrder,         rows: purchaseOrdersRaw,          summaryKey: 'purchaseOrders',          collectionName: 'purchaseorders',          keyFields: ['Id', 'Number'] }),
+        upsertSimpleList({ model: QuoteCategory,         rows: quoteCategoriesRaw,         summaryKey: 'quoteCategories',         collectionName: 'quotecategories',         keyFields: ['Number'] }),
+        upsertSimpleList({ model: PurchaseOrderCategory, rows: purchaseOrderCategoriesRaw, summaryKey: 'purchaseOrderCategories', collectionName: 'purchaseordercategories', keyFields: ['Number'] }),
+        upsertSimpleList({ model: Currency,              rows: currenciesRaw,              summaryKey: 'currencies',              collectionName: 'currencies',              keyFields: ['Id', 'Code'] }),
+        upsertSimpleList({ model: Country,               rows: countriesRaw,               summaryKey: 'countries',               collectionName: 'countries',               keyFields: ['Id', 'Code'] }),
+        upsertSimpleList({ model: AccountingPeriod,      rows: accountingPeriodsRaw,       summaryKey: 'accountingPeriods',       collectionName: 'accountingperiods',       keyFields: ['Id'] }),
+        upsertSimpleList({ model: VatReturn,             rows: vatReturnsRaw,              summaryKey: 'vatReturns',              collectionName: 'vatreturns',              keyFields: ['Id'] }),
         (async () => {
           const up = createBulkUpserter(Nominal, { captureUpserts: true, audit: auditOpts('nominals') });
           const skip = createSkipCounter();
@@ -705,7 +714,7 @@ async function run(options = {}) {
             const keyField = id != null ? 'Id' : 'Code';
             const keyValue = id != null ? id : code;
             if (keyValue == null || (typeof keyValue === 'string' && keyValue.trim() === '')) { skip.incMissingKey(); continue; }
-            await up.push({ updateOne: { filter: { [keyField]: keyValue }, update: buildUpsertUpdate({ keyField, keyValue, payload: n, syncedAt: now, runId, model: Nominal }), upsert: true } });
+            await up.push({ updateOne: { filter: { [keyField]: keyValue }, update: buildUpsertUpdate({ keyField, keyValue, payload: n, runId, model: Nominal }), upsert: true } });
           }
           await up.flush();
           mongoSummary.nominals = addMongoStats(mongoSummary.nominals, up.getStats());
@@ -723,7 +732,7 @@ async function run(options = {}) {
             if (vatId == null) continue;
             const vatRate = typeof row.VATRate === 'number' ? row.VATRate : parseFloat(row.VATRate);
             const payload = { ...row, VATId: vatId, VATRate: Number.isFinite(vatRate) ? vatRate : null, Rate: Number.isFinite(vatRate) ? vatRate : null, CountryCode: 'GB' };
-            await up.push({ updateOne: { filter: { VATId: vatId }, update: buildUpsertUpdate({ keyField: 'VATId', keyValue: vatId, payload, syncedAt: now, runId, model: VATRate }), upsert: true } });
+            await up.push({ updateOne: { filter: { VATId: vatId }, update: buildUpsertUpdate({ keyField: 'VATId', keyValue: vatId, payload, runId, model: VATRate }), upsert: true } });
           }
           await up.flush();
           mongoSummary.vatRates = addMongoStats(mongoSummary.vatRates, up.getStats());
@@ -742,7 +751,7 @@ async function run(options = {}) {
             const keyField = id != null ? 'Id' : 'Code';
             const keyValue = id != null ? id : code;
             if (keyValue == null || (typeof keyValue === 'string' && keyValue.trim() === '')) { skip.incMissingKey(); continue; }
-            await up.push({ updateOne: { filter: { [keyField]: keyValue }, update: buildUpsertUpdate({ keyField, keyValue, payload: b, syncedAt: now, runId, model: BankAccount }), upsert: true } });
+            await up.push({ updateOne: { filter: { [keyField]: keyValue }, update: buildUpsertUpdate({ keyField, keyValue, payload: b, runId, model: BankAccount }), upsert: true } });
           }
           await up.flush();
           mongoSummary.bankAccounts = addMongoStats(mongoSummary.bankAccounts, up.getStats());
@@ -791,7 +800,7 @@ async function run(options = {}) {
           for (const t of txs) {
             if (t && typeof t === 'object' && !Array.isArray(t)) t.AccountId = accountId;
           }
-          await upsertSimpleList({ model: BankTransaction, rows: txs, summaryKey: 'bankTransactions', collectionName: 'banktransactions', keyFields: ['Id'], scope: { AccountId: accountId }, now });
+          await upsertSimpleList({ model: BankTransaction, rows: txs, summaryKey: 'bankTransactions', collectionName: 'banktransactions', keyFields: ['Id'], scope: { AccountId: accountId } });
 
           // Soft-delete anything KashFlow no longer returns for this account.
           // Reached only after a successful, non-empty fetch — see
@@ -839,7 +848,6 @@ async function run(options = {}) {
     // theoretical one. Skipping leaves every other entity syncing normally.
     if (mongoEnabled && bankAccountsRaw?.length && BankReconciliation) {
       setStage('bankreconciliations:fetch');
-      const now = new Date();
       for (const account of bankAccountsRaw) {
         const accountId = pickId(account);
         if (accountId == null) continue;
@@ -866,7 +874,7 @@ async function run(options = {}) {
           if (!rows.length) continue;
 
           bankReconciliationsTotal += rows.length;
-          await upsertSimpleList({ model: BankReconciliation, rows, summaryKey: 'bankReconciliations', collectionName: 'bankreconciliations', keyFields: ['ReconKey'], now });
+          await upsertSimpleList({ model: BankReconciliation, rows, summaryKey: 'bankReconciliations', collectionName: 'bankreconciliations', keyFields: ['ReconKey'] });
         } catch (e) {
           // Best-effort, matching the bank-transaction loop above: a failing
           // account is logged and skipped so it never breaks the run.
@@ -894,12 +902,11 @@ async function run(options = {}) {
         progress.setItemTotal('customers', customerCodes.length);
         progress.setItemDone('customers', 0);
         const upserter = createBulkUpserter(Customer, { captureUpserts: true, audit: auditOpts('customers') });
-        const runNow = new Date();
         await createPool(config.concurrency || 4, 'customers', async (code) => {
           const full = await kf.customers.get(code);
           const id = pickId(full);
           if (id == null) { progress.incItem('customers', 1); return 0; }
-          await upserter.push({ updateOne: { filter: { Id: id }, update: buildUpsertUpdate({ keyField: 'Id', keyValue: id, payload: full, syncedAt: runNow, runId, model: Customer }), upsert: true } });
+          await upserter.push({ updateOne: { filter: { Id: id }, update: buildUpsertUpdate({ keyField: 'Id', keyValue: id, payload: full, runId, model: Customer }), upsert: true } });
           progress.incItem('customers', 1);
           return 1;
         }, undefined)(customerCodes);
@@ -925,12 +932,11 @@ async function run(options = {}) {
         progress.setItemTotal('suppliers', supplierCodes.length);
         progress.setItemDone('suppliers', 0);
         const upserter = createBulkUpserter(Supplier, { captureUpserts: true, audit: auditOpts('suppliers') });
-        const runNow = new Date();
         await createPool(config.concurrency || 4, 'suppliers', async (code) => {
           const full = await kf.suppliers.get(code);
           const id = pickId(full);
           if (id == null) { progress.incItem('suppliers', 1); return 0; }
-          await upserter.push({ updateOne: { filter: { Id: id }, update: buildUpsertUpdate({ keyField: 'Id', keyValue: id, payload: full, syncedAt: runNow, runId, model: Supplier }), upsert: true } });
+          await upserter.push({ updateOne: { filter: { Id: id }, update: buildUpsertUpdate({ keyField: 'Id', keyValue: id, payload: full, runId, model: Supplier }), upsert: true } });
           progress.incItem('suppliers', 1);
           return 1;
         }, undefined)(supplierCodes);
@@ -957,7 +963,6 @@ async function run(options = {}) {
         progress.setItemTotal('projects', projectNumbers.length);
         progress.setItemDone('projects', 0);
         const projectDetailUpserter = createBulkUpserter(Project, { captureUpserts: true, audit: auditOpts('projects') });
-        const runNow = new Date();
         let projectsDetailFailed = 0;
         await createPool(detailConcurrency, 'projects', async (number) => {
           try {
@@ -966,7 +971,7 @@ async function run(options = {}) {
             const id = pickId(full);
             const keyField = id != null ? 'Id' : 'Number';
             const keyValue = id != null ? id : number;
-            await projectDetailUpserter.push({ updateOne: { filter: { [keyField]: keyValue }, update: buildUpsertUpdate({ keyField, keyValue, payload: full, syncedAt: runNow, runId, model: Project }), upsert: true } });
+            await projectDetailUpserter.push({ updateOne: { filter: { [keyField]: keyValue }, update: buildUpsertUpdate({ keyField, keyValue, payload: full, runId, model: Project }), upsert: true } });
             progress.incItem('projects', 1);
             return 1;
           } catch (err) {
@@ -1025,7 +1030,7 @@ async function run(options = {}) {
             try {
               const full = await kf.invoices.get(number);
               if (!full || typeof full !== 'object') { invoicesDetailFailed += 1; logger.warn({ invoiceNumber: number, invoiceId: id }, 'Invoice detail returned empty response'); progress.incItem('invoices', 1); return 0; }
-              const update = buildUpsertUpdate({ keyField: 'Id', keyValue: id, payload: full, syncedAt: runNow, runId, model: Invoice });
+              const update = buildUpsertUpdate({ keyField: 'Id', keyValue: id, payload: full, runId, model: Invoice });
               update[0].$set.detailSyncedAt = { $cond: { if: { $ne: ['$_kfHash', update[0].$set._kfHash] }, then: { $literal: runNow }, else: { $ifNull: ['$detailSyncedAt', { $literal: runNow }] } } };
               update._rawSet.detailSyncedAt = runNow;
               await invoiceDetailUpserter.push({ updateOne: { filter: { Id: id }, update, upsert: true } });
@@ -1085,7 +1090,7 @@ async function run(options = {}) {
             try {
               const full = await kf.quotes.get(number);
               if (!full || typeof full !== 'object') { quotesDetailFailed += 1; logger.warn({ quoteNumber: number, quoteId: id }, 'Quote detail returned empty response'); progress.incItem('quotes', 1); return 0; }
-              const update = buildUpsertUpdate({ keyField: 'Id', keyValue: id, payload: full, syncedAt: runNow, runId, model: Quote });
+              const update = buildUpsertUpdate({ keyField: 'Id', keyValue: id, payload: full, runId, model: Quote });
               update[0].$set.detailSyncedAt = { $cond: { if: { $ne: ['$_kfHash', update[0].$set._kfHash] }, then: { $literal: runNow }, else: { $ifNull: ['$detailSyncedAt', { $literal: runNow }] } } };
               update._rawSet.detailSyncedAt = runNow;
               await quoteDetailUpserter.push({ updateOne: { filter: { Id: id }, update, upsert: true } });
@@ -1166,7 +1171,7 @@ async function run(options = {}) {
                 if (sid != null) { full.SupplierId = sid; purchasesSupplierIdBackfilled += 1; }
               }
               // buildUpsertUpdate applies Purchase.syncConfig.transform itself.
-              const update = buildUpsertUpdate({ keyField: 'Id', keyValue: id, payload: full, syncedAt: runNow, runId, model: Purchase });
+              const update = buildUpsertUpdate({ keyField: 'Id', keyValue: id, payload: full, runId, model: Purchase });
               update[0].$set.detailSyncedAt = { $cond: { if: { $ne: ['$_kfHash', update[0].$set._kfHash] }, then: { $literal: runNow }, else: { $ifNull: ['$detailSyncedAt', { $literal: runNow }] } } };
               update._rawSet.detailSyncedAt = runNow;
               await purchaseDetailUpserter.push({ updateOne: { filter: { Id: id }, update, upsert: true } });
