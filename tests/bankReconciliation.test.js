@@ -11,7 +11,7 @@
  */
 import { describe, it, expect, vi } from 'vitest';
 
-// Same mock preamble as syncHelpers.test.js — lets run.js load without
+// Same mock preamble as syncHelpers.test.js — lets the sync modules load without
 // touching the network, Mongo, or the real logger.
 vi.mock('../src/util/logger.js', () => {
   const noop = vi.fn();
@@ -28,7 +28,7 @@ vi.mock('../src/db/mongoose.js', () => ({
 vi.mock('../src/db/mongo.js', () => ({ ensureKashflowIndexes: vi.fn() }));
 vi.mock('dotenv', () => ({ default: { config: () => ({}) }, config: () => ({}) }));
 
-import { buildUpsertUpdate } from '../src/sync/run.js';
+import { buildUpsertUpdate } from '../src/sync/upsert.js';
 import {
   prepareInvoiceForUpsert,
   prepareBankTransactionForUpsert,

@@ -71,6 +71,8 @@ src/
     sessionService.js       # KashFlow session handling
   sync/
     run.js                  # Full sync orchestration (fetch → diff → upsert)
+    upsert.js               # Upsert engine: payload → pipeline update, batched writes + audit
+    entities.js             # Synced-entity registry derived from each model's syncConfig
     pull.js                 # Single-entity pull/debug (dashboard + machine API)
   db/
     mongo.js                # Native driver connection + index management
@@ -132,7 +134,7 @@ Each capability from three angles: **Dev** (how it's built), **User** (what an a
 - **Business Owner.** A defensible audit trail of every automated write to the accounting mirror — important for financial data integrity and troubleshooting disputes.
 
 ### 6 — Single-Entity Pull & Debug
-- **Dev.** [`sync/pull.js`](src/sync/pull.js) fetches and upserts one KashFlow entity by Number/Code. Exposed via `/pull` (dashboard) and `/debug` (fetch + report without committing assumptions), covering purchases, invoices, quotes, customers, suppliers, projects.
+- **Dev.** [`sync/pull.js`](src/sync/pull.js) fetches and upserts one KashFlow entity by Number/Code, building the write with the same [`upsert.js`](src/sync/upsert.js) engine as the full sync; unlike the full sync it always stamps `detailSyncedAt`. Exposed via `/pull` (dashboard), `/api/pull` (hcs-app, API-key auth) and `/debug` (fetch + report without committing assumptions), for every entity whose `syncConfig` declares a `lookupField`.
 - **User.** When one record looks wrong, refresh just that record instead of waiting for a full sync.
 - **Business Owner.** Fast, surgical correction of a single invoice/supplier without the cost or delay of a full re-sync.
 
