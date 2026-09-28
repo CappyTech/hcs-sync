@@ -46,7 +46,6 @@
     "express-rate-limit": "^8.5.2",
     "helmet": "^7.2.0",
     "jsonwebtoken": "^9.0.2",
-    "mongodb": "^6.19.0",
     "mongoose": "^8.18.0",
     "node-cron": "^4.2.1",
     "pino": "^9.8.0",

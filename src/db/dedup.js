@@ -178,7 +178,7 @@ async function backfillUuids(db, { dryRun = false, log = console.log, actions = 
 /**
  * Run the full dedup + uuid-backfill pipeline.
  *
- * @param {import('mongodb').Db} db  - MongoDB database instance
+ * @param {import('mongoose').mongo.Db} db  - MongoDB database instance
  * @param {object} [options]
  * @param {boolean} [options.dryRun=false]  - if true, report what would be done without modifying data
  * @param {Function} [options.log]          - logging function (default: console.log)
