@@ -13,7 +13,7 @@ vi.mock('dotenv', () => ({ default: { config: () => ({}) }, config: () => ({}) }
 
 import models from '../src/server/models/kashflow.js';
 import {
-  SYNCED_ENTITIES, entityBySummaryKey, SYNCED_COLLECTION_NAMES, LIST_ONLY_MODELS, pullTypeOf,
+  SYNCED_ENTITIES, entityBySummaryKey, SYNCED_COLLECTION_NAMES, LIST_ONLY_MODELS, pullTypeOf, indexPlan,
 } from '../src/sync/entities.js';
 import { ENTITY_CONFIG } from '../src/sync/pull.js';
 
@@ -59,6 +59,21 @@ describe('synced-entity registry', () => {
     expect(byKey.quoteCategories.keyFields).toEqual(['Number']);
     expect(byKey.vatRates.keyFields).toEqual(['VATId']);
     expect(byKey.bankReconciliations.keyFields).toEqual(['ReconKey']);
+    expect(byKey.nominals.keyFields).toEqual(['Id', 'Code']);
+    expect(byKey.bankAccounts.keyFields).toEqual(['Id', 'Code']);
+  });
+
+  it('scopes only the bank transaction key, to the feed account', () => {
+    const scoped = SYNCED_ENTITIES.filter((e) => e.scopeFields.length);
+    expect(scoped.map((e) => [e.summaryKey, e.scopeFields])).toEqual([['bankTransactions', ['AccountId']]]);
+  });
+
+  it('marks exactly the historical dedup collections, never a scoped one', () => {
+    const dedup = SYNCED_ENTITIES.filter((e) => e.dedup);
+    expect(dedup.map((e) => e.collectionName)).toEqual([
+      'customers', 'suppliers', 'invoices', 'quotes', 'purchases', 'projects', 'nominals',
+    ]);
+    expect(dedup.every((e) => e.scopeFields.length === 0)).toBe(true);
   });
 
   it('marks exactly the entities with no detail phase as list-only', () => {
@@ -100,5 +115,42 @@ describe('pull types', () => {
       purchaseorder: ['purchaseorder', 'purchaseOrders', 'Id', 'Number'],
       vatreturn: ['vatreturn', 'vatReturns', 'Id', 'Id'],
     });
+  });
+});
+
+describe('index plan', () => {
+  const plan = indexPlan();
+  const names = (list) => list.map((i) => `${i.collectionName}.${i.field ?? i.fields.join('+')}`).sort();
+
+  it('puts a unique index on every plain key', () => {
+    expect(names(plan.unique)).toEqual([
+      'accountingperiods.Id', 'bankaccounts.Id', 'bankreconciliations.ReconKey', 'countries.Id',
+      'currencies.Id', 'customers.Id', 'invoices.Id', 'journals.Id', 'nominals.Id', 'products.Id',
+      'projects.Id', 'purchaseordercategories.Number', 'purchaseorders.Id', 'purchases.Id',
+      'quotecategories.Number', 'quotes.Id', 'suppliers.Id', 'vatrates.VATId', 'vatreturns.Id',
+    ]);
+  });
+
+  it('treats only string keys as strings (blank values are unset before indexing)', () => {
+    expect(plan.unique.filter((i) => i.keyType === 'string').map((i) => i.field)).toEqual(['ReconKey']);
+  });
+
+  it('keys bank transactions on the (AccountId, Id) composite, not a bare Id', () => {
+    expect(plan.scopedUnique).toEqual([{ collectionName: 'banktransactions', fields: ['AccountId', 'Id'] }]);
+    expect(names(plan.unique)).not.toContain('banktransactions.Id');
+  });
+
+  it('indexes fallback keys, lookup fields and the scoped bare key, non-uniquely', () => {
+    expect(names(plan.secondary)).toEqual([
+      'bankaccounts.Code', 'banktransactions.Id', 'countries.Code', 'currencies.Code',
+      'customers.Code', 'invoices.Number', 'journals.Number', 'nominals.Code', 'products.Code',
+      'projects.Number', 'purchaseorders.Number', 'purchases.Number', 'quotes.Number', 'suppliers.Code',
+    ]);
+  });
+
+  it('lets the legacy-index repair keep each collection\'s full key', () => {
+    expect(plan.managedUniqueFields.banktransactions).toEqual(['AccountId', 'Id']);
+    expect(plan.managedUniqueFields.bankreconciliations).toEqual(['ReconKey']);
+    expect(Object.keys(plan.managedUniqueFields)).toHaveLength(20);
   });
 });

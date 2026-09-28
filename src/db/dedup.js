@@ -9,16 +9,14 @@
  */
 
 import crypto from 'node:crypto';
+import { SYNCED_ENTITIES } from '../sync/entities.js';
 
-const COLLECTIONS = [
-  { name: 'customers',  idField: 'Id' },
-  { name: 'suppliers',  idField: 'Id' },
-  { name: 'invoices',   idField: 'Id' },
-  { name: 'quotes',     idField: 'Id' },
-  { name: 'purchases',  idField: 'Id' },
-  { name: 'projects',   idField: 'Id' },
-  { name: 'nominals',   idField: 'Id' },
-];
+// The collections marked `dedup: true` in their model's syncConfig, grouped by
+// their key. A scoped key is never unique on its own (banktransactions repeats
+// Id across accounts by design), so deduping on it would delete real rows.
+const COLLECTIONS = SYNCED_ENTITIES
+  .filter((e) => e.dedup && e.scopeFields.length === 0)
+  .map((e) => ({ name: e.collectionName, idField: e.keyFields[0] }));
 
 /** Sort docs array in-place: oldest first (by syncedAt, then _id). */
 function sortOldestFirst(docs) {
