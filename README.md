@@ -47,7 +47,13 @@ Shared Mongoose schemas come from [`@cappytech/hcs-schemas`](https://github.com/
 src/
   config.js                 # All env config, centralised
   server/
-    index.js                # Express app: middleware, auth, routes, cron bootstrap (entry point)
+    index.js                # Entry point: builds the app, listens, loads the cron schedule
+    app.js                  # createApp(): middleware in order + routes (does not listen)
+    buildInfo.js            # Version/commit/branch for the footer
+    syncController.js       # Run state (isRunning, last counts, log buffer), triggerSync, cron config, dedup
+    notify.js               # Run change summary + Discord alerts
+    middleware/             # auth (SSO guard, admin, API key), csrf, requestLog, locals (template helpers + CSP nonce)
+    routes/                 # dashboard, auth (login/logout), settings, history, debug (+ /pull, /api/pull)
     cron.js                 # Cron scheduler start/stop + health
     runStore.js             # Persisted run history, logs, change records, revert
     settingsStore.js        # DB-backed runtime settings (cron schedule, etc.)
@@ -85,10 +91,12 @@ docker-compose.yml          # Production stack (Tailscale sidecar + hcs-sync)
 
 [`src/server/index.js`](src/server/index.js) is the entry point. On boot it:
 
-1. Computes build identity (version/commit/branch) for the footer.
-2. Registers middleware: template locals, CSP nonce + Helmet, request logging (Pino, with abort detection), cookie parsing, the **SSO auth guard**, EJS, body parsing, **CSRF** double-submit protection, and `no-store` static asset serving.
-3. Defines routes (dashboard, history, settings, sync/dedup triggers, pull/debug, machine API).
-4. Starts listening, then loads runtime settings from MongoDB (falling back to env) and **applies the cron schedule**.
+1. Builds the app with [`createApp()`](src/server/app.js), which computes build identity (version/commit/branch) for the footer and:
+   - registers middleware, in this order: template locals, CSP nonce + Helmet, cookie parsing, request logging (Pino, with abort detection), the **SSO auth guard**, EJS, body parsing, `no-store` static asset serving, and **CSRF** double-submit protection;
+   - mounts the routers in [`routes/`](src/server/routes) (dashboard, auth, settings, history, debug/pull/machine API).
+2. Starts listening, then loads runtime settings from MongoDB (falling back to env) and **applies the cron schedule**.
+
+`createApp()` does not listen, so the app can be built without starting a server.
 
 Sync runs are single-flight (`isRunning` guard) and tracked in `runStore`, with live progress exposed for dashboard polling.
 
