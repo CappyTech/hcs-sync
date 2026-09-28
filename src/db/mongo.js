@@ -1,11 +1,13 @@
 /**
- * MongoDB index management for the REST namespace.
+ * MongoDB index management for the REST namespace. Which key and lookup
+ * indexes each collection gets is derived from its model's syncConfig.
  *
  * The connection itself lives in ./mongoose.js — hcs-sync uses one Mongoose
  * connection for everything, and ensureKashflowIndexes is handed its db.
  */
 import config from '../config.js';
 import logger from '../util/logger.js';
+import { indexPlan } from '../sync/entities.js';
 
 function isMongoAuthError(err) {
   const message = String(err?.message || '');
@@ -173,88 +175,34 @@ async function repairLegacyUniqueIndexes(db, managedUniqueFields) {
 export async function ensureKashflowIndexes(db) {
   // Indexes to make upserts efficient and enforce uniqueness on the KashFlow Id.
   try {
-    // Primary unique dedup key: Id (KashFlow-assigned numeric identifier).
-    // Secondary non-unique indexes: code/number (for query performance).
-    const managedUniqueFields = {
-      customers: ['Id'],
-      suppliers: ['Id'],
-      nominals: ['Id'],
-      invoices: ['Id'],
-      quotes: ['Id'],
-      purchases: ['Id'],
-      projects: ['Id'],
-      bankaccounts: ['Id'],
-      // Keyed on the (AccountId, Id) composite, not a bare Id: an internal
-      // transfer is two ledger lines sharing one KashFlow Id, one per account.
-      // Listed here so the legacy-index repair below still reaches this
-      // collection (it is also what converts a legacy unique `uuid` index into
-      // a partial one); the composite itself is created in `compoundJobs`.
-      banktransactions: ['AccountId', 'Id'],
-      // Keyed on the synthetic "<AccountId>:<Id>" composite — KashFlow's
-      // reconciliation Id is only unique within an account.
-      bankreconciliations: ['ReconKey'],
-      journals: ['Id'],
-      products: ['Id'],
-      purchaseorders: ['Id'],
-      quotecategories: ['Number'],
-      purchaseordercategories: ['Number'],
-      currencies: ['Id'],
-      countries: ['Id'],
-      accountingperiods: ['Id'],
-      vatreturns: ['Id'],
-    };
+    // Key and lookup indexes come from each model's syncConfig (see
+    // indexPlan in src/sync/entities.js); only hcs-app's query-path indexes
+    // below are listed by hand.
+    const plan = indexPlan();
 
-    const collectionsNeedingUuid = await repairLegacyUniqueIndexes(db, managedUniqueFields);
+    const collectionsNeedingUuid = await repairLegacyUniqueIndexes(db, plan.managedUniqueFields);
 
-    // Primary unique indexes on Id (dedup key).
-    const indexJobs = [
-      ensureUniqueKeyIndex(db, 'customers', 'Id'),
-      ensureUniqueKeyIndex(db, 'suppliers', 'Id'),
-      ensureUniqueKeyIndex(db, 'nominals', 'Id'),
-      ensureUniqueKeyIndex(db, 'invoices', 'Id'),
-      ensureUniqueKeyIndex(db, 'quotes', 'Id'),
-      ensureUniqueKeyIndex(db, 'purchases', 'Id'),
-      ensureUniqueKeyIndex(db, 'projects', 'Id'),
-      ensureUniqueKeyIndex(db, 'bankaccounts', 'Id'),
-      ensureUniqueKeyIndex(db, 'bankreconciliations', 'ReconKey', 'string'),
-      ensureUniqueKeyIndex(db, 'journals', 'Id'),
-      ensureUniqueKeyIndex(db, 'products', 'Id'),
-      ensureUniqueKeyIndex(db, 'purchaseorders', 'Id'),
-      ensureUniqueKeyIndex(db, 'quotecategories', 'Number'),
-      ensureUniqueKeyIndex(db, 'purchaseordercategories', 'Number'),
-      ensureUniqueKeyIndex(db, 'currencies', 'Id'),
-      ensureUniqueKeyIndex(db, 'countries', 'Id'),
-      ensureUniqueKeyIndex(db, 'accountingperiods', 'Id'),
-      ensureUniqueKeyIndex(db, 'vatreturns', 'Id'),
-    ];
+    // Unique index on each collection's key — the upsert filter, so it is also
+    // what keeps a re-run from inserting a duplicate.
+    const indexJobs = plan.unique.map(({ collectionName, field, keyType }) =>
+      ensureUniqueKeyIndex(db, collectionName, field, keyType));
 
-    // Secondary non-unique indexes on Code/Number for query performance.
-    // Field names are capitalized to match the KashFlow API payload keys.
-    const secondaryJobs = [
-      ensureSecondaryIndex(db, 'customers', 'Code'),
-      ensureSecondaryIndex(db, 'suppliers', 'Code'),
-      ensureSecondaryIndex(db, 'nominals', 'Code'),
-      ensureSecondaryIndex(db, 'invoices', 'Number'),
-      ensureSecondaryIndex(db, 'quotes', 'Number'),
-      ensureSecondaryIndex(db, 'purchases', 'Number'),
-      ensureSecondaryIndex(db, 'projects', 'Number'),
-      ensureSecondaryIndex(db, 'bankaccounts', 'Code'),
-      // Downgrades the legacy unique `Id_1` to non-unique, which is what makes
-      // room for both halves of a transfer. Must happen before the first sync
-      // writes them or the second half fails with a duplicate key error.
-      ensureSecondaryIndex(db, 'banktransactions', 'Id'),
-      ensureSecondaryIndex(db, 'journals', 'Number'),
-      ensureSecondaryIndex(db, 'products', 'Code'),
-      ensureSecondaryIndex(db, 'purchaseorders', 'Number'),
-      ensureSecondaryIndex(db, 'currencies', 'Code'),
-      ensureSecondaryIndex(db, 'countries', 'Code'),
-    ];
+    // A scoped key is unique only within its scope, e.g. banktransactions on
+    // (AccountId, Id): an internal transfer is two ledger lines sharing one
+    // KashFlow Id. Options mirror the hcs-schemas declaration exactly, or this
+    // and Mongoose's autoIndex fight over the same derived name.
+    const scopedKeyJobs = plan.scopedUnique.map(({ collectionName, fields }) =>
+      ensureCompoundIndex(db, collectionName, Object.fromEntries(fields.map((f) => [f, 1])), { unique: true, sparse: true }));
+
+    // Non-unique indexes on fallback keys, lookup fields and a scoped key's
+    // bare key field. For banktransactions that last one downgrades the legacy
+    // unique `Id_1` to non-unique, which is what makes room for both halves of
+    // a transfer — it must happen before the first sync writes them.
+    const secondaryJobs = plan.secondary.map(({ collectionName, field }) =>
+      ensureSecondaryIndex(db, collectionName, field));
 
     // Compound indexes serving hcs-app's bank reconciliation query paths.
     const compoundJobs = [
-      // The dedup key. Options mirror the hcs-schemas declaration exactly, or
-      // this and Mongoose's autoIndex fight over the same derived name.
-      ensureCompoundIndex(db, 'banktransactions', { AccountId: 1, Id: 1 }, { unique: true, sparse: true }),
       // Per-account unreconciled worklist, ordered newest first.
       ensureCompoundIndex(db, 'banktransactions', { AccountId: 1, Reconciled: 1, Date: -1 }),
       // Resolving a bank line to the document it settles.
@@ -290,7 +238,7 @@ export async function ensureKashflowIndexes(db) {
       ),
     ];
 
-    await Promise.all([...indexJobs, ...secondaryJobs, ...compoundJobs, ...auditJobs]);
+    await Promise.all([...indexJobs, ...scopedKeyJobs, ...secondaryJobs, ...compoundJobs, ...auditJobs]);
   } catch (err) {
     if (isMongoAuthError(err)) {
       throw new Error(

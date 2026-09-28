@@ -9,16 +9,20 @@ import schemas from '@cappytech/hcs-schemas';
  * are still persisted, and adds syncConfig statics for the sync engine.
  *
  * syncConfig is the one place an entity's sync metadata is declared; the sync
- * engine (src/sync/entities.js), the manual pull and the history page all
- * derive from it:
+ * engine (src/sync/entities.js), the manual pull, the history page, the Mongo
+ * indexes (src/db/mongo.js) and dedup (src/db/dedup.js) all derive from it:
  *
  *   summaryKey        key in run counts, the Mongo write summary and Discord
  *                     (the collection name comes from the model itself)
- *   keyField          upsert key; fallbackKeyFields are tried in order when a
- *                     row lacks it
+ *   keyField          upsert key and unique index; fallbackKeyFields are tried
+ *                     in order when a row lacks it, and get non-unique indexes
+ *   scopeFields       fields the key is unique within (the unique index is the
+ *                     composite scopeFields + keyField)
+ *   dedup             included in the dashboard/CLI duplicate cleanup
  *   listOnly          the list payload is all there is — no detail phase
  *   lookupField       what KashFlow's detail endpoint is addressed by; its
- *                     presence makes the entity pullable on demand
+ *                     presence makes the entity pullable on demand (and it gets
+ *                     a non-unique index)
  *   protectedFields   never overwritten by a sync
  *   volatileFields    kept out of the content hash (see buildUpsertUpdate)
  *   transform         normalises a payload before upsert
@@ -64,6 +68,7 @@ const CustomerSchema = buildSchema(schemas.customer);
 CustomerSchema.statics.syncConfig = {
   summaryKey: 'customers',
   keyField: 'Id',
+  dedup: true,
   lookupField: 'Code',
   protectedFields: [],
 };
@@ -78,6 +83,7 @@ const SupplierSchema = buildSchema(schemas.supplier);
 SupplierSchema.statics.syncConfig = {
   summaryKey: 'suppliers',
   keyField: 'Id',
+  dedup: true,
   lookupField: 'Code',
   protectedFields: ['Subcontractor', 'IsSubcontractor', 'CISRate', 'CISNumber'],
 };
@@ -134,6 +140,7 @@ export function prepareInvoiceForUpsert(item) {
 InvoiceSchema.statics.syncConfig = {
   summaryKey: 'invoices',
   keyField: 'Id',
+  dedup: true,
   lookupField: 'Number',
   protectedFields: [],
   transform: prepareInvoiceForUpsert,
@@ -149,6 +156,7 @@ const QuoteSchema = buildSchema(schemas.quote);
 QuoteSchema.statics.syncConfig = {
   summaryKey: 'quotes',
   keyField: 'Id',
+  dedup: true,
   lookupField: 'Number',
   protectedFields: [],
 };
@@ -262,6 +270,7 @@ export function preparePurchaseForUpsert(item) {
 PurchaseSchema.statics.syncConfig = {
   summaryKey: 'purchases',
   keyField: 'Id',
+  dedup: true,
   lookupField: 'Number',
   protectedFields: ['SubmissionDate'],
   transform: preparePurchaseForUpsert,
@@ -280,6 +289,7 @@ const ProjectSchema = buildSchema(schemas.project, {
 ProjectSchema.statics.syncConfig = {
   summaryKey: 'projects',
   keyField: 'Id',
+  dedup: true,
   lookupField: 'Number',
   fallbackKeyField: 'Number',
   protectedFields: [],
@@ -295,6 +305,8 @@ const NominalSchema = buildSchema(schemas.nominal);
 NominalSchema.statics.syncConfig = {
   summaryKey: 'nominals',
   keyField: 'Id',
+  dedup: true,
+  fallbackKeyFields: ['Code'],
   fallbackKeyField: 'Code',
   protectedFields: [],
 };
@@ -329,6 +341,7 @@ const BankAccountSchema = buildSchema(schemas.bankAccount);
 BankAccountSchema.statics.syncConfig = {
   summaryKey: 'bankAccounts',
   keyField: 'Id',
+  fallbackKeyFields: ['Code'],
   fallbackKeyField: 'Code',
   protectedFields: [],
 };
@@ -365,6 +378,9 @@ export function prepareBankTransactionForUpsert(item) {
 BankTransactionSchema.statics.syncConfig = {
   summaryKey: 'bankTransactions',
   keyField: 'Id',
+  // An internal transfer is two ledger lines sharing one KashFlow Id, one per
+  // account, so the key is (AccountId, Id), not Id alone.
+  scopeFields: ['AccountId'],
   protectedFields: [],
   transform: prepareBankTransactionForUpsert,
   // Balance is KashFlow's running balance, computed per request. Rows sharing a

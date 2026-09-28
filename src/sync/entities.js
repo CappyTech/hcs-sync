@@ -15,8 +15,11 @@ import models from '../server/models/kashflow.js';
  * @property {string} summaryKey      key in run counts and the Mongo write summary
  * @property {string} collectionName  the Mongo collection the model writes to
  * @property {string[]} keyFields     upsert key, then its fallbacks, in order
+ * @property {string[]} scopeFields   fields the key is unique within ([] for a plain key)
+ * @property {'string'|'any'} keyType 'string' when the key is a String in the schema
  * @property {string|undefined} lookupField  set only for pullable entities
  * @property {boolean} listOnly
+ * @property {boolean} dedup           included in the duplicate cleanup
  */
 
 /** @returns {SyncedEntity} */
@@ -27,8 +30,11 @@ export function describeEntity(model) {
     summaryKey: cfg.summaryKey,
     collectionName: model.collection.collectionName,
     keyFields: [cfg.keyField, ...(cfg.fallbackKeyFields || [])],
+    scopeFields: cfg.scopeFields || [],
+    keyType: model.schema.path(cfg.keyField)?.instance === 'String' ? 'string' : 'any',
     lookupField: cfg.lookupField,
     listOnly: Boolean(cfg.listOnly),
+    dedup: Boolean(cfg.dedup),
   };
 }
 
@@ -52,4 +58,36 @@ export const LIST_ONLY_MODELS = SYNCED_ENTITIES.filter((e) => e.listOnly).map((e
  */
 export function pullTypeOf(summaryKey) {
   return summaryKey.toLowerCase().replace(/s$/, '');
+}
+
+/**
+ * The indexes each synced collection needs, derived from syncConfig:
+ *
+ *  - unique: the key. A plain key gets a partial unique index on keyField; a
+ *    scoped key gets a unique compound index on scopeFields + keyField instead,
+ *    and its bare keyField gets a non-unique index (it repeats across scopes).
+ *  - secondary: non-unique indexes on the fallback keys and the lookup field,
+ *    which the sync and manual pulls query by.
+ *  - managedUniqueFields: the fields a unique index may legitimately cover, per
+ *    collection — what the legacy-index repair in src/db/mongo.js keeps.
+ */
+export function indexPlan(entities = SYNCED_ENTITIES) {
+  const managedUniqueFields = {};
+  const unique = [];
+  const scopedUnique = [];
+  const secondary = [];
+  for (const { collectionName, keyFields, scopeFields, keyType, lookupField } of entities) {
+    const [keyField, ...fallbacks] = keyFields;
+    managedUniqueFields[collectionName] = [...scopeFields, keyField];
+    if (scopeFields.length) {
+      scopedUnique.push({ collectionName, fields: [...scopeFields, keyField] });
+      secondary.push({ collectionName, field: keyField });
+    } else {
+      unique.push({ collectionName, field: keyField, keyType });
+    }
+    const extra = new Set(fallbacks);
+    if (lookupField && lookupField !== keyField) extra.add(lookupField);
+    for (const field of extra) secondary.push({ collectionName, field });
+  }
+  return { managedUniqueFields, unique, scopedUnique, secondary };
 }
