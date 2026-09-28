@@ -59,12 +59,9 @@ vi.mock('../src/sync/pull.js', () => ({
 vi.mock('../src/db/mongoose.js', () => ({
   isMongooseEnabled: vi.fn(() => false),
   connectMongoose: vi.fn(),
-}));
-
-vi.mock('../src/db/mongo.js', () => ({
-  isMongoEnabled: vi.fn(() => false),
   getMongoDb: vi.fn(),
 }));
+
 
 vi.mock('../src/db/dedup.js', () => ({
   runDedup: vi.fn(),
@@ -698,7 +695,7 @@ describe('Express server routes', () => {
     // filters by Mongo collection name ('vatrates'). Both must resolve to the
     // real collection; a single hand-kept allowlist conflated the two.
     async function fetchRunPage(query) {
-      const { isMongoEnabled, getMongoDb } = await import('../src/db/mongo.js');
+      const { isMongooseEnabled, getMongoDb } = await import('../src/db/mongoose.js');
       const runStoreMock = (await import('../src/server/runStore.js')).default;
       const queried = [];
       const fakeCursor = (docs) => ({
@@ -706,7 +703,7 @@ describe('Express server routes', () => {
         limit: () => fakeCursor(docs),
         toArray: async () => docs,
       });
-      isMongoEnabled.mockReturnValue(true);
+      isMongooseEnabled.mockReturnValue(true);
       getMongoDb.mockResolvedValue({
         collection: (name) => ({
           find: (filter) => {
@@ -728,7 +725,7 @@ describe('Express server routes', () => {
           .set('Cookie', `hcs_sso=${makeSsoToken()}`);
         return { res, queried };
       } finally {
-        isMongoEnabled.mockReturnValue(false);
+        isMongooseEnabled.mockReturnValue(false);
       }
     }
 
@@ -761,10 +758,10 @@ describe('Express server routes', () => {
 
   describe('POST /dedup success', () => {
     it('runs dedup and redirects when Mongo is enabled', async () => {
-      const { isMongoEnabled, getMongoDb } = await import('../src/db/mongo.js');
+      const { isMongooseEnabled, getMongoDb } = await import('../src/db/mongoose.js');
       const { runDedup } = await import('../src/db/dedup.js');
 
-      isMongoEnabled.mockReturnValue(true);
+      isMongooseEnabled.mockReturnValue(true);
       getMongoDb.mockResolvedValue({});
       runDedup.mockResolvedValue({ actions: [], duplicatesFound: 0 });
 
@@ -778,7 +775,7 @@ describe('Express server routes', () => {
       expect(res.headers.location).toBe('/?dedup=done');
 
       // Reset mocks
-      isMongoEnabled.mockReturnValue(false);
+      isMongooseEnabled.mockReturnValue(false);
     });
   });
 

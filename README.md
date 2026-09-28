@@ -29,7 +29,7 @@ It runs at `sync.heroncs.co.uk` and is deliberately **KashFlow-specific and repl
 | Runtime | Node.js 24+ **ESM** |
 | Web framework | Express 4 |
 | Views | EJS + Tailwind CSS 3 (built locally to `src/server/public/styles.css`) |
-| Database | MongoDB — accessed via both the native `mongodb` driver and Mongoose 8 (writes to the shared **REST namespace**) |
+| Database | MongoDB via a single Mongoose 8 connection (writes to the shared **REST namespace**) |
 | Accounting API | KashFlow REST v2 via Axios (`src/kashflow/`) |
 | Scheduling | `node-cron` + `cron-parser` + `cronstrue` (human-readable schedules) |
 | Auth & security | SSO JWT cookie issued by hcs-app (`jsonwebtoken`), shared-secret machine API key, Cloudflare Turnstile, Helmet/CSP with per-request nonce, double-submit CSRF (`csrf`), `express-rate-limit` |
@@ -67,16 +67,15 @@ src/
     public/                 # Built styles.css, client JS (theme toggle, UI helpers)
   kashflow/
     client.js               # Axios wrappers for KashFlow REST endpoints
-    auth.js                 # Token acquisition (session token or username/password)
-    sessionService.js       # KashFlow session handling
+    sessionService.js       # KashFlow session token: env token or username/password login, caching, lockout backoff
   sync/
     run.js                  # Full sync orchestration (fetch → diff → upsert)
     upsert.js               # Upsert engine: payload → pipeline update, batched writes + audit
     entities.js             # Synced-entity registry derived from each model's syncConfig
     pull.js                 # Single-entity pull/debug (dashboard + machine API)
   db/
-    mongo.js                # Native driver connection + index management
-    mongoose.js             # Mongoose connection
+    mongoose.js             # The one MongoDB connection (models, plus getMongoDb() for raw collections)
+    mongo.js                # Index management
     dedup.js                # Deduplication + UUID backfill
   util/
     logger.js               # Pino logger

@@ -1,6 +1,6 @@
 import express from 'express';
 import runStore from '../runStore.js';
-import { getMongoDb, isMongoEnabled } from '../../db/mongo.js';
+import { getMongoDb, isMongooseEnabled } from '../../db/mongoose.js';
 import { entityBySummaryKey, SYNCED_COLLECTION_NAMES } from '../../sync/entities.js';
 import { requireAdmin } from '../middleware/auth.js';
 import { isRunning, lastRun, lastCounts, lastError } from '../syncController.js';
@@ -27,7 +27,7 @@ router.get('/history', requireAdmin, async (_req, res) => {
  * @returns {Promise<{docs: object[]|null, source: string|null, error: string|null}>}
  */
 async function loadUpsertedDocs(run, entity) {
-  if (!isMongoEnabled()) {
+  if (!isMongooseEnabled()) {
     return { docs: null, source: null, error: 'MongoDB is not configured on the server (cannot load docs).' };
   }
   const filters = run?.summary?.mongoUpserts?.[entity.summaryKey]?.filters || [];
@@ -45,7 +45,7 @@ async function loadUpsertedDocs(run, entity) {
 
 /** Audit trail entries for a run, optionally narrowed to one collection. */
 async function loadAuditEntries(runId, collection) {
-  if (!isMongoEnabled()) return { entries: [], error: null };
+  if (!isMongooseEnabled()) return { entries: [], error: null };
   try {
     const db = await getMongoDb();
     const filter = { runId };
