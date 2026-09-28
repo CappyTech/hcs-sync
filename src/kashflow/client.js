@@ -1,7 +1,7 @@
 import axios from 'axios';
 import config from '../config.js';
 import logger from '../util/logger.js';
-import { getSessionToken, clearCachedSessionToken } from './auth.js';
+import { ensureSessionToken, clearCachedToken } from './sessionService.js';
 
 function buildAuthHeaders(token) {
   let t = String(token || '').trim();
@@ -82,8 +82,8 @@ function installRetryInterceptor(http) {
       const original = err.config;
       if (status === 401 && !original.__retried) {
         try {
-          clearCachedSessionToken();
-          const newToken = await getSessionToken();
+          clearCachedToken();
+          const newToken = await ensureSessionToken();
           const built = buildAuthHeaders(newToken);
           original.headers = { ...(original.headers || {}), ...built.headers };
           original.__retried = true;
@@ -175,7 +175,7 @@ function documentResource(http, { listInternal, listAllInternal }, path, { encod
 }
 
 async function createClient() {
-  const sessionToken = await getSessionToken();
+  const sessionToken = await ensureSessionToken();
   if (!sessionToken) {
     throw new Error('No session token available');
   }

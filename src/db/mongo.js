@@ -1,8 +1,11 @@
-import { MongoClient } from 'mongodb';
+/**
+ * MongoDB index management for the REST namespace.
+ *
+ * The connection itself lives in ./mongoose.js — hcs-sync uses one Mongoose
+ * connection for everything, and ensureKashflowIndexes is handed its db.
+ */
 import config from '../config.js';
 import logger from '../util/logger.js';
-
-let cached = null;
 
 function isMongoAuthError(err) {
   const message = String(err?.message || '');
@@ -12,56 +15,6 @@ function isMongoAuthError(err) {
     message.includes('Authentication failed') ||
     err?.code === 13
   );
-}
-
-function buildMongoUri() {
-  if (config.mongoUri) return config.mongoUri;
-  if (!config.mongoHost) return '';
-  const dbName = config.mongoDbName || 'kashflow';
-
-  const hasCreds = Boolean(config.mongoUsername || config.mongoPassword);
-  const authPart = hasCreds
-    ? `${encodeURIComponent(config.mongoUsername || '')}:${encodeURIComponent(config.mongoPassword || '')}@`
-    : '';
-
-  const params = new URLSearchParams();
-  if (config.mongoAuthSource) params.set('authSource', config.mongoAuthSource);
-  const query = params.toString();
-
-  // Keep it simple. If you need more advanced options (replicaSet/tls/etc), use MONGO_URI.
-  return `mongodb://${authPart}${config.mongoHost}:${config.mongoPort}/${encodeURIComponent(dbName)}${query ? `?${query}` : ''}`;
-}
-
-export function isMongoEnabled() {
-  return Boolean(buildMongoUri());
-}
-
-export async function getMongoDb() {
-  const uri = buildMongoUri();
-  if (!uri) {
-    throw new Error('MongoDB is not configured (set MONGO_URI or MONGO_HOST/MONGO_PORT)');
-  }
-
-  if (cached?.db) return cached.db;
-
-  const client = new MongoClient(uri, {
-    // Keep defaults; caller controls lifecycle.
-  });
-
-  await client.connect();
-  const db = client.db(config.mongoDbName);
-  cached = { client, db };
-  logger.info({ mongoDbName: config.mongoDbName }, 'MongoDB connected');
-  return db;
-}
-
-export async function closeMongo() {
-  if (!cached?.client) return;
-  try {
-    await cached.client.close();
-  } finally {
-    cached = null;
-  }
 }
 
 async function ensureUniqueKeyIndex(db, collectionName, keyField, keyType = 'any') {

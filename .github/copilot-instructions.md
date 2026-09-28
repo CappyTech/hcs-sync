@@ -5,7 +5,7 @@
 - Express “admin dashboard” + sync runner:
   - Server entrypoint: `src/server/index.js`, which starts the app built by `createApp()` in `src/server/app.js` (Express + EJS views + static assets).
   - Sync runner: `src/sync/run.js` (fetches KashFlow resources and reports progress).
-  - KashFlow API layer: `src/kashflow/client.js` (Axios wrappers) + `src/kashflow/auth.js` (session token acquisition).
+  - KashFlow API layer: `src/kashflow/client.js` (Axios wrappers) + `src/kashflow/sessionService.js` (session token acquisition).
 
 ## Repo map (where things live)
 - Server routes + HTML rendering: `src/server/routes/*.js` (mounted in `src/server/app.js`); middleware in `src/server/middleware/`; run state and `triggerSync` in `src/server/syncController.js`
@@ -37,7 +37,7 @@
   - Base URL: `BASE_URL` or `KASHFLOW_BASE_URL` (default `https://api.kashflow.com/v2`).
   - Token: `SESSION_TOKEN` or `KASHFLOW_SESSION_TOKEN`.
   - HTTP: `HTTP_TIMEOUT_MS` (default 30000), `CONCURRENCY` (default 4).
-- Token acquisition (`src/kashflow/auth.js`):
+- Token acquisition (`src/kashflow/sessionService.js`):
   - If no token env var is provided, uses `USERNAME`/`PASSWORD` (+ optional `MEMORABLE_WORD`) to obtain one.
   - Handles KashFlow “account locked” by backing off for ~10 minutes (in-memory lock).
 - Header conventions (`src/kashflow/client.js`):

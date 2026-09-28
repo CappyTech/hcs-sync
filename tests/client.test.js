@@ -1,13 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import axios from 'axios';
 
-// Mock auth so createClient doesn't attempt real HTTP
+// Mock the session service so createClient doesn't attempt real HTTP
 const mockGetSessionToken = vi.fn().mockResolvedValue('test-session-token');
 const mockClearCachedSessionToken = vi.fn();
 
-vi.mock('../src/kashflow/auth.js', () => ({
-  getSessionToken: (...args) => mockGetSessionToken(...args),
-  clearCachedSessionToken: (...args) => mockClearCachedSessionToken(...args),
+vi.mock('../src/kashflow/sessionService.js', () => ({
+  ensureSessionToken: (...args) => mockGetSessionToken(...args),
+  clearCachedToken: (...args) => mockClearCachedSessionToken(...args),
 }));
 
 // We need to mock axios.create to return a controllable mock instance
