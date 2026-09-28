@@ -3,12 +3,12 @@
 ## Big picture
 - Node.js 24 + ESM project (`"type": "module"`): use `import`/`export` and include `.js` in relative imports.
 - Express “admin dashboard” + sync runner:
-  - Server entrypoint: `src/server/index.js` (Express + EJS views + static assets).
+  - Server entrypoint: `src/server/index.js`, which starts the app built by `createApp()` in `src/server/app.js` (Express + EJS views + static assets).
   - Sync runner: `src/sync/run.js` (fetches KashFlow resources and reports progress).
   - KashFlow API layer: `src/kashflow/client.js` (Axios wrappers) + `src/kashflow/auth.js` (session token acquisition).
 
 ## Repo map (where things live)
-- Server routes + HTML rendering: `src/server/index.js`
+- Server routes + HTML rendering: `src/server/routes/*.js` (mounted in `src/server/app.js`); middleware in `src/server/middleware/`; run state and `triggerSync` in `src/server/syncController.js`
 - EJS templates:
   - Layout + partials: `src/server/views/layout.ejs`, `src/server/views/partials/*`
   - Pages: `src/server/views/pages/*`

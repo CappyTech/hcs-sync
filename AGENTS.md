@@ -14,7 +14,7 @@ hcs-sync is a dedicated **KashFlow accounting data sync service** for **Heron Co
 - Install dependencies with `npm install`.
 - Run `npm run lint` (ESLint) and `npm test` (Vitest) before committing.
 - Ensure `git status` reports a clean working tree before you finish.
-- Entry point is `src/server/index.js`.
+- Entry point is `src/server/index.js`; it only starts the app built by `createApp()` in `src/server/app.js`. Routes live in `src/server/routes/`, middleware in `src/server/middleware/`, and sync run state in `src/server/syncController.js`.
 - All KashFlow API logic lives in `src/kashflow/`.
 - Sync orchestration lives in `src/sync/run.js`.
 - Models are in `src/server/models/kashflow.js` — these must conform to the REST namespace schema contract that hcs-app reads.
