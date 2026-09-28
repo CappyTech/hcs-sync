@@ -3,23 +3,14 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 // Prevent dotenv from reading the real .env file during tests.
 vi.mock('dotenv', () => ({ default: { config: () => ({}) }, config: () => ({}) }));
 
-// Mock mongodb driver so we don't connect to real DB
-vi.mock('mongodb', () => {
-  const mockDb = {};
-  const mockClient = {
-    connect: vi.fn().mockResolvedValue(undefined),
-    db: vi.fn(() => mockDb),
-    close: vi.fn().mockResolvedValue(undefined),
-  };
-  return {
-    MongoClient: vi.fn(function () { return mockClient; }),
-    __mockClient: mockClient,
-    __mockDb: mockDb,
-  };
+vi.mock('../src/util/logger.js', () => {
+  const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+  return { default: { ...log, child: () => log } };
 });
 
 /**
- * Tests for the MongoDB helper utilities (non-connected, unit-testable parts).
+ * Tests for the MongoDB connection (src/db/mongoose.js) and index management
+ * (src/db/mongo.js), without a real database.
  */
 
 let originalEnv;
@@ -27,118 +18,147 @@ let originalEnv;
 beforeEach(() => {
   originalEnv = { ...process.env };
   vi.resetModules();
+  vi.restoreAllMocks();
 });
 
 afterEach(() => {
   process.env = originalEnv;
 });
 
-describe('src/db/mongo.js – isMongoEnabled()', () => {
-  it('returns false when no Mongo env vars are set', async () => {
-    delete process.env.MONGO_URI;
-    delete process.env.MONGO_HOST;
-    const { isMongoEnabled } = await import('../src/db/mongo.js');
-    expect(isMongoEnabled()).toBe(false);
-  });
+const clearMongoEnv = () => {
+  for (const k of ['MONGO_URI', 'MONGO_HOST', 'MONGO_PORT', 'MONGO_DB_NAME', 'MONGO_USERNAME', 'MONGO_PASSWORD', 'MONGO_USER', 'MONGO_PASS', 'MONGO_AUTH_SOURCE', 'MONGO_AUTHSOURCE']) {
+    delete process.env[k];
+  }
+};
 
-  it('returns true when MONGO_HOST is set', async () => {
-    process.env.MONGO_HOST = 'localhost';
-    const { isMongoEnabled } = await import('../src/db/mongo.js');
-    expect(isMongoEnabled()).toBe(true);
+/** Import mongoose.js with mongoose.connect stubbed; returns the URI it was given. */
+async function connectWithStub({ databaseName } = {}) {
+  const mongoose = (await import('mongoose')).default;
+  const connect = vi.spyOn(mongoose, 'connect').mockImplementation(async () => {
+    mongoose.connection.name = databaseName;
+    return mongoose;
   });
-
-  it('returns true when MONGO_URI is set', async () => {
-    process.env.MONGO_URI = 'mongodb://localhost:27017/test';
-    const { isMongoEnabled } = await import('../src/db/mongo.js');
-    expect(isMongoEnabled()).toBe(true);
-  });
-});
+  const mod = await import('../src/db/mongoose.js');
+  await mod.connectMongoose();
+  return { uri: connect.mock.calls[0]?.[0], connect, mod };
+}
 
 describe('src/db/mongoose.js – isMongooseEnabled()', () => {
   it('returns false when no Mongo env vars are set', async () => {
-    delete process.env.MONGO_URI;
-    delete process.env.MONGO_HOST;
+    clearMongoEnv();
     const { isMongooseEnabled } = await import('../src/db/mongoose.js');
     expect(isMongooseEnabled()).toBe(false);
   });
-});
 
-describe('src/db/mongo.js – buildMongoUri (via isMongoEnabled)', () => {
-  it('uses MONGO_URI directly when set', async () => {
-    process.env.MONGO_URI = 'mongodb://custom:27018/mydb';
-    const { isMongoEnabled } = await import('../src/db/mongo.js');
-    expect(isMongoEnabled()).toBe(true);
+  it('returns true when MONGO_HOST is set', async () => {
+    clearMongoEnv();
+    process.env.MONGO_HOST = 'localhost';
+    const { isMongooseEnabled } = await import('../src/db/mongoose.js');
+    expect(isMongooseEnabled()).toBe(true);
   });
 
-  it('builds URI from MONGO_HOST and MONGO_PORT', async () => {
+  it('returns true when MONGO_URI is set', async () => {
+    clearMongoEnv();
+    process.env.MONGO_URI = 'mongodb://localhost:27017/test';
+    const { isMongooseEnabled } = await import('../src/db/mongoose.js');
+    expect(isMongooseEnabled()).toBe(true);
+  });
+});
+
+describe('src/db/mongoose.js – connection URI', () => {
+  it('uses MONGO_URI directly when set', async () => {
+    clearMongoEnv();
+    process.env.MONGO_URI = 'mongodb://custom:27018/mydb';
+    const { uri } = await connectWithStub({ databaseName: 'mydb' });
+    expect(uri).toBe('mongodb://custom:27018/mydb');
+  });
+
+  it('builds the URI from MONGO_HOST, MONGO_PORT and MONGO_DB_NAME', async () => {
+    clearMongoEnv();
     process.env.MONGO_HOST = 'dbhost';
     process.env.MONGO_PORT = '27018';
     process.env.MONGO_DB_NAME = 'testdb';
-    const { isMongoEnabled } = await import('../src/db/mongo.js');
-    expect(isMongoEnabled()).toBe(true);
+    const { uri } = await connectWithStub({ databaseName: 'testdb' });
+    expect(uri).toBe('mongodb://dbhost:27018/testdb');
   });
 
   it('includes credentials when MONGO_USERNAME and MONGO_PASSWORD are set', async () => {
+    clearMongoEnv();
     process.env.MONGO_HOST = 'dbhost';
     process.env.MONGO_USERNAME = 'admin';
     process.env.MONGO_PASSWORD = 'p@ss';
-    delete process.env.MONGO_URI;
-    delete process.env.MONGO_AUTH_SOURCE;
-    const { getMongoDb } = await import('../src/db/mongo.js');
-    const { MongoClient } = await import('mongodb');
-    MongoClient.mockClear();
-
-    await getMongoDb();
-    expect(MongoClient).toHaveBeenCalledTimes(1);
-    const uri = MongoClient.mock.calls[0][0];
+    const { uri } = await connectWithStub({ databaseName: 'kashflow' });
     expect(uri).toContain('admin:');
     expect(uri).toContain(encodeURIComponent('p@ss'));
   });
 
   it('includes authSource when MONGO_AUTH_SOURCE is set', async () => {
+    clearMongoEnv();
     process.env.MONGO_HOST = 'dbhost';
     process.env.MONGO_AUTH_SOURCE = 'admin';
-    delete process.env.MONGO_USERNAME;
-    delete process.env.MONGO_PASSWORD;
-    delete process.env.MONGO_USER;
-    delete process.env.MONGO_PASS;
-    delete process.env.MONGO_URI;
-    const { getMongoDb } = await import('../src/db/mongo.js');
-    const { MongoClient } = await import('mongodb');
-    MongoClient.mockClear();
-
-    await getMongoDb();
-    expect(MongoClient).toHaveBeenCalledTimes(1);
-    const uri = MongoClient.mock.calls[0][0];
+    const { uri } = await connectWithStub({ databaseName: 'kashflow' });
     expect(uri).toContain('authSource=admin');
   });
 
   it('defaults to port 27017 and db kashflow', async () => {
+    clearMongoEnv();
     process.env.MONGO_HOST = 'myhost';
-    delete process.env.MONGO_PORT;
-    delete process.env.MONGO_DB_NAME;
-    delete process.env.MONGO_USERNAME;
-    delete process.env.MONGO_PASSWORD;
-    delete process.env.MONGO_USER;
-    delete process.env.MONGO_PASS;
-    delete process.env.MONGO_URI;
-    delete process.env.MONGO_AUTH_SOURCE;
-    const { getMongoDb } = await import('../src/db/mongo.js');
-    const { MongoClient } = await import('mongodb');
-    MongoClient.mockClear();
-
-    await getMongoDb();
-    expect(MongoClient).toHaveBeenCalledTimes(1);
-    const uri = MongoClient.mock.calls[0][0];
-    expect(uri).toContain('myhost:27017');
-    expect(uri).toContain('kashflow');
+    const { uri } = await connectWithStub({ databaseName: 'kashflow' });
+    expect(uri).toBe('mongodb://myhost:27017/kashflow');
   });
 
   it('throws when no URI can be built', async () => {
-    delete process.env.MONGO_URI;
-    delete process.env.MONGO_HOST;
-    const { getMongoDb } = await import('../src/db/mongo.js');
+    clearMongoEnv();
+    const { connectMongoose, getMongoDb } = await import('../src/db/mongoose.js');
+    await expect(connectMongoose()).rejects.toThrow(/not configured/i);
     await expect(getMongoDb()).rejects.toThrow(/not configured/i);
+  });
+});
+
+describe('src/db/mongoose.js – getMongoDb()', () => {
+  it('returns the Db of the one Mongoose connection', async () => {
+    clearMongoEnv();
+    process.env.MONGO_HOST = 'myhost';
+    const mongoose = (await import('mongoose')).default;
+    const { mod } = await connectWithStub({ databaseName: 'kashflow' });
+    const fakeDb = { databaseName: 'kashflow' };
+    const original = mongoose.connection.db;
+    mongoose.connection.db = fakeDb;
+    try {
+      expect(await mod.getMongoDb()).toBe(fakeDb);
+    } finally {
+      mongoose.connection.db = original;
+    }
+  });
+});
+
+describe('src/db/mongoose.js – database name warning', () => {
+  const warnings = async () => (await import('../src/util/logger.js')).default.warn.mock.calls;
+
+  it('warns when MONGO_URI selects a database other than MONGO_DB_NAME', async () => {
+    clearMongoEnv();
+    process.env.MONGO_URI = 'mongodb://host:27017';
+    process.env.MONGO_DB_NAME = 'kashflow';
+    await connectWithStub({ databaseName: 'test' });
+    const calls = await warnings();
+    expect(calls).toHaveLength(1);
+    expect(calls[0][0]).toEqual({ database: 'test', mongoDbName: 'kashflow' });
+    expect(calls[0][1]).toMatch(/Using database "test" from MONGO_URI/);
+  });
+
+  it('is silent when MONGO_URI names MONGO_DB_NAME', async () => {
+    clearMongoEnv();
+    process.env.MONGO_URI = 'mongodb://host:27017/kashflow';
+    await connectWithStub({ databaseName: 'kashflow' });
+    expect(await warnings()).toHaveLength(0);
+  });
+
+  it('is silent when the URI is built from MONGO_HOST', async () => {
+    clearMongoEnv();
+    process.env.MONGO_HOST = 'host';
+    process.env.MONGO_DB_NAME = 'other';
+    await connectWithStub({ databaseName: 'other' });
+    expect(await warnings()).toHaveLength(0);
   });
 });
 

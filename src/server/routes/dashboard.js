@@ -2,7 +2,7 @@ import express from 'express';
 import rateLimit from 'express-rate-limit';
 import logger from '../../util/logger.js';
 import progress from '../progress.js';
-import { isMongoEnabled } from '../../db/mongo.js';
+import { isMongooseEnabled } from '../../db/mongoose.js';
 import { requireAdmin } from '../middleware/auth.js';
 import {
   isRunning, lastRun, lastCounts, lastError, logs, dedupRunning, lastDedupResult,
@@ -77,7 +77,7 @@ router.post('/run', requireAdmin, syncLimiter, async (_req, res) => {
 });
 
 router.post('/dedup', requireAdmin, dedupLimiter, async (_req, res) => {
-  if (!isMongoEnabled()) {
+  if (!isMongooseEnabled()) {
     return res.status(400).send('MongoDB is not configured.');
   }
   if (isRunning) {
