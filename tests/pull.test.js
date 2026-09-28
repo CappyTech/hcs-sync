@@ -107,10 +107,10 @@ describe('pullSingleEntity', () => {
     await pullSingleEntity('purchase', 7);
 
     const expected = buildUpsertUpdate({ keyField: 'Id', keyValue: 401, payload: structuredClone(payload), model: Purchase });
-    const strip = (set) => {
-      const { uuid: _u, detailSyncedAt: _d, ...rest } = set;
-      return rest;
-    };
+    // uuid is random per build and detailSyncedAt is stamped differently by design.
+    const strip = (set) => Object.fromEntries(
+      Object.entries(set).filter(([key]) => key !== 'uuid' && key !== 'detailSyncedAt'),
+    );
     expect(strip(writes[0].update[0].$set)).toEqual(strip(expected[0].$set));
     expect(writes[0].update.slice(1)).toEqual(expected.slice(1));
   });
