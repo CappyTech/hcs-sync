@@ -18,4 +18,4 @@ hcs-sync is a dedicated **KashFlow accounting data sync service** for **Heron Co
 - All KashFlow API logic lives in `src/kashflow/`.
 - Sync orchestration lives in `src/sync/run.js`.
 - Models are in `src/server/models/kashflow.js` — these must conform to the REST namespace schema contract that hcs-app reads.
-- When adding a new synced entity: define schema, add client methods, add fetch + upsert logic, set `syncConfig` with `keyField` and `protectedFields`.
+- When adding a new synced entity: define schema, add client methods, add fetch + upsert logic, and set `syncConfig` with `summaryKey`, `keyField` and `protectedFields` (plus `fallbackKeyFields`, `listOnly` or `lookupField` where they apply). `syncConfig` is the single source of an entity's sync metadata: the sync phases, the manual pull and the history page all derive from it via `src/sync/entities.js` — do not keep a separate list. The contract is documented at the top of `src/server/models/kashflow.js`.

@@ -13,6 +13,7 @@ import logger from '../util/logger.js';
 import runSync, { carryForwardFailedCounts } from '../sync/run.js';
 import { pullSingleEntity, debugEntity, ENTITY_CONFIG } from '../sync/pull.js';
 import { SHAPE_ENDPOINTS, captureShape } from '../sync/shapes.js';
+import { entityBySummaryKey, SYNCED_COLLECTION_NAMES } from '../sync/entities.js';
 import progress from './progress.js';
 import runStore from './runStore.js';
 import { sendDiscord } from '../util/discord.js';
@@ -146,11 +147,6 @@ function pushLog(entry) {
   if (logs.length > LOGS_CAP) logs.length = LOGS_CAP;
 }
 
-// Allowlist of MongoDB collection names reachable via dashboard query params.
-// Any mongoCollection / auditCollection query value not in this set is rejected.
-const ALLOWED_MONGO_COLLECTIONS = new Set([
-  'customers', 'suppliers', 'invoices', 'quotes', 'purchases', 'projects', 'nominals', 'vatRates',
-]);
 let currentRunId = null;
 
 let cachedSettings = null;
@@ -1180,24 +1176,25 @@ app.get('/history', requireAdmin, async (_req, res) => {
 });
 
 /**
- * Load the documents a run inserted into `collection`, for the run page's
- * drilldown. Prefers the upsert filters captured during the run and falls back
+ * Load the documents a run inserted for one entity, for the run page's
+ * drilldown. `entity` is from the synced-entity registry: its summaryKey
+ * indexes the run summary, its collectionName is what gets queried. Prefers the upsert filters captured during the run and falls back
  * to the createdByRunId tag for Mongo-compatible servers that don't return
  * upsertedIds from bulkWrite.
  *
  * @returns {Promise<{docs: object[]|null, source: string|null, error: string|null}>}
  */
-async function loadUpsertedDocs(run, collection) {
+async function loadUpsertedDocs(run, entity) {
   if (!isMongoEnabled()) {
     return { docs: null, source: null, error: 'MongoDB is not configured on the server (cannot load docs).' };
   }
-  const filters = run?.summary?.mongoUpserts?.[collection]?.filters || [];
+  const filters = run?.summary?.mongoUpserts?.[entity.summaryKey]?.filters || [];
   const [query, source] = filters.length
     ? [{ $or: filters }, 'filters']
     : [{ createdByRunId: run.id }, 'createdByRunId'];
   try {
     const db = await getMongoDb();
-    const docs = await db.collection(collection).find(query, { limit: 200 }).toArray();
+    const docs = await db.collection(entity.collectionName).find(query, { limit: 200 }).toArray();
     return { docs, source, error: null };
   } catch (err) {
     return { docs: null, source: null, error: err?.message || 'Failed to load Mongo documents.' };
@@ -1228,8 +1225,13 @@ app.get('/history/:id', requireAdmin, async (req, res) => {
     const run = await runStore.getRun(req.params.id);
     if (!run) return res.status(404).send('Run not found');
 
+    // Two different names arrive here, and both are checked against the
+    // synced-entity registry rather than trusted: mongoCollection is a run
+    // summary key (e.g. 'vatRates'), auditCollection is the Mongo collection
+    // the audit entries name (e.g. 'vatrates').
     const mongoCollectionRaw = String(req.query?.mongoCollection || '');
-    const mongoCollection = ALLOWED_MONGO_COLLECTIONS.has(mongoCollectionRaw) ? mongoCollectionRaw : '';
+    const mongoEntity = entityBySummaryKey.get(mongoCollectionRaw) || null;
+    const mongoCollection = mongoEntity ? mongoCollectionRaw : '';
     const mongoType = String(req.query?.mongoType || '');
     let mongoDocs = null;
     let mongoDocsError = null;
@@ -1241,7 +1243,7 @@ app.get('/history/:id', requireAdmin, async (req, res) => {
     }
 
     if (mongoCollection && mongoType === 'upserted') {
-      ({ docs: mongoDocs, source: mongoDocsSource, error: mongoDocsError } = await loadUpsertedDocs(run, mongoCollection));
+      ({ docs: mongoDocs, source: mongoDocsSource, error: mongoDocsError } = await loadUpsertedDocs(run, mongoEntity));
 
       if (!mongoDocsError && Array.isArray(mongoDocs) && mongoDocs.length === 0 && mongoUpsertedCount > 0) {
         mongoDocsError =
@@ -1251,7 +1253,7 @@ app.get('/history/:id', requireAdmin, async (req, res) => {
     }
 
     const auditCollectionRaw = String(req.query?.auditCollection || '');
-    const auditCollection = (auditCollectionRaw && ALLOWED_MONGO_COLLECTIONS.has(auditCollectionRaw)) ? auditCollectionRaw : '';
+    const auditCollection = SYNCED_COLLECTION_NAMES.has(auditCollectionRaw) ? auditCollectionRaw : '';
     const { entries: auditEntries, error: auditError } = await loadAuditEntries(run.id, auditCollection);
 
     res.render('layout', {
