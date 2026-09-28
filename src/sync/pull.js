@@ -1,12 +1,9 @@
-import crypto from 'node:crypto';
-import mongoose from 'mongoose';
 import logger from '../util/logger.js';
 import createClient from '../kashflow/client.js';
 import { connectMongoose, isMongooseEnabled } from '../db/mongoose.js';
 import {
   Customer, Supplier, Invoice, Quote, Purchase, Project,
   Journal, Product, PurchaseOrder, VatReturn,
-  SYNC_INTERNAL_FIELDS,
 } from '../server/models/kashflow.js';
 import { buildUpsertUpdate } from './run.js';
 
@@ -76,7 +73,6 @@ export async function pullSingleEntity(entityType, entityId) {
     keyField,
     keyValue: id,
     payload: full,
-    syncedAt: now,
     model,
   });
   update[0].$set.detailSyncedAt = { $literal: now };

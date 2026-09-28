@@ -36,54 +36,43 @@ function buildAuthHeaders(token) {
   return { headers, isKF, isGuid, token: t };
 }
 
-async function createClient() {
-  const sessionToken = await getSessionToken();
-  if (!sessionToken) {
-    throw new Error('No session token available');
-  }
-  const { headers: defaultHeaders, isKF, isGuid, token: sanitizedToken } = buildAuthHeaders(sessionToken);
-  if (!isKF && !isGuid) {
-    logger.warn({ tokenPrefix: String(sanitizedToken).slice(0, 8) }, 'SESSION_TOKEN format is unexpected (neither KF_ nor GUID)');
-  }
-  const http = axios.create({
-    baseURL: config.baseUrl,
-    timeout: config.timeoutMs,
-    headers: defaultHeaders,
-  });
+/**
+ * KashFlow's SQL layer timing out, which it reports as a 400.
+ *
+ * The body is `{ Error: "-2146232060", Message: "Execution Timeout Expired. …" }`
+ * — a .NET SqlException surfaced verbatim, not a client error. It is entirely
+ * server-side, so `HTTP_TIMEOUT_MS` does not cover it and never will: the
+ * request completes promptly, carrying a failure.
+ *
+ * It hits the largest account (611594, ~8,400 transactions over ~40 paginated
+ * requests) roughly nightly. Without a retry, one bad page aborts that
+ * account for the whole run and 8,413 rows silently drop out of the fetch —
+ * the account looks stale for an hour and the Discord alert reads like mass
+ * deletion. Matched on the numeric code rather than the message text, which
+ * is human-readable prose and not a contract.
+ */
+const SQL_TIMEOUT_CODE = '-2146232060';
+const isTransientBackendTimeout = (err) => {
+  if (err.response?.status !== 400) return false;
+  const body = err.response?.data;
+  return String(body?.Error ?? '') === SQL_TIMEOUT_CODE;
+};
 
-  /**
-   * KashFlow's SQL layer timing out, which it reports as a 400.
-   *
-   * The body is `{ Error: "-2146232060", Message: "Execution Timeout Expired. …" }`
-   * — a .NET SqlException surfaced verbatim, not a client error. It is entirely
-   * server-side, so `HTTP_TIMEOUT_MS` does not cover it and never will: the
-   * request completes promptly, carrying a failure.
-   *
-   * It hits the largest account (611594, ~8,400 transactions over ~40 paginated
-   * requests) roughly nightly. Without a retry, one bad page aborts that
-   * account for the whole run and 8,413 rows silently drop out of the fetch —
-   * the account looks stale for an hour and the Discord alert reads like mass
-   * deletion. Matched on the numeric code rather than the message text, which
-   * is human-readable prose and not a contract.
-   */
-  const SQL_TIMEOUT_CODE = '-2146232060';
-  const isTransientBackendTimeout = (err) => {
-    if (err.response?.status !== 400) return false;
-    const body = err.response?.data;
-    return String(body?.Error ?? '') === SQL_TIMEOUT_CODE;
-  };
+// Four attempts, not two. Measured over three days of logs: 25 of these
+// timeouts fired, 23 cleared on the first or second retry and 2 exhausted the
+// pair — both on 611594, both on the 01:00 run, when KashFlow's database is
+// evidently busiest (they cluster 00:00–03:00). Each attempt costs ~30s
+// server-side, so the worst case here is ~3 minutes on one account against an
+// hourly cron and a run that already takes ~4 minutes. Cheap insurance
+// against losing a whole account's fetch for an hour.
+const RETRY_DELAYS_MS = [2000, 8000, 20000, 45000];
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-  // Four attempts, not two. Measured over three days of logs: 25 of these
-  // timeouts fired, 23 cleared on the first or second retry and 2 exhausted the
-  // pair — both on 611594, both on the 01:00 run, when KashFlow's database is
-  // evidently busiest (they cluster 00:00–03:00). Each attempt costs ~30s
-  // server-side, so the worst case here is ~3 minutes on one account against an
-  // hourly cron and a run that already takes ~4 minutes. Cheap insurance
-  // against losing a whole account's fetch for an hour.
-  const RETRY_DELAYS_MS = [2000, 8000, 20000, 45000];
-  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-  // Retry once on 401 by refreshing the session token
+/**
+ * Retry once on 401 by refreshing the session token, and back off and retry
+ * KashFlow's server-side SQL timeout.
+ */
+function installRetryInterceptor(http) {
   http.interceptors.response.use(
     (res) => res,
     async (err) => {
@@ -127,13 +116,15 @@ async function createClient() {
       throw err;
     }
   );
+}
 
-  const normalizeList = (payload) => {
-    if (Array.isArray(payload)) return payload;
-    if (payload && Array.isArray(payload.Data)) return payload.Data;
-    return [];
-  };
+function normalizeList(payload) {
+  if (Array.isArray(payload)) return payload;
+  if (payload && Array.isArray(payload.Data)) return payload.Data;
+  return [];
+}
 
+function createListers(http) {
   const listInternal = async (path, params = {}) => {
     const res = await http.get(path, { params });
     return normalizeList(res.data);
@@ -164,49 +155,52 @@ async function createClient() {
     return items;
   };
 
+  return { listInternal, listAllInternal };
+}
+
+/**
+ * The list/get/create/update shape shared by KashFlow's document endpoints.
+ * Customer and supplier codes are free text and must be URL-encoded; the
+ * numeric document numbers are passed through as-is.
+ */
+function documentResource(http, { listInternal, listAllInternal }, path, { encodeKey = false } = {}) {
+  const key = (k) => (encodeKey ? encodeURIComponent(k) : k);
   return {
-    customers: {
-      list: (params = {}) => listInternal('/customers', params),
-      listAll: (params = {}) => listAllInternal('/customers', params),
-      get: (code) => http.get(`/customers/${encodeURIComponent(code)}`).then((r) => r.data),
-      create: (body) => http.post('/customers', body).then((r) => r.data),
-      update: (code, body) => http.put(`/customers/${encodeURIComponent(code)}`, body).then((r) => r.data),
-    },
-    suppliers: {
-      list: (params = {}) => listInternal('/suppliers', params),
-      listAll: (params = {}) => listAllInternal('/suppliers', params),
-      get: (code) => http.get(`/suppliers/${encodeURIComponent(code)}`).then((r) => r.data),
-      create: (body) => http.post('/suppliers', body).then((r) => r.data),
-      update: (code, body) => http.put(`/suppliers/${encodeURIComponent(code)}`, body).then((r) => r.data),
-    },
-    invoices: {
-      list: (params = {}) => listInternal('/invoices', params),
-      listAll: (params = {}) => listAllInternal('/invoices', params),
-      get: (number) => http.get(`/invoices/${number}`).then((r) => r.data),
-      create: (body) => http.post('/invoices', body).then((r) => r.data),
-      update: (number, body) => http.put(`/invoices/${number}`, body).then((r) => r.data),
-    },
-    purchases: {
-      list: (params = {}) => listInternal('/purchases', params),
-      listAll: (params = {}) => listAllInternal('/purchases', params),
-      get: (number) => http.get(`/purchases/${number}`).then((r) => r.data),
-      create: (body) => http.post('/purchases', body).then((r) => r.data),
-      update: (number, body) => http.put(`/purchases/${number}`, body).then((r) => r.data),
-    },
-    projects: {
-      list: (params = {}) => listInternal('/projects', params),
-      listAll: (params = {}) => listAllInternal('/projects', params),
-      get: (number) => http.get(`/projects/${number}`).then((r) => r.data),
-      create: (body) => http.post('/projects', body).then((r) => r.data),
-      update: (number, body) => http.put(`/projects/${number}`, body).then((r) => r.data),
-    },
-    quotes: {
-      list: (params = {}) => listInternal('/quotes', params),
-      listAll: (params = {}) => listAllInternal('/quotes', params),
-      get: (number) => http.get(`/quotes/${number}`).then((r) => r.data),
-      create: (body) => http.post('/quotes', body).then((r) => r.data),
-      update: (number, body) => http.put(`/quotes/${number}`, body).then((r) => r.data),
-    },
+    list: (params = {}) => listInternal(path, params),
+    listAll: (params = {}) => listAllInternal(path, params),
+    get: (k) => http.get(`${path}/${key(k)}`).then((r) => r.data),
+    create: (body) => http.post(path, body).then((r) => r.data),
+    update: (k, body) => http.put(`${path}/${key(k)}`, body).then((r) => r.data),
+  };
+}
+
+async function createClient() {
+  const sessionToken = await getSessionToken();
+  if (!sessionToken) {
+    throw new Error('No session token available');
+  }
+  const { headers: defaultHeaders, isKF, isGuid, token: sanitizedToken } = buildAuthHeaders(sessionToken);
+  if (!isKF && !isGuid) {
+    logger.warn({ tokenPrefix: String(sanitizedToken).slice(0, 8) }, 'SESSION_TOKEN format is unexpected (neither KF_ nor GUID)');
+  }
+  const http = axios.create({
+    baseURL: config.baseUrl,
+    timeout: config.timeoutMs,
+    headers: defaultHeaders,
+  });
+
+  installRetryInterceptor(http);
+
+  const listers = createListers(http);
+  const { listInternal, listAllInternal } = listers;
+
+  return {
+    customers: documentResource(http, listers, '/customers', { encodeKey: true }),
+    suppliers: documentResource(http, listers, '/suppliers', { encodeKey: true }),
+    invoices: documentResource(http, listers, '/invoices'),
+    purchases: documentResource(http, listers, '/purchases'),
+    projects: documentResource(http, listers, '/projects'),
+    quotes: documentResource(http, listers, '/quotes'),
     nominals: {
       list: () => http.get('/nominals').then((r) => normalizeList(r.data)),
       getByCode: (code) => http.get(`/nominals/${encodeURIComponent(code)}`).then((r) => r.data),

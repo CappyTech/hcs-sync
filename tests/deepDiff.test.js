@@ -2,7 +2,7 @@
  * Tests for src/util/deepDiff.js
  */
 import { describe, it, expect } from 'vitest';
-import deepDiff, { ARRAY_KEYS, SKIP_FIELDS, stableStringify } from '../src/util/deepDiff.js';
+import deepDiff, { stableStringify } from '../src/util/deepDiff.js';
 
 // ── Scalar changes ──────────────────────────────────────────────────────
 

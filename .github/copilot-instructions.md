@@ -16,12 +16,12 @@
 - Tailwind input/output:
   - Input CSS: `src/server/styles/input.css`
   - Built CSS (checked in): `src/server/public/styles.css`
-- Run history store (JSON file): `data/runs.json` (written by `src/server/changeLog.js`)
+- Run history store (MongoDB): `src/server/runStore.js`
 
 ## Data flow & persistence
 - Runtime progress is in-memory only via `src/server/progress.js`.
   - Browser polls `GET /status` every second (see `src/server/public/app.js`).
-- Run history is persisted as JSON at `data/runs.json` via `src/server/changeLog.js`.
+- Run history is persisted to MongoDB via `src/server/runStore.js`.
   - `beginRun()` creates a run record, `recordChange()` appends entries, `finishRun()` finalizes status/summary.
 
 ## Dashboard routes (current)
@@ -54,7 +54,7 @@
 ## Dev workflows
 - Install: `npm install`
 - Dev server: `npm run dev`
-  - Uses nodemon; dev script ignores `data/runs.json` changes to avoid restart loops.
+  - Uses nodemon.
   - Default port is `3000` (set `PORT` if it’s already in use).
 - Prod-like run: `npm start`
 - CSS build: `npm run build:css` (Tailwind input `src/server/styles/input.css` → output `src/server/public/styles.css`)

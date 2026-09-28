@@ -12,7 +12,7 @@
       bg = document.createElement('div');
       bg.id = id + '-backdrop';
       bg.className = 'bg-gray-900/50 dark:bg-gray-900/80 fixed inset-0 z-40';
-      bg.addEventListener('click', function () { closeModal(id); });
+      bg.addEventListener('click', function () { window.closeModal(id); });
       document.body.appendChild(bg);
     }
     document.body.classList.add('overflow-hidden');
@@ -35,7 +35,7 @@
     if (e.key === 'Escape') {
       ['run-modal', 'dedup-modal'].forEach(function (id) {
         var el = document.getElementById(id);
-        if (el && !el.classList.contains('hidden')) closeModal(id);
+        if (el && !el.classList.contains('hidden')) window.closeModal(id);
       });
     }
   });

@@ -53,6 +53,8 @@ jobs:
         timeout-minutes: 3
         run: npm audit --omit=dev --audit-level=high
 
+      - run: npm run lint
+
       - run: npm test
 
       - name: Derive tags

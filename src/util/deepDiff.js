@@ -105,7 +105,6 @@ export default function deepDiff(before, after, opts = {}) {
       return;
     }
 
-    // eslint-disable-next-line eqeqeq
     if (oldVal !== newVal) {
       changes.push({ path, before: oldVal, after: newVal, type: 'changed' });
     }

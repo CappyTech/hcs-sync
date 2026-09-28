@@ -1,5 +1,4 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import axios from 'axios';
 
 // We mock axios at the module level so sessionService uses the mock.
 vi.mock('axios');
