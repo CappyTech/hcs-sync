@@ -229,6 +229,22 @@ Key details:
 
 The container is built from a multi-stage [`Dockerfile`](Dockerfile): stage 1 compiles Tailwind CSS; stage 2 produces a slim `node:24-alpine` image (`npm ci --omit=dev`, `dumb-init` as PID 1, `tailscaled` baked in, `NODE_ENV=production`, listening on port `3000`).
 
+### Deploying to server2
+
+Every push to `main` that builds and publishes `:latest` is followed by a **Deploy to server2** job in [`.github/workflows/ci.yml`](.github/workflows/ci.yml). The runner joins the tailnet (the same `TS_OAUTH_CLIENT_ID` / `TS_OAUTH_CLIENT_SECRET` OAuth client, tagged `tag:dev-ci`), then over SSH runs `docker compose pull` and `docker compose up -d --wait` in the directory on server2 that holds this repo's `docker-compose.yml` and `.env`. Compose only recreates the containers whose image changed, and `--wait` fails the job if `hcs-sync` does not report healthy within three minutes.
+
+The job needs these repository secrets. Until they are all set it skips with a warning rather than failing CI:
+
+| Secret | Value |
+|---|---|
+| `DEPLOY_HOST` | server2's tailnet name or IP (e.g. `server2` or `100.x.y.z`) |
+| `DEPLOY_USER` | SSH user on server2; must be able to run `docker compose` (in the `docker` group or equivalent) |
+| `DEPLOY_PATH` | Absolute directory on server2 containing `docker-compose.yml` and `.env` |
+| `DEPLOY_SSH_KEY` | Private key (PEM, whole file) whose public half is in that user's `~/.ssh/authorized_keys`; use a dedicated deploy-only key |
+| `DEPLOY_HOST_KEY` | Optional. server2's SSH host public key (`ssh-ed25519 AAAA…`, as in `/etc/ssh/ssh_host_ed25519_key.pub`) to pin. When unset the job trusts the key it is handed on first contact over the tailnet |
+
+server2's Tailscale ACLs must allow `tag:dev-ci` to reach it on port 22. Deploys run one at a time; a second push to `main` while one is in flight queues behind it. To roll out by hand, run the same two compose commands on server2.
+
 ---
 
 ## Testing

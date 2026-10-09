@@ -24,6 +24,8 @@ jobs:
     name: Build & Publish
     runs-on: ubuntu-latest
     timeout-minutes: 40
+    outputs:
+      image_tag: ${{ steps.tags.outputs.image_tag }}
     steps:
       - uses: actions/checkout@v4
 
@@ -58,9 +60,11 @@ jobs:
       - run: npm test
 
       - name: Derive tags
+        id: tags
         run: |
           echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}" >> $GITHUB_ENV
           echo "SHORT_SHA=${GITHUB_SHA::7}" >> $GITHUB_ENV
+          echo "image_tag=ghcr.io/${GITHUB_REPOSITORY,,}:sha-${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
           REF_SLUG=$(echo "$GITHUB_REF_NAME" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9._-]+/-/g')
           if [ "$GITHUB_REF_NAME" = "main" ]; then echo "EXTRA_TAG=latest"; else echo "EXTRA_TAG=branch-${REF_SLUG}"; fi >> $GITHUB_ENV
 
@@ -93,3 +97,82 @@ jobs:
       - name: Summary
         run: |
           echo "Published: ${{ env.IMAGE }}:${{ env.EXTRA_TAG }}, sha-${{ env.SHORT_SHA }}" >> $GITHUB_STEP_SUMMARY
+
+  # Roll the freshly published :latest out to server2. The box runs the
+  # docker-compose.yml from this repo with pull_policy: always, so a deploy is
+  # a `compose pull` + `compose up -d` over SSH. server2 is only reachable on
+  # the tailnet, so the runner joins it first with the same OAuth client the
+  # build job can use (tagged tag:dev-ci; server2's ACLs must let that tag SSH in).
+  deploy:
+    name: Deploy to server2
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # One rollout at a time, in order; a second push to main waits its turn.
+    concurrency:
+      group: deploy-server2
+      cancel-in-progress: false
+    env:
+      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+      DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+      DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+    steps:
+      # Until the DEPLOY_* secrets exist the job is a no-op with a warning,
+      # not a red main. See README → Production Deployment → Deploying to server2.
+      - name: Check deploy configuration
+        id: config
+        run: |
+          missing=""
+          [ -n "$DEPLOY_HOST" ] || missing="$missing DEPLOY_HOST"
+          [ -n "$DEPLOY_USER" ] || missing="$missing DEPLOY_USER"
+          [ -n "$DEPLOY_PATH" ] || missing="$missing DEPLOY_PATH"
+          [ -n "${{ secrets.DEPLOY_SSH_KEY }}" ] || missing="$missing DEPLOY_SSH_KEY"
+          if [ -n "$missing" ]; then
+            echo "::warning::Deploy to server2 skipped: missing repository secrets:$missing"
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Connect to Tailscale
+        if: steps.config.outputs.configured == 'true'
+        uses: tailscale/github-action@v3
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-client-secret: ${{ secrets.TS_OAUTH_CLIENT_SECRET }}
+          tags: tag:dev-ci
+
+      - name: Install SSH key
+        if: steps.config.outputs.configured == 'true'
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST_KEY: ${{ secrets.DEPLOY_HOST_KEY }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          # Pin the host key when one is provided; otherwise trust the key
+          # the tailnet hands back on first contact (no public network path).
+          if [ -n "$DEPLOY_HOST_KEY" ]; then
+            printf '%s %s\n' "$DEPLOY_HOST" "$DEPLOY_HOST_KEY" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -T 15 -H "$DEPLOY_HOST" > ~/.ssh/known_hosts
+          fi
+          test -s ~/.ssh/known_hosts
+
+      - name: Pull and restart on server2
+        if: steps.config.outputs.configured == 'true'
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes -o ConnectTimeout=20 \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            "set -e; cd '$DEPLOY_PATH'; docker compose pull; docker compose up -d --wait --wait-timeout 180; docker compose ps"
+
+      - name: Summary
+        if: always()
+        run: |
+          if [ "${{ steps.config.outputs.configured }}" = "true" ]; then
+            echo "Deployed ${{ needs.build.outputs.image_tag }} to server2 (${{ job.status }})" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "Deploy to server2 skipped: DEPLOY_* secrets not configured" >> $GITHUB_STEP_SUMMARY
+          fi

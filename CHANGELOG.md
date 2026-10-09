@@ -2,6 +2,12 @@
 
 All notable changes to hcs-sync will be documented here. Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **CI now deploys `main` to server2.** A `deploy` job runs after the image is published for a push to `main`: it joins the tailnet with the existing OAuth client, SSHes to server2 and runs `docker compose pull` + `docker compose up -d --wait` in the compose directory there. Configured by the `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_PATH`, `DEPLOY_SSH_KEY` and optional `DEPLOY_HOST_KEY` repository secrets; until they are set the job skips with a warning instead of failing. See README → Production Deployment → Deploying to server2.
+- **Test for the `vatrates` index migration.** vatrates joined the syncConfig-derived index plan in #28, so the next start replaces the hcs-schemas sparse unique `VATId_1` index with the partial unique form every other key uses. The test pins that one-time live migration: null keys unset first, the legacy index dropped exactly once, the replacement created under the same name as `unique` + `partialFilterExpression`.
+
 ## [0.14.1] - 2026-09-02
 
 ### Fixed
