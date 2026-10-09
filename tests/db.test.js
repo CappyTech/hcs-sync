@@ -252,6 +252,63 @@ describe('src/db/mongo.js – ensureKashflowIndexes()', () => {
     // Should have attempted to drop uuid_1 from collections that had it
     expect(droppedIndexes).toContain('uuid_1');
   });
+
+  it('migrates the vatrates VATId index from sparse unique to partial unique', async () => {
+    // hcs-schemas declares { VATId: 1 } as { unique, sparse } and Mongoose's
+    // autoIndex builds it under the derived name VATId_1. vatrates joined the
+    // syncConfig-derived index plan in #28, so on the next start the sync
+    // replaces that index with the partial unique form every other key uses:
+    // unset null keys, drop the existing VATId_1, create it as partial unique.
+    process.env.MONGO_HOST = 'localhost';
+    const { ensureKashflowIndexes } = await import('../src/db/mongo.js');
+
+    const legacyIndex = { name: 'VATId_1', key: { VATId: 1 }, unique: true, sparse: true };
+    const calls = []; // ordered log of every call on the vatrates collection
+    const mockDb = {
+      collection: vi.fn((name) => {
+        const record = (op, ...args) => { if (name === 'vatrates') calls.push({ op, args }); };
+        return {
+          createIndex: vi.fn(async (...args) => { record('createIndex', ...args); return 'ok'; }),
+          dropIndex: vi.fn(async (indexName) => {
+            record('dropIndex', indexName);
+            if (name === 'vatrates' && indexName === 'VATId_1') return undefined;
+            const err = new Error('IndexNotFound');
+            err.codeName = 'IndexNotFound';
+            throw err;
+          }),
+          updateMany: vi.fn(async (...args) => { record('updateMany', ...args); return {}; }),
+          indexes: vi.fn(async () => (name === 'vatrates' ? [{ name: '_id_', key: { _id: 1 } }, legacyIndex] : [])),
+        };
+      }),
+    };
+
+    await ensureKashflowIndexes(mockDb);
+
+    // The legacy index is on the managed key itself, so the legacy repair
+    // leaves it alone: it is dropped exactly once, by the key-index step.
+    const drops = calls.filter((c) => c.op === 'dropIndex' && c.args[0] === 'VATId_1');
+    expect(drops).toHaveLength(1);
+
+    const unsetNull = calls.findIndex((c) => c.op === 'updateMany'
+      && JSON.stringify(c.args) === JSON.stringify([{ VATId: null }, { $unset: { VATId: '' } }]));
+    const drop = calls.indexOf(drops[0]);
+    const create = calls.findIndex((c) => c.op === 'createIndex' && c.args[0]?.VATId === 1);
+    expect(unsetNull).toBeGreaterThanOrEqual(0);
+    expect(create).toBeGreaterThanOrEqual(0);
+    expect(unsetNull).toBeLessThan(drop);
+    expect(drop).toBeLessThan(create);
+
+    // VATId is numeric, so no empty-string cleanup (that is for string keys).
+    expect(calls.some((c) => c.op === 'updateMany' && c.args[0]?.VATId === '')).toBe(false);
+
+    // Recreated under the same name, unique and partial — not sparse — so it
+    // tolerates documents that lack VATId without a { VATId: null } clash.
+    expect(calls[create].args).toEqual([
+      { VATId: 1 },
+      { name: 'VATId_1', unique: true, partialFilterExpression: { VATId: { $exists: true } } },
+    ]);
+    expect(calls.filter((c) => c.op === 'createIndex' && c.args[0]?.VATId === 1)).toHaveLength(1);
+  });
 });
 
 describe('src/db/mongo.js – isMongoAuthError()', () => {
