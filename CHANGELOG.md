@@ -8,6 +8,14 @@ All notable changes to hcs-sync will be documented here. Format follows [Keep a 
 - **Shape capture for KashFlow's next free numbers.** The debug page's "Response shapes" list now offers `nextQuoteNumber`, `nextProjectNumber`, `nextInvoiceNumber`, `nextPurchaseNumber` and `nextPurchaseOrderNumber`, reading `GET /nextavailable{quote,project,invoice,purchase,purchaseorder}number`. The Swagger gives no response schema for these; the capture shows whether KashFlow sends a bare number (shown as `(value)` with the number) or an object. hcs-app's Job Register reads the quote and project ones.
 - `kf.nextAvailable.get(kind)` on the KashFlow client: read-only, and limited to those five kinds.
 
+## [0.14.2] - 2026-11-11
+
+### Security
+- **`npm audit` is clean again** (was 1 high, several moderate). Lockfile updates within existing ranges for axios, follow-redirects, mongoose, body-parser, qs, proxy-addr, ip-address, fast-copy, vitest/vite and source-map-js.
+- **minimatch** (GHSA-g3hv-75wg-m249, affects 7.0.0 to 11.0.0): `filelist` (under ejs → jake) and `nodemon` still ask for `^10`, so overrides now force `^11.0.8` under those two only. The earlier `filelist` override pinned `^10.2.1`, which this advisory now covers too. eslint keeps its own `minimatch@3`, which isn't affected.
+- **postcss-selector-parser** (GHSA-rj75-hqrm-r3gf, below 6.1.5): `@tailwindcss/typography` pins 6.0.10, so it is overridden to `^6.1.6`.
+- Done without `npm audit fix --force`, which would have downgraded nodemon to 3.1.11 and @tailwindcss/typography to 0.5.4.
+
 ## [0.14.1] - 2026-09-02
 
 ### Fixed

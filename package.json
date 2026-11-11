@@ -55,9 +55,15 @@
     "ejs": {
       "jake": {
         "filelist": {
-          "minimatch": "^10.2.1"
+          "minimatch": "^11.0.8"
         }
       }
+    },
+    "nodemon": {
+      "minimatch": "^11.0.8"
+    },
+    "@tailwindcss/typography": {
+      "postcss-selector-parser": "^6.1.6"
     }
   }
 }
