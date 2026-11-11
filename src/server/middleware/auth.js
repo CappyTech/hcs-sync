@@ -22,8 +22,28 @@ export const SKIP_TURNSTILE = process.env.SKIP_TURNSTILE === 'true' || !IS_PROD;
 // (sessions die with the process — fine for local dev).
 export const SSO_JWT_SECRET = process.env.HCS_SSO_JWT_SECRET || (!IS_PROD ? crypto.randomBytes(32).toString('hex') : '');
 
+const DEFAULT_APP_URL = 'https://app.heroncs.co.uk';
+
+// Where hcs-sync calls hcs-app server to server (POST /api/sso/token). In a
+// compose stack this is often the internal service address (http://hcs-app:5000).
 export function appBaseUrl() {
-  return String(process.env.HCS_APP_BASE_URL || 'https://app.heroncs.co.uk').replace(/\/$/, '');
+  return String(process.env.HCS_APP_BASE_URL || DEFAULT_APP_URL).replace(/\/$/, '');
+}
+
+// Where the browser is sent: the login handoff, "sign out of HCS" links, and
+// the parent domain the SSO cookie lives on. Must be hcs-app's public address,
+// so an internal HCS_APP_BASE_URL (a bare service name with no dot in its
+// host, like hcs-app) is not used here. HCS_APP_PUBLIC_URL sets it outright.
+export function appPublicUrl() {
+  const explicit = String(process.env.HCS_APP_PUBLIC_URL || '').trim();
+  if (explicit) return explicit.replace(/\/$/, '');
+  const base = appBaseUrl();
+  try {
+    if (new URL(base).hostname.includes('.')) return base;
+  } catch {
+    // fall through to the default
+  }
+  return DEFAULT_APP_URL;
 }
 
 // How GET /login signs people in.
@@ -50,7 +70,7 @@ export function ssoCookieDomain(req) {
   const explicit = String(process.env.HCS_SSO_COOKIE_DOMAIN || '').trim();
   if (explicit) return explicit;
   try {
-    const appParts = new URL(appBaseUrl()).hostname.toLowerCase().split('.');
+    const appParts = new URL(appPublicUrl()).hostname.toLowerCase().split('.');
     const ourParts = String(req.hostname || '').toLowerCase().split('.');
     const common = [];
     while (appParts.length && ourParts.length && appParts[appParts.length - 1] === ourParts[ourParts.length - 1]) {

@@ -32,7 +32,7 @@ jobs:
         uses: tailscale/github-action@v3
         with:
           oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
-          oauth-client-secret: ${{ secrets.TS_OAUTH_CLIENT_SECRET }}
+          oauth-secret: ${{ secrets.TS_OAUTH_CLIENT_SECRET }}
           tags: tag:dev-ci
 
       - uses: actions/setup-node@v4
@@ -93,3 +93,106 @@ jobs:
       - name: Summary
         run: |
           echo "Published: ${{ env.IMAGE }}:${{ env.EXTRA_TAG }}, sha-${{ env.SHORT_SHA }}" >> $GITHUB_STEP_SUMMARY
+
+  # ------------------------------------------------------------- deploy ---
+  # After a main build has passed its tests and pushed :latest, roll the
+  # container on server2, the same way hcs-app's CI does. server2 is behind the
+  # FRP tunnel, so the runner joins the tailnet and SSHes to it as server2-host.
+  # Deploys run in the `production` environment: with no required reviewers it
+  # is automatic; add reviewers in Settings → Environments to make each deploy
+  # wait for an Approve click.
+  deploy:
+    name: Deploy to server2
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: production
+      url: https://sync.heroncs.co.uk
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false   # never interrupt a deploy half way
+    env:
+      DEPLOY_HOST: ${{ vars.DEPLOY_HOST || 'server2-host' }}
+      DEPLOY_PATH: ${{ vars.DEPLOY_PATH || '~/docker/hcs-sync' }}
+      DEPLOY_SERVICE: ${{ vars.DEPLOY_SERVICE || 'hcs-sync' }}
+      APP_URL: ${{ vars.APP_URL || 'https://sync.heroncs.co.uk' }}
+    steps:
+      - name: Connect to Tailscale
+        uses: tailscale/github-action@v3
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_CLIENT_SECRET }}
+          tags: tag:dev-ci
+
+      # tailscale/github-action reports success even when every `tailscale up`
+      # attempt failed, so check the runner really is connected.
+      - name: Check the runner is on the tailnet
+        run: |
+          state=$(sudo tailscale status --json 2>/dev/null | jq -r '.BackendState // "unknown"')
+          if [ "$state" != "Running" ]; then
+            echo "::error::Not connected to Tailscale (state: $state). Tailscale rejected the OAuth client in TS_OAUTH_CLIENT_ID / TS_OAUTH_CLIENT_SECRET; the 'Connect to Tailscale' log shows why."
+            exit 1
+          fi
+
+      # The runner's DNS doesn't resolve MagicDNS short names (server2-host), so
+      # ask Tailscale for the address from its own peer list instead.
+      - name: Find server2 on the tailnet
+        run: |
+          ip=$(sudo tailscale ip -4 "$DEPLOY_HOST" 2>/dev/null | head -1 || true)
+          if [ -z "$ip" ]; then
+            echo "::error::$DEPLOY_HOST is not on the tailnet as seen by this runner"
+            sudo tailscale status || true
+            exit 1
+          fi
+          echo "Found $DEPLOY_HOST at $ip"
+          echo "DEPLOY_IP=$ip" >> $GITHUB_ENV
+
+      # server2 runs Tailscale SSH, which answers port 22 for tailnet connections
+      # and authorises them by the tailnet policy (tag:dev-ci → tag:server), not
+      # by keys. So this is a plain ssh to its tailnet address with no key.
+      #
+      # /health doesn't report a commit, so the check that the new image is the
+      # one running happens on the box: the recreated container's image must
+      # carry this commit in its org.opencontainers.image.revision label.
+      - name: Deploy over Tailscale SSH
+        env:
+          DEPLOY_USER: ${{ vars.DEPLOY_USER || secrets.DEPLOY_SSH_USER || 'jack' }}
+        run: |
+          # DEPLOY_PATH goes over unquoted so the remote shell expands a leading ~
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 "$DEPLOY_USER@$DEPLOY_IP" "DEPLOY_PATH=$DEPLOY_PATH DEPLOY_SERVICE=$DEPLOY_SERVICE WANT_SHA=$GITHUB_SHA bash -s" <<'REMOTE'
+          set -e
+          cd "$DEPLOY_PATH"
+          # Fail loudly if this compose doesn't pull from GHCR: a local-only
+          # image name makes `pull` a no-op and the deploy would ship nothing.
+          if ! docker compose config --images "$DEPLOY_SERVICE" | grep -q '^ghcr.io/'; then
+            echo "::error::$DEPLOY_SERVICE in $(pwd) does not use a ghcr.io image"
+            exit 1
+          fi
+          docker compose pull "$DEPLOY_SERVICE"
+          # --force-recreate so a new :latest digest always rolls the container
+          docker compose up -d --force-recreate "$DEPLOY_SERVICE"
+          cid=$(docker compose ps -q "$DEPLOY_SERVICE")
+          image=$(docker inspect -f '{{.Image}}' "$cid")
+          rev=$(docker image inspect -f '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$image")
+          echo "Running revision: ${rev:-unknown} (want $WANT_SHA)"
+          if [ "$rev" != "$WANT_SHA" ]; then
+            echo "::error::$DEPLOY_SERVICE is running ${rev:-an unlabelled image}, not $WANT_SHA"
+            exit 1
+          fi
+          docker image prune -f
+          REMOTE
+
+      # The new container takes a few seconds to bind; wait until the public
+      # URL answers through Caddy + FRP before calling the deploy done.
+      - name: Verify the service is up
+        run: |
+          for i in $(seq 1 30); do
+            status=$(curl -fsS -m 10 "$APP_URL/health" | jq -r '.status // empty' 2>/dev/null || true)
+            echo "attempt $i: ${status:-unreachable}"
+            if [ "$status" = "ok" ]; then echo "Live: ${GITHUB_SHA::7}" >> $GITHUB_STEP_SUMMARY; exit 0; fi
+            sleep 10
+          done
+          echo "::error::$APP_URL/health is not ok after 5 minutes"
+          exit 1

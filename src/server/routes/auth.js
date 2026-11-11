@@ -4,7 +4,7 @@ import jwt from 'jsonwebtoken';
 import logger from '../../util/logger.js';
 import {
   IS_PROD, SKIP_TURNSTILE, SSO_JWT_SECRET, SSO_COOKIE_NAME, ssoCookieOptions, sanitiseNext, verifySsoCookie,
-  appBaseUrl, loginMode, ssoCookieDomain,
+  appBaseUrl, appPublicUrl, loginMode, ssoCookieDomain,
 } from '../middleware/auth.js';
 
 const loginLimiter = rateLimit({ windowMs: 15 * 60_000, max: 20, standardHeaders: true, legacyHeaders: false, message: 'Too many login attempts, please try again later.' });
@@ -22,11 +22,11 @@ const SSO_RETURN_PARAM = 'sso_return';
 function handoffUrl(req, next) {
   const ourBase = String(process.env.HCS_SYNC_PUBLIC_URL || `${req.protocol}://${req.get('host')}`).replace(/\/$/, '');
   const back = `${ourBase}/login?next=${encodeURIComponent(next)}&${SSO_RETURN_PARAM}=1`;
-  return `${appBaseUrl()}/sso/hcs-sync?return_to=${encodeURIComponent(back)}`;
+  return `${appPublicUrl()}/sso/hcs-sync?return_to=${encodeURIComponent(back)}`;
 }
 
 function renderStatus(res, status, locals) {
-  return res.status(status).render('layout', { title: locals.heading, content: 'signin-status', isAuthenticated: false, appBase: appBaseUrl(), ...locals });
+  return res.status(status).render('layout', { title: locals.heading, content: 'signin-status', isAuthenticated: false, appBase: appPublicUrl(), ...locals });
 }
 
 // ── Login routes (unauthenticated) ────────────────────────────────────────────

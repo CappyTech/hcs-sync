@@ -2,6 +2,15 @@
 
 All notable changes to hcs-sync will be documented here. Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [0.16.1] - 2026-11-11
+
+### Added
+- **CI deploys `main` to server2.** A `deploy` job, matching hcs-app's, runs after a `main` build has pushed `:latest`: it joins the tailnet, SSHes to `server2-host` over Tailscale SSH, pulls and force-recreates `hcs-sync` in `~/docker/hcs-sync`, checks the running image's `org.opencontainers.image.revision` label is the commit just built, then waits for `/health` to answer `ok` on the public URL. It runs in the `production` environment; host, path, service and URL can be overridden with repository variables.
+
+### Fixed
+- **Sign-in sent the browser to an internal address.** The 0.16.0 login handoff redirected to `HCS_APP_BASE_URL`, which a compose stack sets to hcs-app's internal service address (`http://hcs-app:5000`) for server-to-server calls, so nobody could sign in. The handoff, the "sign out of HCS" link and the derived SSO cookie domain now use hcs-app's public address: new `HCS_APP_PUBLIC_URL`, else `HCS_APP_BASE_URL` when its host is a real domain, else `https://app.heroncs.co.uk`. Server-to-server calls still use `HCS_APP_BASE_URL`.
+- The optional Tailscale step in the build job passed `oauth-client-secret`, which `tailscale/github-action@v3` ignores; it now passes `oauth-secret`.
+
 ## [0.16.0] - 2026-11-11
 
 ### Changed
