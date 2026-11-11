@@ -1,0 +1,27 @@
+<%#
+  Signed-out page, and the error shown when hcs-app's sign-in handoff comes
+  back without a cookie hcs-sync can read. Same card as login.ejs.
+
+  Locals: heading, icon, message, retryHref, retryLabel?, showAppLogout?, appBase
+  (routes/auth.js renderStatus).
+%>
+<div class="max-w-md mx-auto py-10 px-4">
+  <div class="bg-white dark:bg-gray-900 shadow-lg rounded-2xl overflow-hidden">
+    <div class="h-1.5 bg-gradient-to-r from-green-500 to-emerald-400"></div>
+    <div class="border-b border-gray-200 dark:border-gray-700 px-6 py-3 font-semibold text-sm text-gray-900 dark:text-gray-100 flex items-center gap-2">
+      <i class="bi <%= icon %> text-green-600 dark:text-green-400" aria-hidden="true"></i>
+      <h1><%= heading %></h1>
+    </div>
+    <div class="p-6 space-y-4">
+      <p class="text-sm text-gray-700 dark:text-gray-300"><%= message %></p>
+      <a href="<%= retryHref %>" class="w-full inline-flex items-center justify-center gap-1.5 px-6 py-2.5 rounded-lg text-sm font-medium bg-green-600 text-white hover:bg-green-700 transition shadow-sm focus:ring-4 focus:ring-green-300 dark:focus:ring-green-800">
+        <i class="bi bi-box-arrow-in-right" aria-hidden="true"></i> <%= typeof retryLabel !== 'undefined' && retryLabel ? retryLabel : 'Try again' %>
+      </a>
+      <% if (typeof showAppLogout !== 'undefined' && showAppLogout) { %>
+      <div class="text-center text-sm">
+        <a href="<%= appBase %>/user/logout" class="text-green-700 dark:text-green-400 hover:underline">Sign out of HCS too</a>
+      </div>
+      <% } %>
+    </div>
+  </div>
+</div>
