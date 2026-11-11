@@ -192,6 +192,14 @@ export const SHAPE_ENDPOINTS = {
     list: (kf) => kf.vatSettings.get(),
     listPath: '/vat/settings',
   },
+  // Next free numbers: singletons with no response schema in the Swagger, so
+  // sample them to see whether KashFlow sends a bare number or an object.
+  // hcs-app's Job Register reads the quote and project ones.
+  nextQuoteNumber: { list: (kf) => kf.nextAvailable.get('quote'), listPath: '/nextavailablequotenumber' },
+  nextProjectNumber: { list: (kf) => kf.nextAvailable.get('project'), listPath: '/nextavailableprojectnumber' },
+  nextInvoiceNumber: { list: (kf) => kf.nextAvailable.get('invoice'), listPath: '/nextavailableinvoicenumber' },
+  nextPurchaseNumber: { list: (kf) => kf.nextAvailable.get('purchase'), listPath: '/nextavailablepurchasenumber' },
+  nextPurchaseOrderNumber: { list: (kf) => kf.nextAvailable.get('purchaseorder'), listPath: '/nextavailablepurchaseordernumber' },
   // Bulk payments have no list endpoint, and Create is a write we must never
   // call, so the record shape is sampled from BulkPayment_Get. A bulk payment
   // number only exists on a purchase settled by one, so resolve it from a

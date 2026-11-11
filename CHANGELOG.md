@@ -2,6 +2,12 @@
 
 All notable changes to hcs-sync will be documented here. Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [0.15.0] - 2026-11-11
+
+### Added
+- **Shape capture for KashFlow's next free numbers.** The debug page's "Response shapes" list now offers `nextQuoteNumber`, `nextProjectNumber`, `nextInvoiceNumber`, `nextPurchaseNumber` and `nextPurchaseOrderNumber`, reading `GET /nextavailable{quote,project,invoice,purchase,purchaseorder}number`. The Swagger gives no response schema for these; the capture shows whether KashFlow sends a bare number (shown as `(value)` with the number) or an object. hcs-app's Job Register reads the quote and project ones.
+- `kf.nextAvailable.get(kind)` on the KashFlow client: read-only, and limited to those five kinds.
+
 ## [0.14.3] - 2026-11-11
 
 ### Changed

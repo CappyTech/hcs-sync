@@ -134,6 +134,21 @@ describe('src/kashflow/client.js', () => {
     });
   });
 
+  describe('nextAvailable', () => {
+    it('get calls GET /nextavailable{kind}number', async () => {
+      mockHttp.get.mockResolvedValueOnce({ data: 1001 });
+      const kf = await createClient();
+      expect(await kf.nextAvailable.get('quote')).toBe(1001);
+      expect(mockHttp.get).toHaveBeenCalledWith('/nextavailablequotenumber');
+    });
+
+    it('refuses a kind it does not know', async () => {
+      const kf = await createClient();
+      expect(() => kf.nextAvailable.get('../customers')).toThrow(/Unknown next-available kind/);
+      expect(mockHttp.get).not.toHaveBeenCalled();
+    });
+  });
+
   describe('listAll with pagination', () => {
     it('follows NextPageUrl for multi-page results', async () => {
       // Page 1

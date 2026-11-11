@@ -51,6 +51,9 @@ function buildAuthHeaders(token) {
  * deletion. Matched on the numeric code rather than the message text, which
  * is human-readable prose and not a contract.
  */
+// The /nextavailable{kind}number endpoints the client may read.
+export const NEXT_AVAILABLE_KINDS = ['invoice', 'project', 'purchase', 'quote', 'purchaseorder'];
+
 const SQL_TIMEOUT_CODE = '-2146232060';
 const isTransientBackendTimeout = (err) => {
   if (err.response?.status !== 400) return false;
@@ -260,6 +263,14 @@ async function createClient() {
     // accounting, MOSS, lock-transaction). No collection; `get` returns the object.
     vatSettings: {
       get: () => http.get('/vat/settings').then((r) => r.data),
+    },
+    // GET-only next free numbers (NextAvailableNumber_Get*). Read for
+    // shape-sampling: the Swagger gives no response schema for them.
+    nextAvailable: {
+      get: (kind) => {
+        if (!NEXT_AVAILABLE_KINDS.includes(kind)) throw new Error(`Unknown next-available kind "${kind}"`);
+        return http.get(`/nextavailable${kind}number`).then((r) => r.data);
+      },
     },
     // Read-only. Bulk payments have no list endpoint and Create/Update/Delete
     // are writes this mirror never issues — only the by-number read is exposed,

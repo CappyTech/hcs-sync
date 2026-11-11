@@ -69,3 +69,24 @@ describe('shape inference', () => {
     expect(report.fields.some((f) => f.name === '[].Id')).toBe(true);
   });
 });
+
+describe('next-available shape capture', () => {
+  it('has an entry per next-available kind, each reading its own endpoint', async () => {
+    const { SHAPE_ENDPOINTS } = await import('../src/sync/shapes.js');
+    const { NEXT_AVAILABLE_KINDS } = await import('../src/kashflow/client.js');
+    const entries = Object.values(SHAPE_ENDPOINTS).filter((e) => e.listPath.startsWith('/nextavailable'));
+    expect(entries.map((e) => e.listPath).sort())
+      .toEqual(NEXT_AVAILABLE_KINDS.map((k) => `/nextavailable${k}number`).sort());
+    for (const e of entries) {
+      const kind = e.listPath.replace('/nextavailable', '').replace(/number$/, '');
+      const calls = [];
+      await e.list({ nextAvailable: { get: (k) => { calls.push(k); return 1001; } } });
+      expect(calls).toEqual([kind]);
+    }
+  });
+
+  it('shows a bare-number answer as its value', () => {
+    const r = buildShapeReport('GET /nextavailablequotenumber', 1001);
+    expect(r.fields).toEqual([expect.objectContaining({ name: '(value)', type: 'integer', example: '1001' })]);
+  });
+});
