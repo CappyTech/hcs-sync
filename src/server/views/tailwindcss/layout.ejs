@@ -97,29 +97,34 @@
     </nav>
   <% } %>
 
-  <main id="main-content" class="flex-grow w-full pt-16 pb-6 px-4 sm:px-6 lg:px-8">
+  <% if (!isAuthenticated) { %>
+    <!-- Public header (unauthenticated) — mirrors hcs-app's signed-out header -->
+    <header class="sticky top-0 w-full bg-white/80 dark:bg-gray-800/80 backdrop-blur-md border-b border-gray-200 dark:border-gray-700 shadow-sm z-50 print:hidden">
+      <nav class="flex items-center justify-between gap-3 px-4 sm:px-6 lg:px-8 py-2" aria-label="Main navigation">
+        <a href="/" class="inline-flex items-center gap-2 min-w-0 font-semibold text-sm text-gray-900 dark:text-gray-100 hover:text-green-600 dark:hover:text-green-400">
+          <i class="bi bi-arrow-repeat text-base text-green-600 dark:text-green-400" aria-hidden="true"></i>
+          <span class="truncate">HCS Sync</span>
+        </a>
+        <div class="flex items-center gap-1 sm:gap-2 shrink-0">
+          <button id="theme-toggle" type="button" aria-label="Toggle light or dark theme" class="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 hover:text-green-600 dark:hover:text-green-400 transition cursor-pointer">
+            <i id="theme-icon" class="bi bi-moon-stars fs-5" aria-hidden="true"></i>
+            <span class="hidden sm:inline">Theme</span>
+          </button>
+        </div>
+      </nav>
+    </header>
+  <% } %>
+
+  <main id="main-content" class="flex-grow w-full <%= isAuthenticated ? 'pt-16' : 'pt-6' %> pb-6 px-4 sm:px-6 lg:px-8">
     <%- include('./partials/successAlert.ejs') %>
     <%- include('./partials/errorAlert.ejs') %>
     <%- include(content, locals) %>
   </main>
 
-  <% if (isAuthenticated) { %>
-    <!-- Footer -->
-    <div class="w-full print:hidden">
-      <%- include('./partials/footer.ejs') %>
-    </div>
-  <% } else { %>
-    <!-- Bottom Nav (unauthenticated) -->
-    <nav class="fixed bottom-0 w-full bg-white/80 dark:bg-gray-800/80 backdrop-blur-md border-t border-gray-200 dark:border-gray-700 z-50 print:hidden">
-      <div class="max-w-7xl mx-auto flex items-center justify-center px-2 py-1.5">
-        <button id="theme-toggle" class="inline-flex flex-col items-center gap-0.5 px-2 py-1 rounded-lg text-xs text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 hover:text-blue-600 dark:hover:text-blue-400 transition cursor-pointer">
-          <i id="theme-icon" class="bi bi-moon-stars fs-5"></i>
-          <span>Theme</span>
-        </button>
-      </div>
-      <%- include('./partials/footer.ejs') %>
-    </nav>
-  <% } %>
+  <!-- Footer -->
+  <div class="w-full print:hidden">
+    <%- include('./partials/footer.ejs') %>
+  </div>
 
   <!-- Theme toggle -->
   <script src="/static/js/theme-toggle.js" defer></script>
