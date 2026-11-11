@@ -2,6 +2,14 @@
 
 All notable changes to hcs-sync will be documented here. Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [0.14.2] - 2026-11-11
+
+### Security
+- **`npm audit` is clean again** (was 1 high, several moderate). Lockfile updates within existing ranges for axios, follow-redirects, mongoose, body-parser, qs, proxy-addr, ip-address, fast-copy, vitest/vite and source-map-js.
+- **minimatch** (GHSA-g3hv-75wg-m249, affects 7.0.0 to 11.0.0): `filelist` (under ejs → jake) and `nodemon` still ask for `^10`, so overrides now force `^11.0.8` under those two only. The earlier `filelist` override pinned `^10.2.1`, which this advisory now covers too. eslint keeps its own `minimatch@3`, which isn't affected.
+- **postcss-selector-parser** (GHSA-rj75-hqrm-r3gf, below 6.1.5): `@tailwindcss/typography` pins 6.0.10, so it is overridden to `^6.1.6`.
+- Done without `npm audit fix --force`, which would have downgraded nodemon to 3.1.11 and @tailwindcss/typography to 0.5.4.
+
 ## [0.14.1] - 2026-09-02
 
 ### Fixed
