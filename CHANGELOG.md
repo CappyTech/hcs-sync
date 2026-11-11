@@ -2,6 +2,11 @@
 
 All notable changes to hcs-sync will be documented here. Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [0.14.3] - 2026-11-11
+
+### Changed
+- **Login page matches hcs-app's.** Green accent bar, header row with icon, compact inputs, full-width green Log in button, and green forgot-password / create-account links, in light and dark mode. Signed-out pages now get a sticky top header (HCS Sync + Theme toggle) like hcs-app's, in place of the fixed bottom theme bar; the footer sits at the bottom of the page. Turnstile, the optional TOTP field, CSRF, error messages and the POST /login target are unchanged.
+
 ## [0.14.2] - 2026-11-11
 
 ### Security
