@@ -22,6 +22,49 @@ export const SKIP_TURNSTILE = process.env.SKIP_TURNSTILE === 'true' || !IS_PROD;
 // (sessions die with the process — fine for local dev).
 export const SSO_JWT_SECRET = process.env.HCS_SSO_JWT_SECRET || (!IS_PROD ? crypto.randomBytes(32).toString('hex') : '');
 
+export function appBaseUrl() {
+  return String(process.env.HCS_APP_BASE_URL || 'https://app.heroncs.co.uk').replace(/\/$/, '');
+}
+
+// How GET /login signs people in.
+//   'redirect' (default) — hand off to hcs-app's GET /sso/hcs-sync, which signs
+//     the user in there (or reuses their session) and sets the hcs_sso cookie
+//     on the shared parent domain before sending them back.
+//   'form' — hcs-sync's own form, which posts credentials to hcs-app's
+//     POST /api/sso/token. Opt in with HCS_SYNC_LOGIN_MODE=form; also used
+//     automatically for local dev without hcs-app (no HCS_SYNC_API_KEY outside
+//     production), where the form's dev bypass signs a local session.
+// Read per request so tests (and a restart with new env) can switch it.
+export function loginMode() {
+  const explicit = String(process.env.HCS_SYNC_LOGIN_MODE || '').trim().toLowerCase();
+  if (explicit === 'form' || explicit === 'redirect') return explicit;
+  if (!IS_PROD && !String(process.env.HCS_SYNC_API_KEY || '').trim()) return 'form';
+  return 'redirect';
+}
+
+// The domain hcs-app puts the hcs_sso cookie on during the redirect handoff.
+// hcs-app uses HCS_SSO_COOKIE_DOMAIN when set, otherwise the parent domain its
+// host and ours share (app.example.co.uk + sync.example.co.uk → .example.co.uk).
+// Logout has to clear the cookie on that same domain, or it survives.
+export function ssoCookieDomain(req) {
+  const explicit = String(process.env.HCS_SSO_COOKIE_DOMAIN || '').trim();
+  if (explicit) return explicit;
+  try {
+    const appParts = new URL(appBaseUrl()).hostname.toLowerCase().split('.');
+    const ourParts = String(req.hostname || '').toLowerCase().split('.');
+    const common = [];
+    while (appParts.length && ourParts.length && appParts[appParts.length - 1] === ourParts[ourParts.length - 1]) {
+      common.unshift(appParts.pop());
+      ourParts.pop();
+    }
+    // Same host on both sides: hcs-app sets a host-only cookie.
+    if (!appParts.length && !ourParts.length) return '';
+    return common.length >= 2 ? `.${common.join('.')}` : '';
+  } catch {
+    return '';
+  }
+}
+
 export function buildLoginRedirect(req) {
   const returnTo = req.originalUrl || req.url || '/';
   if (returnTo === '/') return '/login';
@@ -74,7 +117,7 @@ export function ssoGuard(req, res, next) {
   if (p === '/health' || p === '/cron/health') return next();
   if (p === '/favicon.ico' || p === '/robots.txt') return next();
   if (p === '/static' || p.startsWith('/static/')) return next();
-  if (p === '/login') return next();
+  if (p === '/login' || p === '/logout') return next();
   // Machine-to-machine API endpoints authenticate via X-Sync-Api-Key, not the SSO cookie.
   if (p === '/api/pull') return next();
 

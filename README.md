@@ -148,7 +148,7 @@ Each capability from three angles: **Dev** (how it's built), **User** (what an a
 - **Business Owner.** Keeps the accounting mirror clean and uniquely keyed, preventing double-counting in downstream finance reports.
 
 ### 9 — Authentication & Security
-- **Dev.** UI is gated by an SSO JWT cookie (`hcs_sso`) **issued by hcs-app** and verified here (HS256, audience `hcs-sync`, issuer `hcs-app`). The login form proxies credentials to hcs-app's `/api/sso/token` using the shared `HCS_SYNC_API_KEY`, so hcs-sync never handles password hashes or 2FA itself. Cloudflare Turnstile guards the login form; admin-only routes check `role === 'admin'`. Layered defences: Helmet CSP with per-request nonce, double-submit CSRF, `trust proxy` limited to loopback + Docker bridge, request-ID sanitisation against log injection, and tiered rate limiters (login/sync/pull/dedup).
+- **Dev.** UI is gated by an SSO JWT cookie (`hcs_sso`) **issued by hcs-app** and verified here (HS256, audience `hcs-sync`, issuer `hcs-app`). `GET /login` sends the browser to hcs-app's `GET /sso/hcs-sync` handoff, which signs the user in there (or reuses their hcs-app session), sets the cookie on the shared parent domain and sends them back, so passwords and 2FA are only ever typed into hcs-app. Set `HCS_SYNC_LOGIN_MODE=form` to use hcs-sync's own form instead, which proxies credentials to hcs-app's `/api/sso/token` with the shared `HCS_SYNC_API_KEY` behind Cloudflare Turnstile; local dev without an API key uses the form automatically. admin-only routes check `role === 'admin'`. Layered defences: Helmet CSP with per-request nonce, double-submit CSRF, `trust proxy` limited to loopback + Docker bridge, request-ID sanitisation against log injection, and tiered rate limiters (login/sync/pull/dedup).
 - **User.** Log in with the same credentials and 2FA as the main app — one identity, no separate account.
 - **Business Owner.** Centralised identity and strong defence-in-depth around a system that can read and rewrite accounting data, lowering breach and tampering risk.
 
@@ -164,8 +164,9 @@ Each capability from three angles: **Dev** (how it's built), **User** (what an a
 | Route | Auth | Purpose |
 |-------|------|---------|
 | `GET /` | SSO | Dashboard (status, counts, cron health, last error) |
-| `GET /login`, `POST /login` | public | SSO login (via hcs-app) + Turnstile, rate-limited |
-| `GET /logout` | SSO | Clear SSO cookie |
+| `GET /login` | public | Redirect to hcs-app's sign-in handoff (or the form when `HCS_SYNC_LOGIN_MODE=form`) |
+| `POST /login` | public | Form login via hcs-app + Turnstile, rate-limited; form mode only |
+| `GET /logout` | public | Clear the SSO cookie (host-only and shared-domain); shows a signed-out page |
 | `GET /health` | public | Liveness + cron health JSON |
 | `GET /cron/health` | public | Cron health (503 if unhealthy) — container healthcheck |
 | `GET /status` | SSO | Live run progress (dashboard polling) |
@@ -224,7 +225,7 @@ Key details:
 - **Image:** `ghcr.io/cappytech/hcs-sync:latest` with `pull_policy: always`.
 - **Networking:** the app shares the **Tailscale** container's network namespace, so the edge **Caddy** must proxy to `tailscale:3000` (not `hcs-sync:3000`). Caddy terminates HTTPS automatically; HSTS is handled at the edge while CSP is enforced in-app.
 - **Health:** Docker healthcheck hits `GET /cron/health`.
-- **Auth wiring:** set `HCS_APP_BASE_URL`, `HCS_SSO_JWT_SECRET` (must match hcs-app), and `HCS_SYNC_API_KEY` (shared secret for both the login handshake and `POST /api/pull`). In production set `HCS_SSO_COOKIE_DOMAIN=.heroncs.co.uk`.
+- **Auth wiring:** set `HCS_APP_BASE_URL`, `HCS_SSO_JWT_SECRET` (must match hcs-app), and `HCS_SYNC_API_KEY` (shared secret for `POST /api/pull`, and for the login handshake in form mode). In production set `HCS_SSO_COOKIE_DOMAIN=.heroncs.co.uk` so logout clears the cookie hcs-app's handoff set; hcs-app must allow this host in its `HCS_SSO_RETURN_HOSTS` (default `sync.heroncs.co.uk`). `HCS_SYNC_PUBLIC_URL` overrides the return address sent to hcs-app if the request origin isn't the public one.
 - **State:** the `tailscale_state` volume persists tailnet auth across restarts.
 
 The container is built from a multi-stage [`Dockerfile`](Dockerfile): stage 1 compiles Tailwind CSS; stage 2 produces a slim `node:24-alpine` image (`npm ci --omit=dev`, `dumb-init` as PID 1, `tailscaled` baked in, `NODE_ENV=production`, listening on port `3000`).

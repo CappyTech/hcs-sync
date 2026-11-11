@@ -2,6 +2,20 @@
 
 All notable changes to hcs-sync will be documented here. Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [0.16.0] - 2026-11-11
+
+### Changed
+- **Signing in now goes through hcs-app.** `GET /login` redirects to hcs-app's existing `GET /sso/hcs-sync` handoff, which signs the user in there (or reuses an open hcs-app session, so there is often no login screen at all), applies the same admin/accountant role check, sets `hcs_sso` on the shared parent domain and sends them back. Passwords and 2FA are only typed into hcs-app, so its lockout, password reset and Microsoft sign-in all apply. `POST /login` no longer accepts credentials in this mode.
+- **`GET /logout` shows a signed-out page** instead of redirecting to `/login`, which in redirect mode would go straight back through hcs-app and sign the user in again while their hcs-app session is open. The page links to hcs-app's logout. `/logout` no longer needs a valid cookie.
+
+### Added
+- `HCS_SYNC_LOGIN_MODE` (`redirect` default, or `form`) keeps the previous form login available. Local dev with no `HCS_SYNC_API_KEY` outside production still uses the form and its dev bypass.
+- `HCS_SYNC_PUBLIC_URL` optionally sets the address hcs-app sends the browser back to; by default it is the request's own origin.
+
+### Fixed
+- **Logout now clears the cookie hcs-app set.** It was cleared host-only, but a cookie set on `.heroncs.co.uk` is only removed with that domain. Logout clears both, using `HCS_SSO_COOKIE_DOMAIN` or the parent domain shared with `HCS_APP_BASE_URL` (the same rule hcs-app uses).
+- A handoff that returns without a cookie hcs-sync can verify (cookie domain or `HCS_SSO_JWT_SECRET` mismatch) shows an error page instead of looping between the two apps.
+
 ## [0.15.0] - 2026-11-11
 
 ### Added

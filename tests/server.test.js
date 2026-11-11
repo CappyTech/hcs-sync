@@ -243,11 +243,116 @@ describe('Express server routes', () => {
     });
   });
 
-  describe('GET /login', () => {
+  // Default login: hand off to hcs-app's GET /sso/hcs-sync, which signs the
+  // user in (or reuses their session) and sends them back with the cookie.
+  describe('GET /login (redirect mode, the default)', () => {
+    const returnTo = (location) => new URL(location).searchParams.get('return_to');
+
+    it('redirects to the hcs-app handoff with a return_to back to /login', async () => {
+      const res = await supertest(app).get('/login?next=/history').set('Host', 'sync.heroncs.co.uk');
+      expect(res.status).toBe(302);
+      expect(res.headers.location).toMatch(/^https:\/\/app\.heroncs\.co\.uk\/sso\/hcs-sync\?return_to=/);
+      const back = new URL(returnTo(res.headers.location));
+      expect(back.host).toBe('sync.heroncs.co.uk');
+      expect(back.pathname).toBe('/login');
+      expect(back.searchParams.get('next')).toBe('/history');
+      expect(back.searchParams.get('sso_return')).toBe('1');
+    });
+
+    it('does not carry an off-site next through the handoff', async () => {
+      const res = await supertest(app).get('/login?next=//evil.example/x');
+      const back = new URL(returnTo(res.headers.location));
+      expect(back.searchParams.get('next')).toBe('/');
+    });
+
+    it('uses HCS_SYNC_PUBLIC_URL for the return address when set', async () => {
+      process.env.HCS_SYNC_PUBLIC_URL = 'https://sync.example.test/';
+      try {
+        const res = await supertest(app).get('/login');
+        expect(returnTo(res.headers.location)).toMatch(/^https:\/\/sync\.example\.test\/login\?/);
+      } finally {
+        delete process.env.HCS_SYNC_PUBLIC_URL;
+      }
+    });
+
+    // Back from hcs-app with no cookie we can verify (wrong cookie domain or a
+    // different HCS_SSO_JWT_SECRET). Redirecting again would loop between the
+    // two apps forever, so this must stop and say so.
+    it('shows an error instead of looping when the handoff returns without a cookie', async () => {
+      const res = await supertest(app).get('/login?next=/&sso_return=1');
+      expect(res.status).toBe(500);
+      expect(res.headers.location).toBeUndefined();
+      expect(res.text).toContain('Sign-in did not complete');
+      expect(res.text).not.toContain('status-badge');
+    });
+
+    it('lets the handoff return through to next when the cookie is valid', async () => {
+      const res = await supertest(app)
+        .get('/login?next=/history&sso_return=1')
+        .set('Cookie', `hcs_sso=${makeSsoToken()}`);
+      expect(res.status).toBe(302);
+      expect(res.headers.location).toBe('/history');
+    });
+
+    it('does not accept a password POST', async () => {
+      const csrf = makeCsrf();
+      const res = await supertest(app)
+        .post('/login')
+        .set('Cookie', `hcs_sync_csrf_secret=${csrf.secret}`)
+        .set('x-csrf-token', csrf.token)
+        .type('form')
+        .send({ username: 'someone', password: 'pw', next: '/history' });
+      expect(res.status).toBe(302);
+      expect(res.headers.location).toBe('/login?next=%2Fhistory');
+      expect(res.headers['set-cookie'] || []).not.toEqual(expect.arrayContaining([expect.stringMatching(/^hcs_sso=[^;]+/)]));
+    });
+  });
+
+  describe('GET /logout', () => {
+    const cookies = (res) => res.headers['set-cookie'] || [];
+
+    it('clears the host-only cookie and the shared-domain one hcs-app set', async () => {
+      const res = await supertest(app)
+        .get('/logout')
+        .set('Host', 'sync.heroncs.co.uk')
+        .set('Cookie', `hcs_sso=${makeSsoToken()}`);
+      expect(res.status).toBe(200);
+      const cleared = cookies(res).filter((c) => c.startsWith('hcs_sso=;'));
+      expect(cleared).toHaveLength(2);
+      expect(cleared.some((c) => /Domain=\.heroncs\.co\.uk/i.test(c))).toBe(true);
+      expect(cleared.some((c) => !/Domain=/i.test(c))).toBe(true);
+    });
+
+    it('uses HCS_SSO_COOKIE_DOMAIN when set', async () => {
+      process.env.HCS_SSO_COOKIE_DOMAIN = '.example.test';
+      try {
+        const res = await supertest(app).get('/logout');
+        expect(cookies(res).some((c) => /Domain=\.example\.test/i.test(c))).toBe(true);
+      } finally {
+        delete process.env.HCS_SSO_COOKIE_DOMAIN;
+      }
+    });
+
+    // Redirecting to /login would go straight back through hcs-app and, with
+    // its session still open, sign the user in again.
+    it('shows a signed-out page rather than redirecting, even without a cookie', async () => {
+      const res = await supertest(app).get('/logout');
+      expect(res.status).toBe(200);
+      expect(res.headers.location).toBeUndefined();
+      expect(res.text).toContain('Signed out');
+      expect(res.text).toContain('https://app.heroncs.co.uk/user/logout');
+    });
+  });
+
+  describe('GET /login (form mode)', () => {
+    beforeAll(() => { process.env.HCS_SYNC_LOGIN_MODE = 'form'; });
+    afterAll(() => { delete process.env.HCS_SYNC_LOGIN_MODE; });
+
     it('renders the login page when unauthenticated', async () => {
       const res = await supertest(app).get('/login');
       expect(res.status).toBe(200);
       expect(res.text).toContain('Log in');
+      expect(res.text).toContain('action="/login"');
     });
 
     it('redirects to next when already authenticated', async () => {
