@@ -2,6 +2,14 @@
 
 All notable changes to hcs-sync will be documented here. Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [0.16.1] - 2026-11-11
+
+### Added
+- **CI deploys `main` to server2.** A `deploy` job, matching hcs-app's, runs after a `main` build has pushed `:latest`: it joins the tailnet, SSHes to `server2-host` over Tailscale SSH, pulls and force-recreates `hcs-sync` in `~/docker/hcs-sync`, checks the running image's `org.opencontainers.image.revision` label is the commit just built, then waits for `/health` to answer `ok` on the public URL. It runs in the `production` environment; host, path, service and URL can be overridden with repository variables.
+
+### Fixed
+- The optional Tailscale step in the build job passed `oauth-client-secret`, which `tailscale/github-action@v3` ignores; it now passes `oauth-secret`.
+
 ## [0.16.0] - 2026-11-11
 
 ### Changed
