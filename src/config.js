@@ -30,6 +30,13 @@ const config = {
   // an invoice. A quote absent from its customer's listing gets missingSince,
   // and deletedAt once still absent after this long. Default 2h, as for bank.
   quoteSweepGraceMs: Number(process.env.QUOTE_SWEEP_GRACE_MS ?? 2 * 60 * 60 * 1000),
+
+  // The same for invoices and projects that disappear from their customer's
+  // KashFlow listing. Both are rarely deleted and an invoice is a financial
+  // record, so the default window is a day rather than 2h: a listing that is
+  // wrong for a few runs never hides one.
+  invoiceSweepGraceMs: Number(process.env.INVOICE_SWEEP_GRACE_MS ?? 24 * 60 * 60 * 1000),
+  projectSweepGraceMs: Number(process.env.PROJECT_SWEEP_GRACE_MS ?? 24 * 60 * 60 * 1000),
 };
 
 export default config;

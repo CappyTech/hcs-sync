@@ -2,7 +2,17 @@
 
 All notable changes to hcs-sync will be documented here. Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/).
 
-## [0.17.4] - 2026-11-18
+## [0.17.5] - 2026-11-18
+
+### Added
+- **Invoices and projects that disappear from KashFlow are now marked deleted.** Until now only bank transactions and quotes were swept. Invoice 1776 and project 41301 were deleted in KashFlow but stayed live in MongoDB. Both now use the same per-customer sweep as quotes, checked on `Number`:
+  - A stored invoice or project that its customer's listing no longer returns gets `missingSince` on the first run that misses it.
+  - It gets `deletedAt` once it is still missing after the grace period. That is 24 hours by default (`INVOICE_SWEEP_GRACE_MS`, `PROJECT_SWEEP_GRACE_MS`), because both are rarely deleted and an invoice is a financial record.
+  - One that comes back has both cleared.
+- Invoices are swept per customer from the existing invoice listing.
+- Projects are swept per customer from the 0.17.4 per-customer listing. A customer is never swept if its listing 404'd, or if it listed a project with no `Number`. Nothing is swept when the per-customer listing fell back to `GET /projects`. A project with no customer is never swept.
+- As for quotes, nothing is swept when no customer listed anything.
+- The run counts gain `invoicesSoftDeleted` and `projectsSoftDeleted`, which are kept out of change alerts.
 
 ### Fixed
 - **Projects are listed per customer, so all of them sync.** The first 0.17.3 run still listed exactly 200 projects: `GET /projects` returns at most 200 rows however large `perpage` is, and ignores `page`. Projects are now listed from `GET /customers/{code}/projects` for every customer. That endpoint is paginated (`{ MetaData, Data }`, up to 100 per page). The `GET /projects` page is merged in, which keeps a recent project with no customer, and rows are de-duplicated on `Number`. A customer the endpoint 404s counts as having no projects. Any other failure falls back to the `GET /projects` page alone with a warning, because nothing sweeps projects yet. The run log records how many projects came from each source.

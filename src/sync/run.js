@@ -197,20 +197,39 @@ const CUSTOMER_PROJECTS_PERPAGE = 100;
  *
  * A customer the per-customer endpoint 404s is taken as having no projects.
  * Any other per-customer failure drops back to the GET /projects page alone
- * (the pre-0.17.4 list) with a warning, rather than failing the run. Nothing
- * sweeps projects yet, so a short list costs nothing. A project sweep would
- * need this to fail instead, as the quote and bank sweeps' listings do.
+ * (the pre-0.17.4 list) with a warning, rather than failing the run.
+ *
+ * `seenByCustomer` feeds the missing-project sweep (see sweepMissingPerParent):
+ * each customer code maps to the project Numbers its listing returned, or null
+ * when the listing 404'd or held a row without a Number, which both mean "do
+ * not sweep this customer". When the per-customer listing fell back, the map is
+ * empty and nothing is swept. `fromCustomers` is how many rows those listings
+ * returned in all.
+ *
+ * @returns {Promise<{projects: object[], seenByCustomer: Map<string, Array|null>, fromCustomers: number}>}
  */
 async function listProjects(kf, customers) {
   const codes = [...new Set((customers || []).map(pickCode).filter((c) => !isMissingKey(c)))];
-  const listForCustomer = (code) =>
-    kf.projects.listAllForCustomer(code, { perpage: CUSTOMER_PROJECTS_PERPAGE })
-      .catch((err) => { if (err?.response?.status === 404) return []; throw err; });
+  const seenByCustomer = new Map();
+  const listForCustomer = async (code) => {
+    let rows;
+    try {
+      rows = await kf.projects.listAllForCustomer(code, { perpage: CUSTOMER_PROJECTS_PERPAGE });
+    } catch (err) {
+      if (err?.response?.status !== 404) throw err;
+      seenByCustomer.set(code, null);
+      return [];
+    }
+    const numbers = (rows || []).map(pickNumber);
+    seenByCustomer.set(code, numbers.some((n) => isMissingKey(n)) ? null : numbers);
+    return rows || [];
+  };
   const [recent, perCustomer] = await Promise.all([
     kf.projects.listAll({ perpage: 200 }),
     createPool(config.concurrency || 4, 'projects:per-customer', listForCustomer)(codes)
       .catch((err) => {
-        logger.warn({ err: err.message }, 'Per-customer projects listing failed; using GET /projects (200 rows) alone');
+        logger.warn({ err: err.message }, 'Per-customer projects listing failed; using GET /projects (200 rows) alone and skipping the missing-project sweep');
+        seenByCustomer.clear();
         return [];
       }),
   ]);
@@ -228,7 +247,7 @@ async function listProjects(kf, customers) {
   logger.info({
     projectsListed: projects.length, fromCustomers, fromProjectsList: recent?.length || 0, customers: codes.length,
   }, 'Fetched projects list');
-  return projects;
+  return { projects, seenByCustomer, fromCustomers };
 }
 
 /**
@@ -244,6 +263,7 @@ async function fetchLists(kf, failedFetches) {
     promise.catch((e) => { logger.warn({ err: e.message }, `Failed to fetch ${label}`); failedFetches.add(key); return []; });
   // Projects are listed per customer, so they wait on the customers list.
   const customersListed = kf.customers.listAll({ perpage: 200 });
+  let projectListing = { seenByCustomer: new Map(), fromCustomers: 0 };
 
   const [
     customers, suppliers, projects, nominals, vatRates, bankAccounts,
@@ -253,7 +273,10 @@ async function fetchLists(kf, failedFetches) {
   ] = await Promise.all([
     customersListed,
     kf.suppliers.listAll({ perpage: 200 }),
-    customersListed.then((rows) => listProjects(kf, rows)),
+    customersListed.then((rows) => listProjects(kf, rows)).then((listing) => {
+      projectListing = listing;
+      return listing.projects;
+    }),
     kf.nominals.list(),
     listOrEmpty('vatRates', 'VAT rates', kf.vatRates.list()),
     listOrEmpty('bankAccounts', 'bank accounts', kf.bankAccounts.list()),
@@ -268,12 +291,13 @@ async function fetchLists(kf, failedFetches) {
     listOrEmpty('vatReturns', 'VAT returns', kf.vatReturns.list()),
   ]);
 
-  return {
+  const lists = {
     customers, suppliers, projects, nominals, vatRates, bankAccounts,
     journals, products, purchaseOrders, quoteCategories,
     purchaseOrderCategories, currencies, countries,
     accountingPeriods, vatReturns,
   };
+  return { lists, projectListing };
 }
 
 /**
@@ -770,14 +794,17 @@ async function syncPurchases(ctx, kf, { mongoEnabled, suppliers, supplierCodes }
  * All six detail pipelines, run concurrently. Within each document pipeline,
  * phase 1 (list per parent) runs first and feeds phase 2 (details).
  *
- * @returns {Promise<{invoicesTotal: number, quotesTotal: number, quotesSoftDeleted: number, purchasesTotal: number}>}
+ * @returns {Promise<{invoicesTotal: number, quotesTotal: number, quotesSoftDeleted: number,
+ *   invoicesSoftDeleted: number, projectsSoftDeleted: number, purchasesTotal: number}>}
  */
-async function runDetailPhases(ctx, kf, { mongoEnabled, lists, customerCodes, supplierCodes }) {
+async function runDetailPhases(ctx, kf, { mongoEnabled, lists, projectListing, customerCodes, supplierCodes }) {
   const { customers, suppliers, projects } = lists;
   const concurrency = config.concurrency || 4;
   const detailConcurrency = config.detailConcurrency || 8;
   const projectNumbers = (projects || []).map(pickNumber).filter((x) => x != null);
   let quotesSoftDeleted = 0;
+  let invoicesSoftDeleted = 0;
+  let projectsSoftDeleted = 0;
 
   const [, , , invoicesTotal, quotesTotal, purchasesTotal] = await Promise.all([
     syncParentDetails(ctx, {
@@ -801,12 +828,27 @@ async function runDetailPhases(ctx, kf, { mongoEnabled, lists, customerCodes, su
         const id = pickId(full);
         return id != null ? { keyField: 'Id', keyValue: id } : { keyField: 'Number', keyValue: number };
       },
-    }).then(() => logger.info({ projectsCount: projects?.length || 0 }, 'Fetched projects')),
+    }).then(async () => {
+      logger.info({ projectsCount: projects?.length || 0 }, 'Fetched projects');
+      if (!mongoEnabled || !projectListing) return;
+      // KashFlow can delete a project outright. Only customers whose listing
+      // came back in full are swept; see listProjects.
+      const swept = await sweepMissingPerParent(ctx, {
+        model: Project, noun: 'project', parent: 'customer',
+        scopeField: 'CustomerCode', keyField: 'Number', graceMs: config.projectSweepGraceMs,
+        listed: { total: projectListing.fromCustomers, seenByParent: projectListing.seenByCustomer },
+      });
+      projectsSoftDeleted = swept.softDeleted;
+    }),
     syncDocuments(ctx, {
       mongoEnabled, model: Invoice, noun: 'invoice',
       parent: 'customer', parentCodes: customerCodes, parentsTotal: (customers || []).length,
       listFn: (code) => kf.invoices.listAll({ perpage: 200, customerCode: code }),
       getFn: (number) => kf.invoices.get(number),
+      // Invoices are rarely deleted in KashFlow, but a deleted one must not
+      // stay live in the mirror. Checked on Number, which every row has.
+      sweep: { scopeField: 'CustomerCode', keyField: 'Number', graceMs: config.invoiceSweepGraceMs },
+      onSwept: (swept) => { invoicesSoftDeleted = swept.softDeleted; },
     }),
     syncDocuments(ctx, {
       mongoEnabled, model: Quote, noun: 'quote',
@@ -820,7 +862,7 @@ async function runDetailPhases(ctx, kf, { mongoEnabled, lists, customerCodes, su
     }),
     syncPurchases(ctx, kf, { mongoEnabled, suppliers, supplierCodes }),
   ]);
-  return { invoicesTotal, quotesTotal, quotesSoftDeleted, purchasesTotal };
+  return { invoicesTotal, quotesTotal, quotesSoftDeleted, invoicesSoftDeleted, projectsSoftDeleted, purchasesTotal };
 }
 
 // ── Run ──────────────────────────────────────────────────────────────────────
@@ -890,12 +932,16 @@ async function countStoredBankTransactions(mongoEnabled) {
   }
 }
 
-function buildCounts(lists, { bank, bankTransactionsStored, bankReconciliationsTotal, invoicesTotal, quotesTotal, quotesSoftDeleted = 0, purchasesTotal }) {
+function buildCounts(lists, {
+  bank, bankTransactionsStored, bankReconciliationsTotal, invoicesTotal, quotesTotal, purchasesTotal,
+  quotesSoftDeleted = 0, invoicesSoftDeleted = 0, projectsSoftDeleted = 0,
+}) {
   const n = (key) => lists[key]?.length || 0;
   return {
     customers: n('customers'),
     suppliers: n('suppliers'),
     projects: n('projects'),
+    projectsSoftDeleted,
     nominals: n('nominals'),
     vatRates: n('vatRates'),
     bankAccounts: n('bankAccounts'),
@@ -913,6 +959,7 @@ function buildCounts(lists, { bank, bankTransactionsStored, bankReconciliationsT
     accountingPeriods: n('accountingPeriods'),
     vatReturns: n('vatReturns'),
     invoices: invoicesTotal,
+    invoicesSoftDeleted,
     quotes: quotesTotal,
     quotesSoftDeleted,
     purchases: purchasesTotal,
@@ -946,7 +993,7 @@ async function run(options = {}) {
     // exhausted retry). The count carry-forward keyed off this set (see
     // carryForwardFailedCounts) is what keeps such a run from reporting a delta.
     const failedFetches = new Set();
-    const lists = await fetchLists(kf, failedFetches);
+    const { lists, projectListing } = await fetchLists(kf, failedFetches);
 
     // Bank transactions and reconciliations are fetched per bank account, and
     // both phases are gated on a non-empty bankAccounts list. So when the
@@ -978,8 +1025,10 @@ async function run(options = {}) {
       ? await syncBankReconciliations(ctx, kf, lists.bankAccounts)
       : 0;
 
-    const { invoicesTotal, quotesTotal, quotesSoftDeleted, purchasesTotal } = await runDetailPhases(ctx, kf, {
-      mongoEnabled, lists, customerCodes, supplierCodes,
+    const {
+      invoicesTotal, quotesTotal, quotesSoftDeleted, invoicesSoftDeleted, projectsSoftDeleted, purchasesTotal,
+    } = await runDetailPhases(ctx, kf, {
+      mongoEnabled, lists, projectListing, customerCodes, supplierCodes,
     });
     const bankTransactionsStored = await countStoredBankTransactions(mongoEnabled);
 
@@ -988,7 +1037,8 @@ async function run(options = {}) {
     logger.info({ nominalsCount: lists.nominals?.length || 0 }, 'Fetched nominals');
     ctx.emitLog('info', 'Fetched transactional items', { invoices: invoicesTotal ?? 0, quotes: quotesTotal ?? 0, purchases: purchasesTotal ?? 0 });
     const counts = buildCounts(lists, {
-      bank, bankTransactionsStored, bankReconciliationsTotal, invoicesTotal, quotesTotal, quotesSoftDeleted, purchasesTotal,
+      bank, bankTransactionsStored, bankReconciliationsTotal, invoicesTotal, quotesTotal, purchasesTotal,
+      quotesSoftDeleted, invoicesSoftDeleted, projectsSoftDeleted,
     });
     ctx.setStage('finalising');
     logger.info({ counts, durationMs: Date.now() - start }, 'KashFlow admin sync (Node.js) finished');

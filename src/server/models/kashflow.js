@@ -44,7 +44,7 @@ const syncOnlyFields = {
 export const SYNC_INTERNAL_FIELDS = new Set([
   '_id', '__v', 'data', 'uuid',
   'syncedAt', 'detailSyncedAt', 'createdAt', 'updatedAt', 'createdByRunId',
-  // missingSince — the bank/quote soft-delete grace timer (see run.js). Sync-owned and
+  // missingSince — the bank/quote/invoice/project soft-delete grace timer (see run.js). Sync-owned and
   // never returned by KashFlow, so it must not reach the payload or the audit
   // diff, which walks the union of stored and incoming keys and would otherwise
   // report it 'removed' on every run.
@@ -106,10 +106,12 @@ const InvoicePaymentLineSchema = schemas.invoice.paymentLineFields
 
 // Overrides the [{}] Mixed that schemas.invoice.fields still carries for the
 // benefit of consumers that only spread `...fields` (see hcs-schemas 2.1.0).
-const InvoiceSchema = buildSchema(
-  schemas.invoice,
-  InvoicePaymentLineSchema ? { PaymentLines: [InvoicePaymentLineSchema] } : {},
-);
+// missingSince: the soft-delete grace timer for invoices KashFlow stops
+// listing for their customer, as for quotes below.
+const InvoiceSchema = buildSchema(schemas.invoice, {
+  ...(InvoicePaymentLineSchema ? { PaymentLines: [InvoicePaymentLineSchema] } : {}),
+  missingSince: { type: Date, default: null },
+});
 
 /**
  * Mutate an invoice item in-place, converting KashFlow's date strings to real
@@ -292,9 +294,12 @@ export const Purchase =
 
 // ── Project ─────────────────────────────────────────────────────────────
 
+// missingSince: the soft-delete grace timer for projects KashFlow stops
+// listing for their customer, as for quotes above.
 const ProjectSchema = buildSchema(schemas.project, {
   deletedAt: { type: Date, default: null },
   lastSeenRun: Date,
+  missingSince: { type: Date, default: null },
 });
 
 ProjectSchema.statics.syncConfig = {
