@@ -2,6 +2,27 @@
 
 All notable changes to hcs-sync will be documented here. Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [0.17.7] - 2026-11-18
+
+### Added
+- **Purchases and suppliers deleted from KashFlow are now marked deleted**, as quotes, invoices, projects and customers already are.
+  - **Purchases are swept per supplier**, from the existing per-supplier purchase listing, checked on `Number` (purchases still key on `Id`, but every list row carries `Number`). A stored purchase its supplier's listing no longer returns gets `missingSince`, then `deletedAt` once still missing after `PURCHASE_SWEEP_GRACE_MS` (24 hours by default, because a purchase is a financial record). One that comes back has both cleared. A supplier is never swept if its listing failed or listed a purchase with no `Number`, and nothing is swept when no supplier listed anything.
+  - **Suppliers are swept like customers.** Stored suppliers are compared with KashFlow's complete supplier list by `Code`. One the list no longer returns gets `missingSince`, then `deletedAt` after `SUPPLIER_SWEEP_GRACE_MS` (24 hours by default). A stored supplier with a blank code is never swept, and nothing is swept when the list has no codes.
+  - **A deleted supplier's purchases follow it.** Stored purchases whose `SupplierCode` matches no listed supplier (compared trimmed and case-insensitively) are swept as absent with the purchase grace period. As for customers, this stands down if more than 5 unknown codes appear in one run.
+  - The run counts gain `purchasesSoftDeleted` and `suppliersSoftDeleted`, both kept out of change alerts.
+- **Run detail page:** a "Completed with warnings" box (lagging collections, failed lists, bank accounts not fetched, unchecked collections) and a Freshness table (highest stored number against KashFlow's next, with the gap).
+- `FRESHNESS_GAP_THRESHOLD` (default 5) and `STALE_DETAIL_TOLERANCE_MS` (default 1 hour).
+
+### Fixed
+- **A run that silently saves nothing, or silently fails part of its fetch, now alerts.** For nine months no quote was saved and projects sat at 200 while every run reported success.
+  - After each run, the highest stored quote, invoice, project and purchase `Number` (soft-deleted docs ignored) is compared with KashFlow's next free number. A gap above `FRESHNESS_GAP_THRESHOLD` makes the run "completed with warnings" and posts to Discord. A failed next-number read is a warning, never a run failure.
+  - Best-effort lists that fail to fetch (journals, products, purchase orders, VAT returns, currencies and others) were only visible in the container log. They now make the run "completed with warnings", are named in the Discord alert, and are stored in the run summary (`failedFetches`, `freshness`, `warnings`).
+- **Runs cut off by a restart or deploy no longer show as "running" forever.** On start-up, any run still marked running that began before the process started is set to **interrupted**, with a finish time and the message "Interrupted: the service restarted during this run". One log line is written and no Discord alert is sent. The history and run pages show the status in amber.
+- **The Debug page no longer reports `STALE_DETAIL` for freshly synced records.** A new record's `syncedAt` is routinely seconds ahead of its `detailSyncedAt`. The diagnosis now fires only when the gap is longer than `STALE_DETAIL_TOLERANCE_MS`.
+
+### Changed
+- The deleted-customer sweep and the new deleted-supplier sweep share one routine (`sweepDeletedParents`). Customer behaviour is unchanged.
+
 ## [0.17.6] - 2026-11-18
 
 ### Added
