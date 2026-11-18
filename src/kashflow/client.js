@@ -127,6 +127,26 @@ function normalizeList(payload) {
   return [];
 }
 
+// A runaway guard for listAllInternal: 1,000 pages of 200 is 200,000 rows,
+// far beyond any KashFlow listing this syncs.
+const MAX_LIST_PAGES = 1000;
+
+/**
+ * The original query params a NextPageUrl does not already carry (other than
+ * page), so following it keeps the listing's filters. undefined when none.
+ */
+function paramsMissingFrom(nextUrl, params) {
+  let present;
+  try {
+    present = new Set([...new URL(nextUrl, 'http://kashflow.invalid/').searchParams.keys()].map((k) => k.toLowerCase()));
+  } catch {
+    return undefined;
+  }
+  const missing = Object.fromEntries(Object.entries(params || {}).filter(([k, v]) =>
+    v != null && k.toLowerCase() !== 'page' && !present.has(k.toLowerCase())));
+  return Object.keys(missing).length ? missing : undefined;
+}
+
 function createListers(http) {
   const listInternal = async (path, params = {}) => {
     const res = await http.get(path, { params });
@@ -139,21 +159,52 @@ function createListers(http) {
   // return for that account. Handing back a partial list would present ~8,000
   // real rows as deleted from KashFlow. The caller must never see a short list
   // it cannot distinguish from a complete one.
+  //
+  // Paging. MetaData.NextPageUrl is followed when KashFlow sends one, with any
+  // filter it dropped (e.g. customerCode) put back. When it sends none, the
+  // next page is requested by number while the last page came back full
+  // (perpage rows) or MetaData.TotalRecords says rows remain. Relying on
+  // NextPageUrl alone capped GET /projects (a bare array, no MetaData) and
+  // each customer's GET /quotes at one page of 200 rows.
+  // A page that adds nothing new means the endpoint ignores paging, so the
+  // listing ends there rather than looping.
   const listAllInternal = async (path, params = {}) => {
+    const perpage = Number(params?.perpage) > 0 ? Number(params.perpage) : null;
+    let page = Number(params?.page) > 0 ? Number(params.page) : 1;
+    const seenRows = new Set();
     let items = [];
     let url = path;
     let query = params;
-    while (true) {
+    for (let fetched = 0; ; fetched += 1) {
+      if (fetched >= MAX_LIST_PAGES) {
+        throw new Error(`KashFlow ${path}: still paging after ${MAX_LIST_PAGES} pages; refusing an endless listing`);
+      }
       const res = await http.get(url, { params: query });
       const data = res.data;
-      items = items.concat(normalizeList(data));
-      const next = data?.MetaData?.NextPageUrl || data?.MetaData?.NextPageURL;
-      if (next) {
-        url = next;
-        query = undefined;
-      } else {
+      const rows = normalizeList(data);
+
+      const signatures = rows.map((row) => JSON.stringify(row));
+      if (fetched > 0 && rows.length > 0 && signatures.every((s) => seenRows.has(s))) {
+        logger.warn({ path, page }, 'KashFlow returned a page already seen; ending the listing');
         break;
       }
+      for (const s of signatures) seenRows.add(s);
+      items = items.concat(rows);
+
+      const meta = data && !Array.isArray(data) ? data.MetaData : null;
+      const next = meta?.NextPageUrl || meta?.NextPageURL;
+      page += 1;
+      if (next) {
+        url = next;
+        query = paramsMissingFrom(next, params);
+        continue;
+      }
+      const totalRecords = Number(meta?.TotalRecords);
+      const moreByTotal = Number.isFinite(totalRecords) && totalRecords > items.length;
+      const fullPage = perpage != null && rows.length >= perpage;
+      if (rows.length === 0 || !(moreByTotal || fullPage)) break;
+      url = path;
+      query = { ...params, page };
     }
     return items;
   };
