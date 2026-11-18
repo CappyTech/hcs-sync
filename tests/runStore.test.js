@@ -13,6 +13,7 @@ vi.mock('../src/server/models/Run.js', () => ({
   default: {
     create: vi.fn(),
     updateOne: vi.fn(),
+    updateMany: vi.fn(),
     find: vi.fn(),
     findOne: vi.fn(),
     exists: vi.fn(),
@@ -317,6 +318,30 @@ describe('src/server/runStore.js', () => {
 
       const setArg = Run.updateOne.mock.calls[0][1].$set;
       expect(setArg['changes.$[c].revertNote']).toMatch(/no DB write/i);
+    });
+  });
+
+  describe('markInterruptedRuns', () => {
+    it('marks only runs left running before boot as interrupted, with a finish time and message', async () => {
+      Run.updateMany.mockReturnValue({ exec: vi.fn().mockResolvedValue({ matchedCount: 2, modifiedCount: 2 }) });
+
+      const n = await runStore.markInterruptedRuns(5000, 9000);
+
+      expect(n).toBe(2);
+      const [filter, update] = Run.updateMany.mock.calls[0];
+      expect(filter).toEqual({ status: 'running', startedAt: { $lt: 5000 } });
+      expect(update.$set).toEqual({
+        status: 'interrupted',
+        finishedAt: 9000,
+        summary: { error: runStore.INTERRUPTED_MESSAGE, interrupted: true },
+      });
+      expect(update.$push.logs).toMatchObject({ ts: 9000, level: 'error', message: runStore.INTERRUPTED_MESSAGE });
+      expect(runStore.INTERRUPTED_MESSAGE).toMatch(/^Interrupted: the service restarted/);
+    });
+
+    it('returns 0 when nothing was left running', async () => {
+      Run.updateMany.mockReturnValue({ exec: vi.fn().mockResolvedValue({ matchedCount: 0, modifiedCount: 0 }) });
+      expect(await runStore.markInterruptedRuns(Date.now())).toBe(0);
     });
   });
 });

@@ -94,6 +94,48 @@ export async function finishRun(runId, summary = {}) {
   return out.matchedCount > 0;
 }
 
+export const INTERRUPTED_MESSAGE = 'Interrupted: the service restarted during this run';
+
+/**
+ * Close out runs left 'running' by a previous process (container restart,
+ * deploy, crash). Overlap protection is an in-memory flag, so a run cut off
+ * mid-way is never finished and would otherwise show as running forever.
+ *
+ * Only call it at start-up. `startedBefore` should be this process's boot
+ * time: any 'running' run that started earlier belongs to a dead process, and
+ * the bound keeps a run this process started in the meantime (a manual
+ * trigger landing as the server comes up) from being swept with them.
+ * Deliberately sends no Discord alert — these are historical, and a backlog
+ * would otherwise fire one per run on the next deploy.
+ *
+ * @param {number} startedBefore  epoch ms; only runs started before this are touched
+ * @returns {Promise<number>} how many runs were marked interrupted
+ */
+export async function markInterruptedRuns(startedBefore, now = Date.now()) {
+  await ensureConnected();
+  const out = await Run.updateMany(
+    { status: 'running', startedAt: { $lt: Number(startedBefore) } },
+    {
+      $set: {
+        status: 'interrupted',
+        finishedAt: now,
+        summary: { error: INTERRUPTED_MESSAGE, interrupted: true },
+      },
+      $push: {
+        logs: {
+          id: newId(),
+          ts: now,
+          level: 'error',
+          message: INTERRUPTED_MESSAGE,
+          stage: null,
+          meta: null,
+        },
+      },
+    }
+  ).exec();
+  return out?.modifiedCount || 0;
+}
+
 export async function listRuns({ limit = 200 } = {}) {
   await ensureConnected();
   return Run.find({})
@@ -152,6 +194,7 @@ export default {
   recordChange,
   recordLog,
   finishRun,
+  markInterruptedRuns,
   listRuns,
   getRun,
   revertChange,
