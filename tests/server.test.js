@@ -529,7 +529,7 @@ describe('Express server routes', () => {
     const prev = { purchases: 14356, bankTransactions: 13849, suppliers: 950, journals: 400 };
     const curr = {
       purchases: 14359, bankTransactions: 13866, suppliers: 950, journals: 400,
-      bankTransactionsSoftDeleted: 2,
+      bankTransactionsSoftDeleted: 2, quotesSoftDeleted: 1,
     };
     const mongo = {
       purchases: { upserted: 3, modified: 14 },
@@ -557,9 +557,10 @@ describe('Express server routes', () => {
       expect(names).not.toContain('journals');
     });
 
-    it('omits the soft-delete tally, which is not a collection', () => {
+    it('omits the soft-delete tallies, which are not collections', () => {
       const names = summariseRunChanges(prev, curr, mongo).map((c) => c.name);
       expect(names).not.toContain('bankTransactionsSoftDeleted');
+      expect(names).not.toContain('quotesSoftDeleted');
     });
 
     it('orders by write volume so the Discord field cap keeps the biggest', () => {

@@ -137,6 +137,68 @@ function buildUpsertUpdate({ keyField, keyValue, payload, runId, model, protecte
 }
 
 /**
+ * Soft-delete the documents KashFlow has stopped returning within one scope
+ * (a bank account's feed, a customer's quotes) — but only once their absence
+ * has been corroborated over time.
+ *
+ * `seen` is every keyField value the scope's listing returned. Rows in the
+ * scope that are not in it and not already deleted get `missingSince` on first
+ * absence, and the legacy `deletedAt` once still missing after graceMs. Rows
+ * that are seen again have a stale `missingSince` cleared (buildUpsertUpdate
+ * clears `deletedAt` itself on every upsert).
+ *
+ * The caller must only reach here after the scope's listing SUCCEEDED in full.
+ * An empty `seen` is ignored unless `allowEmpty` is set, because an empty
+ * response is the most common shape of a failure and sweeping on it marks the
+ * whole scope deleted. Set it only when the caller has its own evidence that
+ * the empty listing is genuine.
+ *
+ * @param {object} opts
+ * @param {import('mongoose').Model} opts.model
+ * @param {object} opts.scope        non-empty filter naming the scope, e.g. { AccountId }
+ * @param {string} [opts.keyField]   field `seen` holds values of (default 'Id')
+ * @param {Array}  opts.seen
+ * @param {Date}   opts.now
+ * @param {number} [opts.graceMs]
+ * @param {boolean} [opts.allowEmpty]
+ * @returns {Promise<{pending: number, softDeleted: number}>}
+ */
+async function sweepMissing({ model, scope, keyField = 'Id', seen, now, graceMs = 0, allowEmpty = false }) {
+  const result = { pending: 0, softDeleted: 0 };
+  if (!Array.isArray(seen)) return result;
+  if (!seen.length && !allowEmpty) return result;
+  // An empty or null-valued scope would widen the sweep to the whole collection.
+  if (!scope || typeof scope !== 'object' || Object.keys(scope).length === 0
+      || Object.values(scope).some((v) => v == null || v === '')) {
+    throw new Error('sweepMissing requires a non-empty scope');
+  }
+
+  const missing = { ...scope, [keyField]: { $nin: seen }, deletedAt: null };
+
+  if (seen.length) {
+    await model.updateMany(
+      { ...scope, [keyField]: { $in: seen }, missingSince: { $ne: null } },
+      { $set: { missingSince: null } },
+    );
+  }
+
+  const firstAbsence = await model.updateMany(
+    { ...missing, missingSince: null },
+    { $set: { missingSince: now } },
+  );
+  result.pending = firstAbsence?.modifiedCount || 0;
+
+  const cutoff = new Date(now.getTime() - graceMs);
+  const confirmed = await model.updateMany(
+    { ...missing, missingSince: { $ne: null, $lte: cutoff } },
+    { $set: { deletedAt: now } },
+  );
+  result.softDeleted = confirmed?.modifiedCount || 0;
+
+  return result;
+}
+
+/**
  * Soft-delete the bank transactions KashFlow has stopped returning for an
  * account — but only once their absence has been corroborated over time.
  *
@@ -167,31 +229,8 @@ function buildUpsertUpdate({ keyField, keyValue, payload, runId, model, protecte
  *
  * @returns {Promise<{pending: number, softDeleted: number}>}
  */
-async function sweepMissingBankTransactions({ model, accountId, seen, now, graceMs = 0 }) {
-  const result = { pending: 0, softDeleted: 0 };
-  if (!seen?.length) return result;
-
-  const missing = { AccountId: accountId, Id: { $nin: seen }, deletedAt: null };
-
-  await model.updateMany(
-    { AccountId: accountId, Id: { $in: seen }, missingSince: { $ne: null } },
-    { $set: { missingSince: null } },
-  );
-
-  const firstAbsence = await model.updateMany(
-    { ...missing, missingSince: null },
-    { $set: { missingSince: now } },
-  );
-  result.pending = firstAbsence?.modifiedCount || 0;
-
-  const cutoff = new Date(now.getTime() - graceMs);
-  const confirmed = await model.updateMany(
-    { ...missing, missingSince: { $ne: null, $lte: cutoff } },
-    { $set: { deletedAt: now } },
-  );
-  result.softDeleted = confirmed?.modifiedCount || 0;
-
-  return result;
+function sweepMissingBankTransactions({ model, accountId, seen, now, graceMs = 0 }) {
+  return sweepMissing({ model, scope: { AccountId: accountId }, keyField: 'Id', seen, now, graceMs });
 }
 
 function extractUpsertedEntries(out) {
@@ -433,5 +472,6 @@ export {
   buildUpsertUpdate,
   applyDetailSyncedAt,
   createBulkUpserter,
+  sweepMissing,
   sweepMissingBankTransactions,
 };

@@ -25,6 +25,11 @@ const config = {
   // evidence of a deletion. Default 2h ⇒ two consecutive hourly runs must agree.
   // Set to 0 to soft-delete on first absence (the pre-0.11.2 behaviour).
   bankSweepGraceMs: Number(process.env.BANK_SWEEP_GRACE_MS ?? 2 * 60 * 60 * 1000),
+
+  // The same window for quotes, which KashFlow deletes when it converts one to
+  // an invoice. A quote absent from its customer's listing gets missingSince,
+  // and deletedAt once still absent after this long. Default 2h, as for bank.
+  quoteSweepGraceMs: Number(process.env.QUOTE_SWEEP_GRACE_MS ?? 2 * 60 * 60 * 1000),
 };
 
 export default config;

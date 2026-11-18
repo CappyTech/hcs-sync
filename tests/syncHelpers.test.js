@@ -36,6 +36,7 @@ import {
 import {
   buildUpsertUpdate,
   createBulkUpserter,
+  sweepMissing,
   sweepMissingBankTransactions,
 } from '../src/sync/upsert.js';
 import {
@@ -543,6 +544,89 @@ describe('sweepMissingBankTransactions()', () => {
     const model = fakeModel([row(1), { ...row(9), AccountId: 572402 }]);
     await sweepMissingBankTransactions({ model, accountId: 611594, seen: [1], now: t0, graceMs: 0 });
     expect(model.docs[1].deletedAt).toBeNull();
+  });
+});
+
+// ── sweepMissing (quotes) ──
+// KashFlow deletes a quote when it converts it to an invoice (quote 51770 became
+// invoice 1776 and vanished). The generic sweep, scoped per customer, must mark
+// such a quote missing, then deleted after the grace window, and never touch
+// another customer's quotes.
+
+describe('sweepMissing() for quotes scoped by CustomerCode', () => {
+  const t0 = new Date('2026-11-18T10:00:00Z');
+  const t1 = new Date('2026-11-18T11:00:00Z');
+  const t3 = new Date('2026-11-18T13:00:00Z');
+  const GRACE = 2 * 60 * 60 * 1000;
+  const quote = (Id, CustomerCode = 'ACME', extra = {}) => ({ Id, Number: Id + 50000, CustomerCode, deletedAt: null, missingSince: null, ...extra });
+  const sweep = (model, seen, now, extra = {}) => sweepMissing({
+    model, scope: { CustomerCode: 'ACME' }, keyField: 'Id', seen, now, graceMs: GRACE, ...extra,
+  });
+
+  it('first absence sets missingSince only', async () => {
+    const model = fakeModel([quote(1), quote(1770)]);
+    const res = await sweep(model, [1], t0);
+    expect(res).toEqual({ pending: 1, softDeleted: 0 });
+    expect(model.docs[1].missingSince).toEqual(t0);
+    expect(model.docs[1].deletedAt).toBeNull();
+    expect(model.docs[0].missingSince).toBeNull();
+  });
+
+  it('still missing after the grace window sets deletedAt', async () => {
+    const model = fakeModel([quote(1), quote(1770)]);
+    await sweep(model, [1], t0);
+    const mid = await sweep(model, [1], t1);
+    expect(mid).toEqual({ pending: 0, softDeleted: 0 });
+    expect(model.docs[1].deletedAt).toBeNull();
+    const res = await sweep(model, [1], t3);
+    expect(res).toEqual({ pending: 0, softDeleted: 1 });
+    expect(model.docs[1].deletedAt).toEqual(t3);
+    expect(model.docs[1].missingSince).toEqual(t0);
+  });
+
+  it('a quote that reappears has missingSince cleared and is not deleted', async () => {
+    const model = fakeModel([quote(1), quote(2)]);
+    await sweep(model, [1], t0);
+    await sweep(model, [1, 2], t1);
+    expect(model.docs[1].missingSince).toBeNull();
+    expect(model.docs[1].deletedAt).toBeNull();
+  });
+
+  it('a soft-deleted quote that reappears has its stale timer cleared', async () => {
+    // deletedAt itself is cleared by the upsert (buildUpsertUpdate); the sweep
+    // clears missingSince so a later miss gets a full window again.
+    const model = fakeModel([quote(1), quote(2, 'ACME', { deletedAt: t0, missingSince: t0 })]);
+    await sweep(model, [1, 2], t3);
+    expect(model.docs[1].missingSince).toBeNull();
+  });
+
+  it("never touches another customer's quotes", async () => {
+    const model = fakeModel([quote(1), quote(9, 'OTHER'), quote(10, 'OTHER', { missingSince: t0 })]);
+    await sweep(model, [1], t3, { graceMs: 0 });
+    expect(model.docs[1]).toMatchObject({ deletedAt: null, missingSince: null });
+    expect(model.docs[2]).toMatchObject({ deletedAt: null, missingSince: t0 });
+  });
+
+  it('an empty listing sweeps nothing unless allowEmpty is set', async () => {
+    const model = fakeModel([quote(1)]);
+    expect(await sweep(model, [], t0)).toEqual({ pending: 0, softDeleted: 0 });
+    expect(model.docs[0].missingSince).toBeNull();
+    expect(await sweep(model, [], t0, { allowEmpty: true })).toEqual({ pending: 1, softDeleted: 0 });
+    expect(model.docs[0].missingSince).toEqual(t0);
+  });
+
+  it('does nothing without a seen list', async () => {
+    const model = fakeModel([quote(1)]);
+    expect(await sweep(model, undefined, t0, { allowEmpty: true })).toEqual({ pending: 0, softDeleted: 0 });
+    expect(model.docs[0].missingSince).toBeNull();
+  });
+
+  it('refuses an empty or null scope rather than sweeping the whole collection', async () => {
+    const model = fakeModel([quote(1)]);
+    for (const scope of [{}, { CustomerCode: null }, { CustomerCode: '' }, null]) {
+      await expect(sweepMissing({ model, scope, seen: [2], now: t0 })).rejects.toThrow(/non-empty scope/);
+    }
+    expect(model.docs[0].missingSince).toBeNull();
   });
 });
 

@@ -44,7 +44,7 @@ const syncOnlyFields = {
 export const SYNC_INTERNAL_FIELDS = new Set([
   '_id', '__v', 'data', 'uuid',
   'syncedAt', 'detailSyncedAt', 'createdAt', 'updatedAt', 'createdByRunId',
-  // missingSince — the bank soft-delete grace timer (see run.js). Sync-owned and
+  // missingSince — the bank/quote soft-delete grace timer (see run.js). Sync-owned and
   // never returned by KashFlow, so it must not reach the payload or the audit
   // diff, which walks the union of stored and incoming keys and would otherwise
   // report it 'removed' on every run.
@@ -151,7 +151,12 @@ export const Invoice =
 
 // ── Quote ───────────────────────────────────────────────────────────────
 
-const QuoteSchema = buildSchema(schemas.quote);
+// missingSince: the soft-delete grace timer for quotes KashFlow stops listing
+// (it deletes a quote when converting it to an invoice). Sync-owned, as for
+// BankTransaction below.
+const QuoteSchema = buildSchema(schemas.quote, {
+  missingSince: { type: Date, default: null },
+});
 
 QuoteSchema.statics.syncConfig = {
   summaryKey: 'quotes',

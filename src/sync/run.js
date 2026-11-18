@@ -6,7 +6,7 @@ import progress from '../server/progress.js';
 import { connectMongoose, isMongooseEnabled } from '../db/mongoose.js';
 import { ensureKashflowIndexes } from '../db/mongo.js';
 import { Customer, Supplier, Invoice, Quote, Purchase, Project, Nominal, VATRate, BankAccount, BankTransaction, BankReconciliation } from '../server/models/kashflow.js';
-import { buildUpsertUpdate, applyDetailSyncedAt, createBulkUpserter, sweepMissingBankTransactions } from './upsert.js';
+import { buildUpsertUpdate, applyDetailSyncedAt, createBulkUpserter, sweepMissing, sweepMissingBankTransactions } from './upsert.js';
 import { describeEntity, LIST_ONLY_MODELS } from './entities.js';
 
 function createPool(limit, label, handler, onProgress) {
@@ -507,6 +507,13 @@ async function syncParentDetails(ctx, { mongoEnabled, keys, skippedTotal = keys.
 /**
  * Phase 1 of a document pipeline: list the documents under each parent
  * (customer or supplier) and collect the { id, number } pairs to fetch.
+ *
+ * `seenByParent` maps each parent code to the Ids its listing returned. A
+ * parent is recorded only once its listFn resolved, so a parent whose listing
+ * failed is absent; one whose listing held a row without an Id maps to null,
+ * because that row's presence cannot be checked. Both mean "do not sweep".
+ * (Today a failed listFn rejects the whole pool and the run, so the absent
+ * case cannot reach a sweep at all — the map does not rely on that.)
  */
 async function listPerParent(ctx, { summaryKey, parent, parentCodes, parentsTotal, listFn }) {
   const concurrency = config.concurrency || 4;
@@ -519,31 +526,92 @@ async function listPerParent(ctx, { summaryKey, parent, parentCodes, parentsTota
 
   let skippedMissingId = 0;
   const entries = [];
+  const seenByParent = new Map();
   const perParent = await createPool(concurrency, summaryKey, async (code) => {
     const list = await listFn(code);
+    let seen = [];
     for (const item of list || []) {
       const id = pickId(item);
-      if (id == null) { skippedMissingId += 1; continue; }
+      if (id == null) { skippedMissingId += 1; seen = null; continue; }
+      if (seen) seen.push(id);
       const number = pickNumber(item);
       if (number != null) entries.push({ id, number });
     }
+    seenByParent.set(code, seen);
     progress.incItem(summaryKey, 1);
     return list?.length || 0;
   }, logProgressEvery(summaryKey, 10, `Per-${parent} list progress`))(parentCodes);
 
   const total = perParent.reduce((a, b) => a + (Number(b) || 0), 0);
-  return { total, entries, skippedMissingId };
+  return { total, entries, skippedMissingId, seenByParent };
+}
+
+/**
+ * Mark documents KashFlow no longer lists under their parent as missing, then
+ * soft-deleted after the grace window (see sweepMissing). KashFlow deletes a
+ * quote outright when it is converted to an invoice, so without this a
+ * converted quote stays live in the mirror forever.
+ *
+ * Only parents whose listing succeeded and accounted for every row are swept.
+ * A parent that legitimately lists nothing IS swept — a customer whose only
+ * quote was converted lists nothing, and that is the case this exists for —
+ * but only when the run listed at least one document overall. Every parent
+ * coming back empty is far likelier to be KashFlow failing (or a payload shape
+ * normalizeList does not recognise) than the whole collection vanishing, so
+ * that skips the sweep entirely. The grace window covers the rest.
+ *
+ * @returns {Promise<{pending: number, softDeleted: number, sweptParents: number}>}
+ */
+async function sweepMissingPerParent(ctx, { model, noun, parent, scopeField, graceMs, listed }) {
+  const { summaryKey } = describeEntity(model);
+  const result = { pending: 0, softDeleted: 0, sweptParents: 0 };
+  const { total, seenByParent } = listed;
+  if (!total) {
+    logger.warn({ [summaryKey]: 0 }, `No ${summaryKey} listed for any ${parent}; skipping missing-${noun} sweep`);
+    ctx.emitLog('warn', `No ${summaryKey} listed for any ${parent}; skipping missing-${noun} sweep`);
+    return result;
+  }
+  ctx.setStage(`${summaryKey}:sweep`);
+  const now = new Date();
+  const parents = [...seenByParent.entries()].filter(([code, seen]) => Array.isArray(seen) && !isMissingKey(code));
+  const skipped = seenByParent.size - parents.length;
+  await createPool(config.concurrency || 4, `${summaryKey}:sweep`, async ([code, seen]) => {
+    const swept = await sweepMissing({
+      model, scope: { [scopeField]: code }, keyField: 'Id', seen, now, graceMs, allowEmpty: true,
+    });
+    result.pending += swept.pending;
+    result.softDeleted += swept.softDeleted;
+    result.sweptParents += 1;
+  })(parents);
+
+  const label = `${noun[0].toUpperCase()}${noun.slice(1)}s`;
+  if (skipped > 0) {
+    logger.warn({ [`${parent}s`]: skipped }, `Skipped missing-${noun} sweep for ${parent}s with unkeyed rows`);
+  }
+  if (result.pending > 0) {
+    logger.info({ pending: result.pending }, `${label} absent from KashFlow; awaiting grace window`);
+    ctx.emitLog('info', `${label} absent from KashFlow; awaiting grace window`, { count: result.pending });
+  }
+  if (result.softDeleted > 0) {
+    logger.info({ softDeleted: result.softDeleted }, `Soft-deleted ${summaryKey} no longer in KashFlow`);
+    ctx.emitLog('info', `Soft-deleted ${summaryKey} no longer in KashFlow`, { count: result.softDeleted });
+  }
+  return result;
 }
 
 /**
  * A document pipeline (invoices, quotes, purchases): list per parent, then
  * fetch and upsert each document's detail.
  *
+ * `sweep` ({ scopeField, graceMs }) additionally soft-deletes documents the
+ * parent no longer lists — see sweepMissingPerParent. Its tallies are handed
+ * to `onSwept`.
+ *
  * @returns {Promise<number>} documents listed
  */
 async function syncDocuments(ctx, {
   mongoEnabled, model, noun,
-  parent, parentCodes, parentsTotal, listFn, getFn, prepare, onListed,
+  parent, parentCodes, parentsTotal, listFn, getFn, prepare, onListed, sweep, onSwept,
 }) {
   const { summaryKey } = describeEntity(model);
   const listed = await listPerParent(ctx, { summaryKey, parent, parentCodes, parentsTotal, listFn });
@@ -566,6 +634,10 @@ async function syncDocuments(ctx, {
       logContext: ({ id, number }) => ({ [`${noun}Number`]: number, [`${noun}Id`]: id }),
       progressLogLabel: `${noun}Details`,
     });
+  }
+  if (mongoEnabled && sweep) {
+    const swept = await sweepMissingPerParent(ctx, { model, noun, parent, ...sweep, listed });
+    if (onSwept) onSwept(swept);
   }
   if (skippedMissingId > 0) logger.warn({ skippedMissingId }, `Skipped ${noun} upserts with missing Id`);
   logger.info({ [`${summaryKey}Count`]: total }, `Fetched ${summaryKey} (per ${parent})`);
@@ -628,13 +700,14 @@ async function syncPurchases(ctx, kf, { mongoEnabled, suppliers, supplierCodes }
  * All six detail pipelines, run concurrently. Within each document pipeline,
  * phase 1 (list per parent) runs first and feeds phase 2 (details).
  *
- * @returns {Promise<{invoicesTotal: number, quotesTotal: number, purchasesTotal: number}>}
+ * @returns {Promise<{invoicesTotal: number, quotesTotal: number, quotesSoftDeleted: number, purchasesTotal: number}>}
  */
 async function runDetailPhases(ctx, kf, { mongoEnabled, lists, customerCodes, supplierCodes }) {
   const { customers, suppliers, projects } = lists;
   const concurrency = config.concurrency || 4;
   const detailConcurrency = config.detailConcurrency || 8;
   const projectNumbers = (projects || []).map(pickNumber).filter((x) => x != null);
+  let quotesSoftDeleted = 0;
 
   const [, , , invoicesTotal, quotesTotal, purchasesTotal] = await Promise.all([
     syncParentDetails(ctx, {
@@ -670,10 +743,13 @@ async function runDetailPhases(ctx, kf, { mongoEnabled, lists, customerCodes, su
       parent: 'customer', parentCodes: customerCodes, parentsTotal: (customers || []).length,
       listFn: (code) => kf.quotes.listAll({ perpage: 200, customerCode: code }),
       getFn: (number) => kf.quotes.get(number),
+      // KashFlow deletes a quote when it is converted to an invoice.
+      sweep: { scopeField: 'CustomerCode', graceMs: config.quoteSweepGraceMs },
+      onSwept: (swept) => { quotesSoftDeleted = swept.softDeleted; },
     }),
     syncPurchases(ctx, kf, { mongoEnabled, suppliers, supplierCodes }),
   ]);
-  return { invoicesTotal, quotesTotal, purchasesTotal };
+  return { invoicesTotal, quotesTotal, quotesSoftDeleted, purchasesTotal };
 }
 
 // ── Run ──────────────────────────────────────────────────────────────────────
@@ -743,7 +819,7 @@ async function countStoredBankTransactions(mongoEnabled) {
   }
 }
 
-function buildCounts(lists, { bank, bankTransactionsStored, bankReconciliationsTotal, invoicesTotal, quotesTotal, purchasesTotal }) {
+function buildCounts(lists, { bank, bankTransactionsStored, bankReconciliationsTotal, invoicesTotal, quotesTotal, quotesSoftDeleted = 0, purchasesTotal }) {
   const n = (key) => lists[key]?.length || 0;
   return {
     customers: n('customers'),
@@ -767,6 +843,7 @@ function buildCounts(lists, { bank, bankTransactionsStored, bankReconciliationsT
     vatReturns: n('vatReturns'),
     invoices: invoicesTotal,
     quotes: quotesTotal,
+    quotesSoftDeleted,
     purchases: purchasesTotal,
   };
 }
@@ -830,7 +907,7 @@ async function run(options = {}) {
       ? await syncBankReconciliations(ctx, kf, lists.bankAccounts)
       : 0;
 
-    const { invoicesTotal, quotesTotal, purchasesTotal } = await runDetailPhases(ctx, kf, {
+    const { invoicesTotal, quotesTotal, quotesSoftDeleted, purchasesTotal } = await runDetailPhases(ctx, kf, {
       mongoEnabled, lists, customerCodes, supplierCodes,
     });
     const bankTransactionsStored = await countStoredBankTransactions(mongoEnabled);
@@ -840,7 +917,7 @@ async function run(options = {}) {
     logger.info({ nominalsCount: lists.nominals?.length || 0 }, 'Fetched nominals');
     ctx.emitLog('info', 'Fetched transactional items', { invoices: invoicesTotal ?? 0, quotes: quotesTotal ?? 0, purchases: purchasesTotal ?? 0 });
     const counts = buildCounts(lists, {
-      bank, bankTransactionsStored, bankReconciliationsTotal, invoicesTotal, quotesTotal, purchasesTotal,
+      bank, bankTransactionsStored, bankReconciliationsTotal, invoicesTotal, quotesTotal, quotesSoftDeleted, purchasesTotal,
     });
     ctx.setStage('finalising');
     logger.info({ counts, durationMs: Date.now() - start }, 'KashFlow admin sync (Node.js) finished');
