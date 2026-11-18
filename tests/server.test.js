@@ -87,6 +87,7 @@ vi.mock('../src/server/runStore.js', () => ({
     recordChange: vi.fn().mockResolvedValue('change-id'),
     recordLog:    vi.fn().mockResolvedValue('log-id'),
     finishRun:    vi.fn().mockResolvedValue(true),
+    markInterruptedRuns: vi.fn().mockResolvedValue(0),
     listRuns:     vi.fn().mockResolvedValue([]),
     getRun:       vi.fn().mockResolvedValue(null),
     revertChange: vi.fn().mockResolvedValue({ ok: true }),

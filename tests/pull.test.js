@@ -20,7 +20,7 @@ vi.mock('../src/db/mongo.js', () => ({ ensureKashflowIndexes: vi.fn() }));
 import createClient from '../src/kashflow/client.js';
 import { isMongooseEnabled } from '../src/db/mongoose.js';
 import { Purchase, Supplier } from '../src/server/models/kashflow.js';
-import { pullSingleEntity, ENTITY_CONFIG } from '../src/sync/pull.js';
+import { pullSingleEntity, ENTITY_CONFIG, debugEntity, isStaleDetail } from '../src/sync/pull.js';
 import { buildUpsertUpdate, applyDetailSyncedAt } from '../src/sync/upsert.js';
 
 /** Stub KashFlow and Mongo for one pull; returns the captured write. */
@@ -158,5 +158,51 @@ describe('applyDetailSyncedAt', () => {
     applyDetailSyncedAt(update, now, { onlyIfChanged: false });
     expect(update[0].$set.detailSyncedAt).toEqual({ $literal: now });
     expect(update._rawSet.detailSyncedAt).toBe(now);
+  });
+});
+
+describe('STALE_DETAIL diagnosis', () => {
+  const HOUR = 60 * 60 * 1000;
+  const t0 = new Date('2026-11-18T10:00:00Z');
+  const plus = (ms) => new Date(t0.getTime() + ms);
+
+  it('does not flag a freshly synced record whose stamps are seconds or minutes apart', () => {
+    expect(isStaleDetail(plus(4_000), t0, HOUR)).toBe(false);
+    expect(isStaleDetail(plus(6 * 60_000), t0, HOUR)).toBe(false);
+  });
+
+  it('flags detail older than the list sync by more than the tolerance', () => {
+    expect(isStaleDetail(plus(HOUR + 1), t0, HOUR)).toBe(true);
+    expect(isStaleDetail(plus(3 * 24 * HOUR), t0, HOUR)).toBe(true);
+  });
+
+  it('never flags detail newer than syncedAt, or missing stamps', () => {
+    expect(isStaleDetail(t0, plus(HOUR * 5), HOUR)).toBe(false);
+    expect(isStaleDetail(null, t0, HOUR)).toBe(false);
+    expect(isStaleDetail(t0, null, HOUR)).toBe(false);
+    expect(isStaleDetail('not a date', t0, HOUR)).toBe(false);
+  });
+
+  it('defaults to a one-hour tolerance', () => {
+    expect(isStaleDetail(plus(59 * 60_000), t0)).toBe(false);
+    expect(isStaleDetail(plus(61 * 60_000), t0)).toBe(true);
+  });
+
+  async function diagnose(doc) {
+    const { model, getMethod } = ENTITY_CONFIG.quote;
+    vi.spyOn(model, 'findOne').mockReturnValue({ lean: async () => doc });
+    createClient.mockResolvedValue({ [getMethod]: { get: vi.fn(async () => null) } });
+    const report = await debugEntity('quote', 51762);
+    return report.diagnosis.filter((d) => d.startsWith('STALE_DETAIL'));
+  }
+
+  it('debugEntity does not report STALE_DETAIL for a record synced seconds apart in one run', async () => {
+    expect(await diagnose({ Number: 51762, syncedAt: plus(4_000), detailSyncedAt: t0 })).toEqual([]);
+  });
+
+  it('debugEntity reports STALE_DETAIL when detail is far behind', async () => {
+    const out = await diagnose({ Number: 51762, syncedAt: plus(2 * HOUR), detailSyncedAt: t0 });
+    expect(out).toHaveLength(1);
+    expect(out[0]).toMatch(/more than 60 min/);
   });
 });

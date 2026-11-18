@@ -1,4 +1,5 @@
 import logger from '../util/logger.js';
+import config from '../config.js';
 import createClient from '../kashflow/client.js';
 import { connectMongoose, isMongooseEnabled } from '../db/mongoose.js';
 import { SYNCED_ENTITIES, pullTypeOf } from './entities.js';
@@ -124,6 +125,30 @@ export async function pullSingleEntity(entityType, entityId) {
   };
 }
 
+function staleDetailToleranceMs() {
+  const ms = Number(config.staleDetailToleranceMs);
+  return Number.isFinite(ms) && ms >= 0 ? ms : 60 * 60 * 1000;
+}
+
+/**
+ * True when a document's detail sync is genuinely behind its list sync.
+ *
+ * A plain syncedAt > detailSyncedAt is not enough: a record created in a run
+ * gets syncedAt ($$NOW) when first written, but detailSyncedAt from a clock
+ * the detail phase took when it started, so a fresh record routinely has
+ * syncedAt a few seconds-to-minutes ahead. Both stamps then come from the same
+ * run, and the gap is bounded by that run's length. Only a gap beyond
+ * config.staleDetailToleranceMs (default 1h, far longer than any run) means
+ * the two were written by different runs.
+ */
+export function isStaleDetail(syncedAt, detailSyncedAt, toleranceMs = staleDetailToleranceMs()) {
+  if (!syncedAt || !detailSyncedAt) return false;
+  const list = new Date(syncedAt).getTime();
+  const detail = new Date(detailSyncedAt).getTime();
+  if (!Number.isFinite(list) || !Number.isFinite(detail)) return false;
+  return list - detail > toleranceMs;
+}
+
 /**
  * Diagnose sync state for a single entity — compares MongoDB doc vs live KashFlow data.
  *
@@ -185,8 +210,12 @@ export async function debugEntity(entityType, entityId) {
       if (!doc.detailSyncedAt) {
         report.diagnosis.push('MISSING_DETAIL_SYNC: Document has never had a Phase 2 detail sync (detailSyncedAt is null). LineItems/PaymentLines may be absent.');
       }
-      if (doc.syncedAt && doc.detailSyncedAt && doc.syncedAt > doc.detailSyncedAt) {
-        report.diagnosis.push('STALE_DETAIL: Phase 1 (syncedAt) is newer than Phase 2 (detailSyncedAt). A recent list sync overwrote fields but detail was not re-fetched.');
+      if (isStaleDetail(doc.syncedAt, doc.detailSyncedAt)) {
+        report.diagnosis.push(
+          'STALE_DETAIL: Phase 1 (syncedAt) is newer than Phase 2 (detailSyncedAt) by more than ' +
+          `${Math.round(staleDetailToleranceMs() / 60000)} min, so the detail was not fetched in the run that ` +
+          'wrote the list data. LineItems/PaymentLines may be out of date.'
+        );
       }
       if (!Array.isArray(lineItems) || lineItems.length === 0) {
         report.diagnosis.push('NO_LINE_ITEMS: No LineItems array in MongoDB document.');

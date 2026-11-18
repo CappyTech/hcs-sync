@@ -9,6 +9,10 @@ import fs from 'fs';
 import { createApp } from './app.js';
 import { loadSettingsIntoCache, applyCronConfig, getEffectiveCronConfig } from './syncController.js';
 import { summariseRunChanges, formatRunChange } from './notify.js';
+import runStore from './runStore.js';
+
+// Captured before listening, so no run this process starts can predate it.
+const bootedAt = Date.now();
 
 const app = createApp();
 const port = Number(process.env.PORT || 3000);
@@ -49,6 +53,16 @@ const server = app.listen(port, () => {
 
   // Load settings and apply cron config after the server is up.
   (async () => {
+    // Close out runs a previous process left 'running' (restart/deploy mid-run).
+    // Before the cron starts; log only — no Discord alert for historical runs.
+    if (isMongooseEnabled()) {
+      try {
+        const n = await runStore.markInterruptedRuns(bootedAt);
+        if (n > 0) logger.warn({ count: n }, 'Marked runs left running by a previous process as interrupted');
+      } catch (err) {
+        logger.error({ err: { message: err?.message } }, 'Failed to mark interrupted runs');
+      }
+    }
     try {
       await loadSettingsIntoCache();
       applyCronConfig();
