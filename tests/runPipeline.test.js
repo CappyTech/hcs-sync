@@ -51,6 +51,8 @@ function fakeKashflow() {
     },
     projects: {
       listAll: list([{ Number: 100 }, { Number: 101 }, { Number: 102 }]),
+      // Listed per customer too; 100 appears in both and is counted once.
+      listAllForCustomer: async (code) => (code === 'C1' ? [{ Number: 100, CustomerCode: 'C1' }] : []),
       // 101 has no Id (keyed on Number); 102 comes back empty.
       get: byKey({ 100: { Id: 500, Number: 100 }, 101: { Number: 101, Name: 'No Id' } }),
     },

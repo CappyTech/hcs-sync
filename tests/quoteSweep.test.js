@@ -43,7 +43,7 @@ function fakeKashflow(quotesByCustomer) {
       get: async (code) => ({ Id: Number(code.slice(1)), Code: code }),
     },
     suppliers: { listAll: empty, get: async () => null },
-    projects: { listAll: empty, get: async () => null },
+    projects: { listAll: empty, listAllForCustomer: empty, get: async () => null },
     nominals: { list: empty },
     vatRates: { list: empty },
     bankAccounts: { list: empty },
