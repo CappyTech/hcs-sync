@@ -165,12 +165,12 @@ beforeAll(async () => {
 describe('run() end to end', () => {
   it('reports counts, carrying the stored bank-transaction count', () => {
     expect(result.counts).toEqual({
-      customers: 3, customersSoftDeleted: 0, suppliers: 1, projects: 3, projectsSoftDeleted: 0, nominals: 3, vatRates: 3, bankAccounts: 3,
+      customers: 3, customersSoftDeleted: 0, suppliers: 1, suppliersSoftDeleted: 0, projects: 3, projectsSoftDeleted: 0, nominals: 3, vatRates: 3, bankAccounts: 3,
       bankTransactions: 3, bankTransactionsFetched: 3, bankTransactionsSoftDeleted: 0,
       bankReconciliations: 1,
       journals: 1, products: 1, purchaseOrders: 1, quoteCategories: 1, purchaseOrderCategories: 1,
       currencies: 0, countries: 1, accountingPeriods: 1, vatReturns: 1,
-      invoices: 4, invoicesSoftDeleted: 0, quotes: 3, quotesSoftDeleted: 0, purchases: 2,
+      invoices: 4, invoicesSoftDeleted: 0, quotes: 3, quotesSoftDeleted: 0, purchases: 2, purchasesSoftDeleted: 0,
     });
   });
 
@@ -294,6 +294,17 @@ describe('run() end to end', () => {
       CustomerCode: 'C9', Number: { $nin: [], $ne: null }, deletedAt: null,
     }));
     expect(quoteFilters.some((f) => f.CustomerCode === 'c1 ')).toBe(false);
+  });
+
+  it('sweeps purchases by Number per supplier, and suppliers by Code over the whole collection', () => {
+    const purchaseFilters = sweeps.filter((u) => u.model === 'Purchase').map((u) => u.filter);
+    expect(purchaseFilters).toContainEqual(expect.objectContaining({
+      SupplierCode: 'S1', Number: { $nin: [1, 2], $ne: null }, deletedAt: null,
+    }));
+    expect(purchaseFilters.some((f) => !f.SupplierCode || 'Id' in f)).toBe(false);
+    expect(sweeps.filter((u) => u.model === 'Supplier').map((u) => u.filter)).toContainEqual({
+      Code: { $nin: ['S1', ''], $ne: null }, deletedAt: null, missingSince: null,
+    });
   });
 
   it('backfills a missing purchase SupplierId from the suppliers list', () => {

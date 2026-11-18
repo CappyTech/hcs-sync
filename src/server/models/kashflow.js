@@ -44,7 +44,7 @@ const syncOnlyFields = {
 export const SYNC_INTERNAL_FIELDS = new Set([
   '_id', '__v', 'data', 'uuid',
   'syncedAt', 'detailSyncedAt', 'createdAt', 'updatedAt', 'createdByRunId',
-  // missingSince — the bank/quote/invoice/project/customer soft-delete grace timer (see run.js). Sync-owned and
+  // missingSince — the bank/quote/invoice/project/customer/purchase/supplier soft-delete grace timer (see run.js). Sync-owned and
   // never returned by KashFlow, so it must not reach the payload or the audit
   // diff, which walks the union of stored and incoming keys and would otherwise
   // report it 'removed' on every run.
@@ -82,7 +82,11 @@ export const Customer =
 
 // ── Supplier ────────────────────────────────────────────────────────────
 
-const SupplierSchema = buildSchema(schemas.supplier);
+// missingSince: the soft-delete grace timer for suppliers KashFlow no longer
+// lists, as for customers above.
+const SupplierSchema = buildSchema(schemas.supplier, {
+  missingSince: { type: Date, default: null },
+});
 
 SupplierSchema.statics.syncConfig = {
   summaryKey: 'suppliers',
@@ -189,8 +193,11 @@ const PurchasePaymentLineSchema = new mongoose.Schema(
   { _id: false, strict: false }
 );
 
+// missingSince: the soft-delete grace timer for purchases KashFlow stops
+// listing for their supplier, as for invoices above.
 const PurchaseSchema = buildSchema(schemas.purchase, {
   PaymentLines: [PurchasePaymentLineSchema],
+  missingSince: { type: Date, default: null },
 });
 
 // ── Purchase transform helpers ──────────────────────────────────────────
