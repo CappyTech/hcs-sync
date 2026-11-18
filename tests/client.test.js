@@ -171,6 +171,118 @@ describe('src/kashflow/client.js', () => {
       expect(result).toEqual([{ Code: 'A' }, { Code: 'B' }]);
       expect(mockHttp.get).toHaveBeenCalledTimes(2);
     });
+
+    const rows = (from, count, extra = {}) =>
+      Array.from({ length: count }, (_, i) => ({ Number: from + i, ...extra }));
+
+    it('pages a bare-array listing (GET /projects) by number while pages come back full', async () => {
+      // /projects returns a bare array with no MetaData: following NextPageUrl
+      // alone stopped at the first 200 every run.
+      mockHttp.get
+        .mockResolvedValueOnce({ data: rows(1, 200) })
+        .mockResolvedValueOnce({ data: rows(201, 200) })
+        .mockResolvedValueOnce({ data: rows(401, 35) });
+
+      const kf = await createClient();
+      const result = await kf.projects.listAll({ perpage: 200 });
+      expect(result).toHaveLength(435);
+      expect(mockHttp.get.mock.calls.map(([url, opts]) => [url, opts.params])).toEqual([
+        ['/projects', { perpage: 200 }],
+        ['/projects', { perpage: 200, page: 2 }],
+        ['/projects', { perpage: 200, page: 3 }],
+      ]);
+    });
+
+    it('pages a customer\'s quotes by number, keeping customerCode, when MetaData has no NextPageUrl', async () => {
+      // Plus Dane has more than 200 quotes; only the first page ever synced.
+      mockHttp.get
+        .mockResolvedValueOnce({ data: { Data: rows(51000, 200, { CustomerCode: 'PLUS01' }), MetaData: { NextPageUrl: null } } })
+        .mockResolvedValueOnce({ data: { Data: rows(51762, 3, { CustomerCode: 'PLUS01' }), MetaData: { NextPageUrl: null } } });
+
+      const kf = await createClient();
+      const result = await kf.quotes.listAll({ perpage: 200, customerCode: 'PLUS01' });
+      expect(result.map((q) => q.Number)).toContain(51762);
+      expect(result).toHaveLength(203);
+      expect(mockHttp.get.mock.calls[1]).toEqual(['/quotes', { params: { perpage: 200, customerCode: 'PLUS01', page: 2 } }]);
+    });
+
+    it('puts back filters a NextPageUrl dropped', async () => {
+      mockHttp.get
+        .mockResolvedValueOnce({ data: { Data: rows(1, 2), MetaData: { NextPageUrl: 'https://api.kashflow.com/v2/quotes?page=2&perpage=2' } } })
+        .mockResolvedValueOnce({ data: { Data: rows(3, 1), MetaData: { NextPageUrl: null } } });
+
+      const kf = await createClient();
+      const result = await kf.quotes.listAll({ perpage: 2, customerCode: 'PLUS01' });
+      expect(result).toHaveLength(3);
+      expect(mockHttp.get.mock.calls[1]).toEqual([
+        'https://api.kashflow.com/v2/quotes?page=2&perpage=2', { params: { customerCode: 'PLUS01' } },
+      ]);
+    });
+
+    it('follows a NextPageUrl that carries every filter as-is', async () => {
+      mockHttp.get
+        .mockResolvedValueOnce({ data: { Data: rows(1, 2), MetaData: { NextPageUrl: '/quotes?customercode=PLUS01&perpage=2&page=2' } } })
+        .mockResolvedValueOnce({ data: { Data: rows(3, 1), MetaData: {} } });
+
+      const kf = await createClient();
+      await kf.quotes.listAll({ perpage: 2, customerCode: 'PLUS01' });
+      expect(mockHttp.get.mock.calls[1]).toEqual(['/quotes?customercode=PLUS01&perpage=2&page=2', { params: undefined }]);
+    });
+
+    it('keeps paging while TotalRecords says rows remain, even if KashFlow shrank the page', async () => {
+      mockHttp.get
+        .mockResolvedValueOnce({ data: { Data: rows(1, 100), MetaData: { TotalRecords: 150 } } })
+        .mockResolvedValueOnce({ data: { Data: rows(101, 50), MetaData: { TotalRecords: 150 } } });
+
+      const kf = await createClient();
+      const result = await kf.quotes.listAll({ perpage: 200, customerCode: 'C1' });
+      expect(result).toHaveLength(150);
+      expect(mockHttp.get).toHaveBeenCalledTimes(2);
+    });
+
+    it('stops after a short page without asking for another', async () => {
+      mockHttp.get.mockResolvedValueOnce({ data: { Data: rows(1, 199), MetaData: { NextPageUrl: null, TotalRecords: 199 } } });
+
+      const kf = await createClient();
+      expect(await kf.quotes.listAll({ perpage: 200 })).toHaveLength(199);
+      expect(mockHttp.get).toHaveBeenCalledTimes(1);
+    });
+
+    it('stops on an empty page that follows a full one', async () => {
+      mockHttp.get
+        .mockResolvedValueOnce({ data: rows(1, 200) })
+        .mockResolvedValueOnce({ data: [] });
+
+      const kf = await createClient();
+      expect(await kf.projects.listAll({ perpage: 200 })).toHaveLength(200);
+      expect(mockHttp.get).toHaveBeenCalledTimes(2);
+    });
+
+    it('ends the listing when an endpoint ignores page and repeats itself', async () => {
+      const page = { data: rows(1, 200) };
+      mockHttp.get.mockResolvedValueOnce(page).mockResolvedValueOnce(structuredClone(page));
+
+      const kf = await createClient();
+      expect(await kf.projects.listAll({ perpage: 200 })).toHaveLength(200);
+      expect(mockHttp.get).toHaveBeenCalledTimes(2);
+    });
+
+    it('rejects the whole listing when a later page fails', async () => {
+      mockHttp.get
+        .mockResolvedValueOnce({ data: rows(1, 200) })
+        .mockRejectedValueOnce(new Error('KashFlow 500'));
+
+      const kf = await createClient();
+      await expect(kf.projects.listAll({ perpage: 200 })).rejects.toThrow('KashFlow 500');
+    });
+
+    it('refuses an endless listing', async () => {
+      let n = 0;
+      mockHttp.get.mockImplementation(async () => ({ data: rows((n++) * 2, 2) }));
+
+      const kf = await createClient();
+      await expect(kf.projects.listAll({ perpage: 2 })).rejects.toThrow(/still paging after 1000 pages/);
+    });
   });
 
   // ── buildAuthHeaders (tested via axios.create headers) ────────────────

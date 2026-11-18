@@ -2,6 +2,11 @@
 
 All notable changes to hcs-sync will be documented here. Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [0.17.2] - 2026-11-18
+
+### Fixed
+- **Listings stopped after their first page when KashFlow sent no `NextPageUrl`.** `listAll` only followed `MetaData.NextPageUrl`. `GET /projects` returns a bare array with no `MetaData`, so projects were capped at 200 every run. Each customer's quote listing also stopped at 200, so Plus Dane quotes after the first page (e.g. 51450, 51762) never reached MongoDB. When there is no `NextPageUrl`, `listAll` now asks for the next page by number (`page=N`, same filters) while the last page came back full or `MetaData.TotalRecords` says rows remain. When it does follow a `NextPageUrl`, it puts back any filter the link dropped (e.g. `customerCode`). It stops on a short or empty page, or on a page it has already seen (an endpoint that ignores `page`). It fails the whole listing after 1,000 pages. A failed page still fails the whole listing, as before.
+
 ## [0.17.1] - 2026-11-18
 
 ### Fixed
