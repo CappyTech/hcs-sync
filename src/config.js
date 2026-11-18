@@ -42,17 +42,25 @@ const config = {
   // invoices and projects are swept with their own windows above.
   customerSweepGraceMs: Number(process.env.CUSTOMER_SWEEP_GRACE_MS ?? 24 * 60 * 60 * 1000),
 
+  // The same for purchases that disappear from their supplier's KashFlow
+  // listing (a financial record, so a day, as for invoices), and for suppliers
+  // deleted from KashFlow, whose purchases are swept with the purchase window.
+  purchaseSweepGraceMs: Number(process.env.PURCHASE_SWEEP_GRACE_MS ?? 24 * 60 * 60 * 1000),
+  supplierSweepGraceMs: Number(process.env.SUPPLIER_SWEEP_GRACE_MS ?? 24 * 60 * 60 * 1000),
+
   // Debug page: how far syncedAt may lead detailSyncedAt before the diagnosis
   // reports STALE_DETAIL. A record created in a run gets syncedAt when it is
   // first written and detailSyncedAt from a clock taken when the detail phase
   // began, so within one run syncedAt can lead by up to that phase's length
   // (runs take ~6 min). Default 1h covers a slow run several times over.
   staleDetailToleranceMs: Number(process.env.STALE_DETAIL_TOLERANCE_MS ?? 60 * 60 * 1000),
-  // The same for purchases that disappear from their supplier's KashFlow
-  // listing (a financial record, so a day, as for invoices), and for suppliers
-  // deleted from KashFlow, whose purchases are swept with the purchase window.
-  purchaseSweepGraceMs: Number(process.env.PURCHASE_SWEEP_GRACE_MS ?? 24 * 60 * 60 * 1000),
-  supplierSweepGraceMs: Number(process.env.SUPPLIER_SWEEP_GRACE_MS ?? 24 * 60 * 60 * 1000),
+
+  // Freshness check (src/sync/freshness.js): after each run, the highest stored
+  // quote/invoice/project/purchase Number is compared with KashFlow's next free
+  // number. A gap larger than this many documents makes the run "completed with
+  // warnings" and posts to Discord. A few recently-deleted documents at the top
+  // of a sequence legitimately leave a small gap, hence not 0.
+  freshnessGapThreshold: Number(process.env.FRESHNESS_GAP_THRESHOLD ?? 5),
 };
 
 export default config;

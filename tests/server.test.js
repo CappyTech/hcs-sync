@@ -28,6 +28,13 @@ vi.mock('../src/util/logger.js', () => {
 
 vi.mock('../src/sync/run.js', () => ({
   default: vi.fn().mockResolvedValue({ counts: { customers: 5 } }),
+  carryForwardFailedCounts: vi.fn((prev, curr) => curr),
+}));
+
+// Never post to Discord from tests.
+vi.mock('../src/util/discord.js', () => ({
+  sendDiscord: vi.fn(() => Promise.resolve(false)),
+  isDiscordEnabled: vi.fn(() => false),
 }));
 
 vi.mock('../src/sync/pull.js', () => ({
@@ -792,6 +799,90 @@ describe('Express server routes', () => {
 
       expect(res.status).toBe(200);
       expect(res.text).toContain('Run Details');
+    });
+  });
+
+  describe('GET /history/:id (run with warnings)', () => {
+    it('shows failed lists, lagging collections and the freshness table', async () => {
+      const runStoreMock = (await import('../src/server/runStore.js')).default;
+      const stale = { kind: 'quote', collection: 'quotes', highestStored: 41200, nextAvailable: 51764, gap: 10563, stale: true };
+      runStoreMock.getRun.mockResolvedValueOnce({
+        id: 'run-warn',
+        status: 'finished',
+        startedAt: Date.now(),
+        changes: [],
+        logs: [],
+        summary: {
+          counts: {},
+          failedFetches: ['journals', 'vatReturns'],
+          freshness: {
+            threshold: 5,
+            checks: [stale, { kind: 'project', collection: 'projects', highestStored: 41301, nextAvailable: 41302, gap: 0, stale: false }],
+            stale: [stale],
+            unreadable: [{ kind: 'purchase', collection: 'purchases', message: 'next purchase down' }],
+          },
+          warnings: {
+            bankAccountsNotFetched: [],
+            failedFetches: ['journals', 'vatReturns'],
+            stale: [stale],
+            freshnessUnreadable: [{ kind: 'purchase', collection: 'purchases', message: 'next purchase down' }],
+          },
+        },
+      });
+
+      const res = await supertest(app)
+        .get('/history/run-warn')
+        .set('Cookie', `hcs_sso=${makeSsoToken()}`);
+
+      expect(res.status).toBe(200);
+      expect(res.text).toContain('Completed with warnings');
+      expect(res.text).toContain('journals, vatReturns');
+      expect(res.text).toContain('KashFlow next is 51764 (10563 behind)');
+      expect(res.text).toContain('next purchase down');
+      expect(res.text).toContain('Freshness');
+    });
+
+    it('shows no warnings block for a clean run', async () => {
+      const runStoreMock = (await import('../src/server/runStore.js')).default;
+      runStoreMock.getRun.mockResolvedValueOnce({
+        id: 'run-clean', status: 'finished', startedAt: Date.now(), changes: [], logs: [],
+        summary: { counts: {}, failedFetches: [], freshness: null, warnings: null },
+      });
+      const res = await supertest(app)
+        .get('/history/run-clean')
+        .set('Cookie', `hcs_sso=${makeSsoToken()}`);
+      expect(res.status).toBe(200);
+      expect(res.text).not.toContain('Completed with warnings');
+    });
+  });
+
+  describe('triggerSync() run summary', () => {
+    it('stores failed lists and freshness warnings in the run summary and logs a warning', async () => {
+      const runStoreMock = (await import('../src/server/runStore.js')).default;
+      const runMock = (await import('../src/sync/run.js')).default;
+      const { triggerSync } = await import('../src/server/syncController.js');
+      const stale = { kind: 'quote', collection: 'quotes', highestStored: 1, nextAvailable: 100, gap: 98, stale: true };
+      runMock.mockResolvedValueOnce({
+        counts: { customers: 5 },
+        failedFetches: ['products'],
+        partial: { bankTransactions: [] },
+        freshness: { threshold: 5, checks: [stale], stale: [stale], unreadable: [] },
+      });
+      runStoreMock.finishRun.mockClear();
+      runStoreMock.recordLog.mockClear();
+
+      const { promise } = await triggerSync({ requestedBy: 'test' });
+      await promise;
+
+      const summary = runStoreMock.finishRun.mock.calls.at(-1)[1];
+      expect(summary.failedFetches).toEqual(['products']);
+      expect(summary.freshness.stale).toEqual([stale]);
+      expect(summary.warnings).toMatchObject({ failedFetches: ['products'], stale: [stale] });
+      expect(runStoreMock.recordLog).toHaveBeenCalledWith('test-run-id', expect.objectContaining({
+        level: 'warn',
+        message: 'Sync completed with warnings',
+        meta: expect.objectContaining({ failedFetches: ['products'], staleCollections: ['quotes'] }),
+      }));
     });
   });
 
