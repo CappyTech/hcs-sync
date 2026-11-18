@@ -84,9 +84,21 @@ function fakeKashflow() {
       }[customerCode] || []),
       get: byKey({ 1: { Id: 201, Number: 1, LineItems: [] }, 2: new Error('detail failed') }),
     },
+    // KashFlow's quote list rows and details carry no Id (Nov 2026), so
+    // quotes key on Number. C2 lists a row with no Number either: it cannot be
+    // fetched or accounted for, so C2 is not swept.
     quotes: {
-      listAll: async ({ customerCode }) => (customerCode === 'C1' ? [{ Id: 301, Number: 1 }] : []),
-      get: byKey({ 1: { Id: 301, Number: 1 } }),
+      listAll: async ({ customerCode }) => structuredClone({
+        C1: [
+          { Number: 51762, Date: '2026-11-01', CustomerCode: 'C1', CustomerId: 1, CustomerName: 'One', NetAmount: 3274.4 },
+          { Number: 51763, CustomerCode: 'C1' },
+        ],
+        C2: [{ CustomerCode: 'C2', CustomerName: 'Two' }],
+      }[customerCode] || []),
+      get: byKey({
+        51762: { Number: 51762, CustomerCode: 'C1', NetAmount: 3274.4, GrossAmount: 3929.28 },
+        51763: { Number: 51763, CustomerCode: 'C1' },
+      }),
     },
     purchases: {
       listAll: async ({ supplierCode }) => (supplierCode === 'S1' ? [{ Id: 401, Number: 1 }, { Id: 402, Number: 2 }] : []),
@@ -102,6 +114,7 @@ function fakeKashflow() {
 
 const writes = [];
 const auditEntries = [];
+const sweeps = [];
 
 function captureWrites() {
   for (const [name, model] of Object.entries(models)) {
@@ -122,7 +135,10 @@ function captureWrites() {
       };
     });
     vi.spyOn(model, 'find').mockReturnValue({ lean: async () => [] });
-    vi.spyOn(model, 'updateMany').mockResolvedValue({ modifiedCount: 0 });
+    vi.spyOn(model, 'updateMany').mockImplementation(async (filter) => {
+      sweeps.push({ model: name, filter });
+      return { modifiedCount: 0 };
+    });
     vi.spyOn(model, 'countDocuments').mockResolvedValue(3);
   }
   mongoose.connection.db = {
@@ -150,7 +166,7 @@ describe('run() end to end', () => {
       bankReconciliations: 1,
       journals: 1, products: 1, purchaseOrders: 1, quoteCategories: 1, purchaseOrderCategories: 1,
       currencies: 0, countries: 1, accountingPeriods: 1, vatReturns: 1,
-      invoices: 4, quotes: 1, quotesSoftDeleted: 0, purchases: 2,
+      invoices: 4, quotes: 3, quotesSoftDeleted: 0, purchases: 2,
     });
   });
 
@@ -207,7 +223,6 @@ describe('run() end to end', () => {
   it('fetches document details by Number, keys them on Id and stamps detailSyncedAt', () => {
     // Invoice 202's detail fetch failed and 203 has no Number: neither is written.
     expect(writesFor('Invoice').map((w) => w.filter)).toEqual([{ Id: 201 }]);
-    expect(writesFor('Quote').map((w) => w.filter)).toEqual([{ Id: 301 }]);
     for (const model of ['Invoice', 'Quote', 'Purchase']) {
       for (const w of writesFor(model)) {
         expect(w.detailSyncedAt).toBe(true);
@@ -217,6 +232,25 @@ describe('run() end to end', () => {
     for (const model of ['Customer', 'Supplier', 'Project', 'Journal', 'BankTransaction']) {
       expect(writesFor(model).some((w) => w.detailSyncedAt)).toBe(false);
     }
+  });
+
+  it('keys quotes with no Id on Number', () => {
+    const quotes = writesFor('Quote');
+    expect(quotes.map((w) => w.filter)).toEqual([{ Number: 51762 }, { Number: 51763 }]);
+    expect(quotes[0].rawSet).toMatchObject({ Number: 51762, CustomerCode: 'C1', GrossAmount: 3929.28 });
+    expect(quotes[0].rawSet).not.toHaveProperty('Id');
+    // Quotes wrongly soft-deleted while the sync skipped them come back live.
+    expect(quotes.every((w) => w.rawSet.deletedAt === null)).toBe(true);
+  });
+
+  it('sweeps quotes by Number, only for customers whose rows were all keyed', () => {
+    const filters = sweeps.filter((u) => u.model === 'Quote').map((u) => u.filter);
+    expect(filters.length).toBeGreaterThan(0);
+    expect(filters.every((f) => f.CustomerCode === 'C1')).toBe(true);
+    expect(filters).toContainEqual(expect.objectContaining({
+      CustomerCode: 'C1', Number: { $nin: [51762, 51763], $ne: null }, deletedAt: null,
+    }));
+    expect(filters.some((f) => 'Id' in f)).toBe(false);
   });
 
   it('backfills a missing purchase SupplierId from the suppliers list', () => {

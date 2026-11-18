@@ -158,9 +158,15 @@ const QuoteSchema = buildSchema(schemas.quote, {
   missingSince: { type: Date, default: null },
 });
 
+// KashFlow's quote list and detail responses carry no Id, so a quote keys on
+// Number when Id is absent. The stored quote docs have no Id either: quotes
+// were keyed on Number until fd032fa (Feb 2026) switched them to Id, after
+// which every quote row was skipped. Keying on Number matches those docs, so
+// no duplicates are created. (Dedup groups on Id, so it skips quotes.)
 QuoteSchema.statics.syncConfig = {
   summaryKey: 'quotes',
   keyField: 'Id',
+  fallbackKeyFields: ['Number'],
   dedup: true,
   lookupField: 'Number',
   protectedFields: [],

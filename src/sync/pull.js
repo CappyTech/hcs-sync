@@ -20,6 +20,7 @@ const ENTITY_CONFIG = Object.fromEntries(
       model: e.model,
       getMethod: e.summaryKey,
       keyField: e.model.syncConfig.keyField,
+      keyFields: e.keyFields,
       lookupField: e.lookupField,
     }]),
 );
@@ -44,7 +45,7 @@ export async function pullSingleEntity(entityType, entityId) {
   await connectMongoose();
 
   const kf = await createClient();
-  const { model, getMethod, keyField, lookupField } = cfg;
+  const { model, getMethod, keyFields, lookupField } = cfg;
 
   // Fetch full detail from KashFlow
   logger.info({ entityType, entityId }, 'Manual pull: fetching from KashFlow');
@@ -53,9 +54,12 @@ export async function pullSingleEntity(entityType, entityId) {
     throw new Error(`KashFlow returned no data for ${entityType} ${entityId}`);
   }
 
-  const id = full[keyField] ?? full.Id ?? full.id;
+  // Key on the first of the entity's key fields the response carries, as the
+  // full sync does (a quote has no Id and keys on Number).
+  const keyField = keyFields.find((f) => full[f] != null && full[f] !== '');
+  const id = keyField ? full[keyField] : null;
   if (id == null) {
-    throw new Error(`Response missing key field "${keyField}"`);
+    throw new Error(`Response missing key field "${keyFields.join('" or "')}"`);
   }
 
   // Read existing document for comparison

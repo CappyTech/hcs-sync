@@ -629,6 +629,20 @@ describe('sweepMissing() for quotes scoped by CustomerCode', () => {
     expect(model.docs[0].missingSince).toBeNull();
   });
 
+  it('keyed on Number, sweeps quotes with or without an Id', async () => {
+    // KashFlow's quote rows carry no Id, nor do the stored docs; every quote
+    // has a Number. A doc that somehow has an Id is swept on Number all the same.
+    const model = fakeModel([
+      quote(1),
+      quote(2),
+      { ...quote(3), Id: undefined },
+      { ...quote(4), Id: undefined },
+    ]);
+    const res = await sweep(model, [50001, 50003], t0, { keyField: 'Number', graceMs: 0 });
+    expect(res).toEqual({ pending: 2, softDeleted: 2 });
+    expect(model.docs.map((d) => d.deletedAt)).toEqual([null, t0, null, t0]);
+  });
+
   it('refuses an empty or null scope rather than sweeping the whole collection', async () => {
     const model = fakeModel([quote(1)]);
     for (const scope of [{}, { CustomerCode: null }, { CustomerCode: '' }, null]) {
