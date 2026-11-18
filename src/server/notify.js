@@ -6,6 +6,7 @@ import { sendDiscord } from '../util/discord.js';
 const NON_RESOURCE_COUNT_KEYS = new Set([
   'bankTransactionsSoftDeleted', 'bankTransactionsFetched',
   'quotesSoftDeleted', 'invoicesSoftDeleted', 'projectsSoftDeleted', 'customersSoftDeleted',
+  'purchasesSoftDeleted', 'suppliersSoftDeleted',
 ]);
 
 /**
