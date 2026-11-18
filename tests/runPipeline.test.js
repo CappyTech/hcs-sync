@@ -150,7 +150,7 @@ describe('run() end to end', () => {
       bankReconciliations: 1,
       journals: 1, products: 1, purchaseOrders: 1, quoteCategories: 1, purchaseOrderCategories: 1,
       currencies: 0, countries: 1, accountingPeriods: 1, vatReturns: 1,
-      invoices: 4, quotes: 1, purchases: 2,
+      invoices: 4, quotes: 1, quotesSoftDeleted: 0, purchases: 2,
     });
   });
 

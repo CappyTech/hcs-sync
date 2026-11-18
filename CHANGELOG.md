@@ -2,6 +2,14 @@
 
 All notable changes to hcs-sync will be documented here. Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [0.17.0] - 2026-11-18
+
+### Added
+- **Quotes that disappear from KashFlow are now marked deleted.** KashFlow deletes a quote when it's converted to an invoice, so until now a converted quote stayed in MongoDB looking live forever. Each run already lists every customer's quotes; a stored quote that customer's listing no longer returns gets `missingSince` on the first run that misses it, and the legacy `deletedAt` once it's still missing after the grace period (`QUOTE_SWEEP_GRACE_MS`, 2 hours by default, like `BANK_SWEEP_GRACE_MS`). A quote that comes back has both cleared. A customer whose listing fails is never swept, nothing is swept when no customer listed a single quote, and a stored quote with no `Id` is never swept. The run log reports quotes waiting out the grace period and quotes soft-deleted, and the run counts gain `quotesSoftDeleted`.
+
+### Changed
+- **The bank transaction sweep now shares the new general sweep** (`sweepMissing` in `src/sync/upsert.js`). Its behaviour is unchanged.
+
 ## [0.16.1] - 2026-11-11
 
 ### Added
