@@ -865,6 +865,91 @@ async function runDetailPhases(ctx, kf, { mongoEnabled, lists, projectListing, c
   return { invoicesTotal, quotesTotal, quotesSoftDeleted, invoicesSoftDeleted, projectsSoftDeleted, purchasesTotal };
 }
 
+/** Customer codes compared loosely: KashFlow pads and cases them inconsistently. */
+const normaliseCode = (code) => String(code ?? '').trim().toUpperCase();
+
+// More orphaned customer codes than this in one run is far likelier to be a
+// code-format mismatch than a spate of deletions, so the orphan sweep stands
+// down rather than flag a large share of the mirror.
+const MAX_ORPHAN_CODES = 5;
+
+/**
+ * Sweep customers deleted from KashFlow, and the documents left behind by them.
+ *
+ * The per-customer sweeps (quotes, invoices, projects) only visit customers
+ * KashFlow still lists, so a deleted customer's documents were never checked:
+ * project 41301 "Test Job" belonged to TEST01, deleted along with it. Here:
+ *
+ *  - customers: the customers list is complete (it pages, and a failure fails
+ *    the run), so any stored customer whose Code it no longer returns is
+ *    missing. A stored customer with a blank Code is never swept.
+ *  - orphans: stored quotes, invoices and projects whose CustomerCode matches
+ *    no listed customer (compared trimmed and case-insensitively) are missing
+ *    too — swept per code with an empty `seen`, each with its own grace window.
+ *    Stands down when more than MAX_ORPHAN_CODES codes are orphaned at once.
+ *
+ * Both use missingSince then deletedAt after the grace window, as every sweep
+ * does, and a customer that comes back has both cleared.
+ *
+ * @returns {Promise<{customersSoftDeleted: number, orphansSoftDeleted: {quotes: number, invoices: number, projects: number}}>}
+ */
+async function sweepDeletedCustomers(ctx, { customers }) {
+  const result = { customersSoftDeleted: 0, orphansSoftDeleted: { quotes: 0, invoices: 0, projects: 0 } };
+  const codes = (customers || []).map(pickCode).filter((c) => !isMissingKey(c));
+  if (!codes.length) {
+    logger.warn('Customer list has no codes; skipping the deleted-customer sweep');
+    return result;
+  }
+  ctx.setStage('customers:sweep');
+  const now = new Date();
+
+  const swept = await sweepMissing({
+    // '' keeps a stored customer with a blank Code out of it: it can't be checked.
+    model: Customer, keyField: 'Code', seen: [...codes, ''], now, graceMs: config.customerSweepGraceMs, wholeCollection: true,
+  });
+  result.customersSoftDeleted = swept.softDeleted;
+  if (swept.pending > 0) {
+    logger.info({ pending: swept.pending }, 'Customers absent from KashFlow; awaiting grace window');
+    ctx.emitLog('info', 'Customers absent from KashFlow; awaiting grace window', { count: swept.pending });
+  }
+  if (swept.softDeleted > 0) {
+    logger.info({ softDeleted: swept.softDeleted }, 'Soft-deleted customers no longer in KashFlow');
+    ctx.emitLog('info', 'Soft-deleted customers no longer in KashFlow', { count: swept.softDeleted });
+  }
+
+  const listed = new Set(codes.map(normaliseCode));
+  const documents = [
+    { model: Quote, key: 'quotes', graceMs: config.quoteSweepGraceMs },
+    { model: Invoice, key: 'invoices', graceMs: config.invoiceSweepGraceMs },
+    { model: Project, key: 'projects', graceMs: config.projectSweepGraceMs },
+  ];
+  const orphanCodes = new Map();
+  for (const doc of documents) {
+    const stored = await doc.model.distinct('CustomerCode', { deletedAt: null });
+    orphanCodes.set(doc, (stored || []).filter((c) => !isMissingKey(c) && !listed.has(normaliseCode(c))));
+  }
+  const distinctOrphans = new Set([...orphanCodes.values()].flat().map(normaliseCode));
+  if (distinctOrphans.size === 0) return result;
+  if (distinctOrphans.size > MAX_ORPHAN_CODES) {
+    logger.warn({ orphanCodes: [...distinctOrphans] }, 'Too many unknown customer codes at once; skipping the orphaned-document sweep');
+    ctx.emitLog('warn', 'Too many unknown customer codes at once; skipping the orphaned-document sweep', { count: distinctOrphans.size });
+    return result;
+  }
+  logger.info({ orphanCodes: [...distinctOrphans] }, 'Sweeping documents of customers no longer in KashFlow');
+  for (const [doc, codesForDoc] of orphanCodes) {
+    for (const code of codesForDoc) {
+      const s = await sweepMissing({
+        model: doc.model, scope: { CustomerCode: code }, keyField: 'Number', seen: [], now, graceMs: doc.graceMs, allowEmpty: true,
+      });
+      result.orphansSoftDeleted[doc.key] += s.softDeleted;
+      if (s.pending > 0) {
+        ctx.emitLog('info', `${doc.key[0].toUpperCase()}${doc.key.slice(1)} of a deleted customer; awaiting grace window`, { customerCode: code, count: s.pending });
+      }
+    }
+  }
+  return result;
+}
+
 // ── Run ──────────────────────────────────────────────────────────────────────
 
 /** Authenticate and prove KashFlow connectivity by fetching one customer. */
@@ -934,11 +1019,12 @@ async function countStoredBankTransactions(mongoEnabled) {
 
 function buildCounts(lists, {
   bank, bankTransactionsStored, bankReconciliationsTotal, invoicesTotal, quotesTotal, purchasesTotal,
-  quotesSoftDeleted = 0, invoicesSoftDeleted = 0, projectsSoftDeleted = 0,
+  quotesSoftDeleted = 0, invoicesSoftDeleted = 0, projectsSoftDeleted = 0, customersSoftDeleted = 0,
 }) {
   const n = (key) => lists[key]?.length || 0;
   return {
     customers: n('customers'),
+    customersSoftDeleted,
     suppliers: n('suppliers'),
     projects: n('projects'),
     projectsSoftDeleted,
@@ -1030,6 +1116,9 @@ async function run(options = {}) {
     } = await runDetailPhases(ctx, kf, {
       mongoEnabled, lists, projectListing, customerCodes, supplierCodes,
     });
+    const deletedCustomers = mongoEnabled
+      ? await sweepDeletedCustomers(ctx, { customers: lists.customers })
+      : { customersSoftDeleted: 0, orphansSoftDeleted: { quotes: 0, invoices: 0, projects: 0 } };
     const bankTransactionsStored = await countStoredBankTransactions(mongoEnabled);
 
     progress.setItemTotal('nominals', (lists.nominals || []).length);
@@ -1038,7 +1127,10 @@ async function run(options = {}) {
     ctx.emitLog('info', 'Fetched transactional items', { invoices: invoicesTotal ?? 0, quotes: quotesTotal ?? 0, purchases: purchasesTotal ?? 0 });
     const counts = buildCounts(lists, {
       bank, bankTransactionsStored, bankReconciliationsTotal, invoicesTotal, quotesTotal, purchasesTotal,
-      quotesSoftDeleted, invoicesSoftDeleted, projectsSoftDeleted,
+      quotesSoftDeleted: quotesSoftDeleted + deletedCustomers.orphansSoftDeleted.quotes,
+      invoicesSoftDeleted: invoicesSoftDeleted + deletedCustomers.orphansSoftDeleted.invoices,
+      projectsSoftDeleted: projectsSoftDeleted + deletedCustomers.orphansSoftDeleted.projects,
+      customersSoftDeleted: deletedCustomers.customersSoftDeleted,
     });
     ctx.setStage('finalising');
     logger.info({ counts, durationMs: Date.now() - start }, 'KashFlow admin sync (Node.js) finished');
@@ -1087,5 +1179,6 @@ export {
   addMongoStats,
   carryForwardFailedCounts,
   listProjects,
+  sweepDeletedCustomers,
   CUSTOMER_PROJECTS_PERPAGE,
 };

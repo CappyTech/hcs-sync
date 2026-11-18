@@ -84,6 +84,7 @@ beforeEach(() => {
     vi.spyOn(model, 'find').mockReturnValue({ lean: async () => [] });
     vi.spyOn(model, 'updateMany').mockResolvedValue({ modifiedCount: 0 });
     vi.spyOn(model, 'countDocuments').mockResolvedValue(0);
+    vi.spyOn(model, 'distinct').mockResolvedValue([]);
   }
   // Pretend each confirmation pass soft-deletes one quote, so the tally is visible.
   Quote.updateMany.mockImplementation(async (filter, update) => {

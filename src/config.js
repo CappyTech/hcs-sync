@@ -37,6 +37,10 @@ const config = {
   // wrong for a few runs never hides one.
   invoiceSweepGraceMs: Number(process.env.INVOICE_SWEEP_GRACE_MS ?? 24 * 60 * 60 * 1000),
   projectSweepGraceMs: Number(process.env.PROJECT_SWEEP_GRACE_MS ?? 24 * 60 * 60 * 1000),
+
+  // The same for customers deleted from KashFlow. A deleted customer's quotes,
+  // invoices and projects are swept with their own windows above.
+  customerSweepGraceMs: Number(process.env.CUSTOMER_SWEEP_GRACE_MS ?? 24 * 60 * 60 * 1000),
 };
 
 export default config;
