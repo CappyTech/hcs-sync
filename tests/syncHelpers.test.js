@@ -563,6 +563,14 @@ describe('sweepMissing() for quotes scoped by CustomerCode', () => {
     model, scope: { CustomerCode: 'ACME' }, keyField: 'Id', seen, now, graceMs: GRACE, ...extra,
   });
 
+  it('never sweeps a row with no Id, which the listing cannot account for', async () => {
+    const model = fakeModel([quote(1), { ...quote(2), Id: undefined }]);
+    const res = await sweep(model, [1], t0, { graceMs: 0 });
+    expect(res).toEqual({ pending: 0, softDeleted: 0 });
+    expect(model.docs[1].missingSince ?? null).toBeNull();
+    expect(model.docs[1].deletedAt).toBeNull();
+  });
+
   it('first absence sets missingSince only', async () => {
     const model = fakeModel([quote(1), quote(1770)]);
     const res = await sweep(model, [1], t0);

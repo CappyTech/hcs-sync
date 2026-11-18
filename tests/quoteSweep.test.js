@@ -107,12 +107,12 @@ describe('run() quote sweep', () => {
     const c1 = quoteUpdates.filter((u) => u.filter.CustomerCode === 'C1');
     expect(c1.map((u) => u.filter)).toEqual([
       { CustomerCode: 'C1', Id: { $in: [301] }, missingSince: { $ne: null } },
-      { CustomerCode: 'C1', Id: { $nin: [301] }, deletedAt: null, missingSince: null },
-      { CustomerCode: 'C1', Id: { $nin: [301] }, deletedAt: null, missingSince: { $ne: null, $lte: expect.any(Date) } },
+      { CustomerCode: 'C1', Id: { $nin: [301], $ne: null }, deletedAt: null, missingSince: null },
+      { CustomerCode: 'C1', Id: { $nin: [301], $ne: null }, deletedAt: null, missingSince: { $ne: null, $lte: expect.any(Date) } },
     ]);
     // An empty listing has nothing to reset, only absences to record.
     const c2 = quoteUpdates.filter((u) => u.filter.CustomerCode === 'C2');
-    expect(c2.map((u) => u.filter.Id)).toEqual([{ $nin: [] }, { $nin: [] }]);
+    expect(c2.map((u) => u.filter.Id)).toEqual([{ $nin: [], $ne: null }, { $nin: [], $ne: null }]);
 
     // The default grace window is 2h.
     const confirm = c1[2];

@@ -173,7 +173,8 @@ async function sweepMissing({ model, scope, keyField = 'Id', seen, now, graceMs 
     throw new Error('sweepMissing requires a non-empty scope');
   }
 
-  const missing = { ...scope, [keyField]: { $nin: seen }, deletedAt: null };
+  // A row with no key can't be checked against the listing, so it's never swept.
+  const missing = { ...scope, [keyField]: { $nin: seen, $ne: null }, deletedAt: null };
 
   if (seen.length) {
     await model.updateMany(
