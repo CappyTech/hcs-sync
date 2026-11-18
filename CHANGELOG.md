@@ -2,6 +2,11 @@
 
 All notable changes to hcs-sync will be documented here. Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [0.17.1] - 2026-11-18
+
+### Fixed
+- **No quote has been synced since quotes were switched to `Id` keys (fd032fa, Feb 2026).** KashFlow's quote list rows and quote details carry no `Id`, and the document pipeline skipped every list row without one, so no quote detail was fetched or upserted (quotes 51450, 51685 and 51762 are in KashFlow but not in MongoDB), and the 0.17.0 sweep never ran because every customer had an "unkeyed" row. Quotes now fall back to `Number` (`fallbackKeyFields: ['Number']` on the quote `syncConfig`): a row with no `Id` is upserted on `{ Number }`. The stored quote docs have no `Id` either and were keyed on `Number` before fd032fa, so the upsert finds them and no duplicates are created. Every upsert clears the legacy `deletedAt`, so quotes wrongly soft-deleted while the sync was skipping them (e.g. quote 1) come back live once KashFlow lists them again. The missing-quote sweep checks `Number`, which every row has. A customer with a row that has no `Number` is still not swept. Invoices and purchases still key and fetch on `Id`. The manual pull (Pull & Sync) keys an `Id`-less quote on `Number` too instead of failing with `Response missing key field "Id"`.
+
 ## [0.17.0] - 2026-11-18
 
 ### Added

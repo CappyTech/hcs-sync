@@ -54,6 +54,14 @@ describe('pullSingleEntity', () => {
     expect(result).toMatchObject({ ok: true, action: 'created', entityType: 'invoice', entityId: 5, Id: 201, Number: 5 });
   });
 
+  it('keys a quote with no Id on Number, as KashFlow now returns them', async () => {
+    const { writes } = stubPull('quote', { Number: 51762, CustomerCode: 'PLUS01', GrossAmount: 3929.28 });
+    const result = await pullSingleEntity('quote', 51762);
+
+    expect(writes[0].filter).toEqual({ Number: 51762 });
+    expect(result).toMatchObject({ ok: true, action: 'created', Number: 51762 });
+  });
+
   it('reports an existing document as updated', async () => {
     stubPull('quote', { Id: 301, Number: 1 }, { existing: { Id: 301 } });
     expect((await pullSingleEntity('quote', 1)).action).toBe('updated');
@@ -121,8 +129,11 @@ describe('pullSingleEntity', () => {
     createClient.mockResolvedValue({ quotes: { get: async () => null } });
     await expect(pullSingleEntity('quote', 1)).rejects.toThrow('KashFlow returned no data for quote 1');
 
-    createClient.mockResolvedValue({ quotes: { get: async () => ({ Number: 1 }) } });
-    await expect(pullSingleEntity('quote', 1)).rejects.toThrow('Response missing key field "Id"');
+    createClient.mockResolvedValue({ invoices: { get: async () => ({ Number: 1 }) } });
+    await expect(pullSingleEntity('invoice', 1)).rejects.toThrow('Response missing key field "Id"');
+
+    createClient.mockResolvedValue({ quotes: { get: async () => ({ Name: 'neither' }) } });
+    await expect(pullSingleEntity('quote', 1)).rejects.toThrow('Response missing key field "Id" or "Number"');
   });
 
   it('refuses to run without MongoDB', async () => {

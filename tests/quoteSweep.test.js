@@ -6,6 +6,9 @@
  * in the mirror. These tests pin which customers the run sweeps, and — more
  * importantly — when it must not sweep at all. The sweep's own behaviour
  * (missingSince, grace window, reappearance) is covered in syncHelpers.test.js.
+ *
+ * KashFlow's quote list rows and details carry no Id (seen Nov 2026), so the
+ * fixtures here have none: quotes are keyed and swept on Number.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import mongoose from 'mongoose';
@@ -61,7 +64,7 @@ function fakeKashflow(quotesByCustomer) {
         if (v instanceof Error) throw v;
         return structuredClone(v || []);
       },
-      get: async (number) => ({ Id: 300 + number, Number: number }),
+      get: async (number) => ({ Number: number, CustomerCode: 'C1' }),
     },
   };
 }
@@ -95,9 +98,9 @@ const scopesSwept = () => [...new Set(quoteUpdates.map((u) => u.filter.CustomerC
 describe('run() quote sweep', () => {
   it('sweeps each customer whose listing succeeded, scoped to that customer', async () => {
     createClient.mockResolvedValue(fakeKashflow({
-      C1: [{ Id: 301, Number: 1 }],
+      C1: [{ Number: 1 }],
       C2: [], // the customer's only quote was converted: a genuine empty listing
-      C3: [{ Id: 302, Number: 2 }, { Number: 3 }], // a row without an Id: presence unknowable
+      C3: [{ Number: 2 }, { CustomerName: 'no number' }], // a row without a Number: presence unknowable
     }));
     const result = await run({ runId: 'r1' });
 
@@ -106,13 +109,13 @@ describe('run() quote sweep', () => {
 
     const c1 = quoteUpdates.filter((u) => u.filter.CustomerCode === 'C1');
     expect(c1.map((u) => u.filter)).toEqual([
-      { CustomerCode: 'C1', Id: { $in: [301] }, missingSince: { $ne: null } },
-      { CustomerCode: 'C1', Id: { $nin: [301], $ne: null }, deletedAt: null, missingSince: null },
-      { CustomerCode: 'C1', Id: { $nin: [301], $ne: null }, deletedAt: null, missingSince: { $ne: null, $lte: expect.any(Date) } },
+      { CustomerCode: 'C1', Number: { $in: [1] }, missingSince: { $ne: null } },
+      { CustomerCode: 'C1', Number: { $nin: [1], $ne: null }, deletedAt: null, missingSince: null },
+      { CustomerCode: 'C1', Number: { $nin: [1], $ne: null }, deletedAt: null, missingSince: { $ne: null, $lte: expect.any(Date) } },
     ]);
     // An empty listing has nothing to reset, only absences to record.
     const c2 = quoteUpdates.filter((u) => u.filter.CustomerCode === 'C2');
-    expect(c2.map((u) => u.filter.Id)).toEqual([{ $nin: [], $ne: null }, { $nin: [], $ne: null }]);
+    expect(c2.map((u) => u.filter.Number)).toEqual([{ $nin: [], $ne: null }, { $nin: [], $ne: null }]);
 
     // The default grace window is 2h.
     const confirm = c1[2];
@@ -125,9 +128,21 @@ describe('run() quote sweep', () => {
     expect(BankTransaction.updateMany).not.toHaveBeenCalled();
   });
 
+  it('writes Id-less quotes keyed on Number', async () => {
+    const writes = [];
+    Quote.collection.bulkWrite.mockImplementation(async (ops) => {
+      writes.push(...ops.map((op) => op.updateOne.filter));
+      return { upsertedCount: ops.length, matchedCount: 0, modifiedCount: 0, upsertedIds: {} };
+    });
+    createClient.mockResolvedValue(fakeKashflow({ C1: [{ Number: 1 }, { Number: 2 }] }));
+    const result = await run({ runId: 'r5' });
+    expect(writes.sort((a, b) => a.Number - b.Number)).toEqual([{ Number: 1 }, { Number: 2 }]);
+    expect(result.counts.quotes).toBe(2);
+  });
+
   it('a failed customer listing sweeps nothing', async () => {
     createClient.mockResolvedValue(fakeKashflow({
-      C1: [{ Id: 301, Number: 1 }],
+      C1: [{ Number: 1 }],
       C2: new Error('KashFlow 500'),
     }));
     await expect(run({ runId: 'r2' })).rejects.toThrow('KashFlow 500');
@@ -143,7 +158,7 @@ describe('run() quote sweep', () => {
 
   it('never sweeps when Mongo is disabled', async () => {
     isMongooseEnabled.mockReturnValue(false);
-    createClient.mockResolvedValue(fakeKashflow({ C1: [{ Id: 301, Number: 1 }] }));
+    createClient.mockResolvedValue(fakeKashflow({ C1: [{ Number: 1 }] }));
     const result = await run({ runId: 'r4' });
     expect(Quote.updateMany).not.toHaveBeenCalled();
     expect(result.counts.quotesSoftDeleted).toBe(0);

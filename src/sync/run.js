@@ -506,16 +506,24 @@ async function syncParentDetails(ctx, { mongoEnabled, keys, skippedTotal = keys.
 
 /**
  * Phase 1 of a document pipeline: list the documents under each parent
- * (customer or supplier) and collect the { id, number } pairs to fetch.
+ * (customer or supplier) and collect the { key, number } pairs to fetch.
  *
- * `seenByParent` maps each parent code to the Ids its listing returned. A
- * parent is recorded only once its listFn resolved, so a parent whose listing
- * failed is absent; one whose listing held a row without an Id maps to null,
- * because that row's presence cannot be checked. Both mean "do not sweep".
+ * Each row is keyed on the first of `keyFields` it carries (the model's
+ * keyField, then its fallbacks). KashFlow's quote list rows carry no Id at all,
+ * so quotes fall back to Number; invoices and purchases key on Id.
+ *
+ * `seenByParent` maps each parent code to the `seenKeyField` values its
+ * listing returned. A parent is recorded only once its listFn resolved, so a
+ * parent whose listing failed is absent; one whose listing held a row without
+ * a seenKeyField value maps to null, because that row's presence cannot be
+ * checked. Both mean "do not sweep".
  * (Today a failed listFn rejects the whole pool and the run, so the absent
  * case cannot reach a sweep at all — the map does not rely on that.)
  */
-async function listPerParent(ctx, { summaryKey, parent, parentCodes, parentsTotal, listFn }) {
+async function listPerParent(ctx, {
+  summaryKey, parent, parentCodes, parentsTotal, listFn,
+  keyFields = ['Id'], seenKeyField = keyFields[0],
+}) {
   const concurrency = config.concurrency || 4;
   ctx.setStage(`${summaryKey}:per-${parent}`);
   progress.setItemTotal(summaryKey, parentsTotal);
@@ -524,18 +532,21 @@ async function listPerParent(ctx, { summaryKey, parent, parentCodes, parentsTota
   logger.info({ [`${parent}s`]: parentCodes.length, concurrency }, message);
   ctx.emitLog('info', message, { [`${parent}s`]: parentCodes.length, concurrency });
 
-  let skippedMissingId = 0;
+  const pickKey = firstPresentKey(keyFields);
+  let skippedMissingKey = 0;
   const entries = [];
   const seenByParent = new Map();
   const perParent = await createPool(concurrency, summaryKey, async (code) => {
     const list = await listFn(code);
     let seen = [];
     for (const item of list || []) {
-      const id = pickId(item);
-      if (id == null) { skippedMissingId += 1; seen = null; continue; }
-      if (seen) seen.push(id);
-      const number = pickNumber(item);
-      if (number != null) entries.push({ id, number });
+      const row = item && typeof item === 'object' ? item : {};
+      if (isMissingKey(row[seenKeyField])) seen = null;
+      else if (seen) seen.push(row[seenKeyField]);
+      const key = pickKey(row);
+      if (!key) { skippedMissingKey += 1; continue; }
+      const number = pickNumber(row);
+      if (number != null) entries.push({ key, number });
     }
     seenByParent.set(code, seen);
     progress.incItem(summaryKey, 1);
@@ -543,7 +554,7 @@ async function listPerParent(ctx, { summaryKey, parent, parentCodes, parentsTota
   }, logProgressEvery(summaryKey, 10, `Per-${parent} list progress`))(parentCodes);
 
   const total = perParent.reduce((a, b) => a + (Number(b) || 0), 0);
-  return { total, entries, skippedMissingId, seenByParent };
+  return { total, entries, skippedMissingKey, seenByParent };
 }
 
 /**
@@ -562,7 +573,7 @@ async function listPerParent(ctx, { summaryKey, parent, parentCodes, parentsTota
  *
  * @returns {Promise<{pending: number, softDeleted: number, sweptParents: number}>}
  */
-async function sweepMissingPerParent(ctx, { model, noun, parent, scopeField, graceMs, listed }) {
+async function sweepMissingPerParent(ctx, { model, noun, parent, scopeField, keyField = 'Id', graceMs, listed }) {
   const { summaryKey } = describeEntity(model);
   const result = { pending: 0, softDeleted: 0, sweptParents: 0 };
   const { total, seenByParent } = listed;
@@ -577,7 +588,7 @@ async function sweepMissingPerParent(ctx, { model, noun, parent, scopeField, gra
   const skipped = seenByParent.size - parents.length;
   await createPool(config.concurrency || 4, `${summaryKey}:sweep`, async ([code, seen]) => {
     const swept = await sweepMissing({
-      model, scope: { [scopeField]: code }, keyField: 'Id', seen, now, graceMs, allowEmpty: true,
+      model, scope: { [scopeField]: code }, keyField, seen, now, graceMs, allowEmpty: true,
     });
     result.pending += swept.pending;
     result.softDeleted += swept.softDeleted;
@@ -603,9 +614,10 @@ async function sweepMissingPerParent(ctx, { model, noun, parent, scopeField, gra
  * A document pipeline (invoices, quotes, purchases): list per parent, then
  * fetch and upsert each document's detail.
  *
- * `sweep` ({ scopeField, graceMs }) additionally soft-deletes documents the
- * parent no longer lists — see sweepMissingPerParent. Its tallies are handed
- * to `onSwept`.
+ * `sweep` ({ scopeField, keyField, graceMs }) additionally soft-deletes
+ * documents the parent no longer lists — see sweepMissingPerParent. Its
+ * keyField (default: the model's keyField) must be one every list row
+ * carries. Its tallies are handed to `onSwept`.
  *
  * @returns {Promise<number>} documents listed
  */
@@ -613,10 +625,11 @@ async function syncDocuments(ctx, {
   mongoEnabled, model, noun,
   parent, parentCodes, parentsTotal, listFn, getFn, prepare, onListed, sweep, onSwept,
 }) {
-  const { summaryKey } = describeEntity(model);
-  const listed = await listPerParent(ctx, { summaryKey, parent, parentCodes, parentsTotal, listFn });
+  const { summaryKey, keyFields } = describeEntity(model);
+  const seenKeyField = sweep?.keyField ?? keyFields[0];
+  const listed = await listPerParent(ctx, { summaryKey, parent, parentCodes, parentsTotal, listFn, keyFields, seenKeyField });
   if (onListed) onListed(listed);
-  const { total, entries, skippedMissingId } = listed;
+  const { total, entries, skippedMissingKey } = listed;
 
   if (mongoEnabled && entries.length > 0) {
     const detailConcurrency = config.detailConcurrency || 8;
@@ -628,18 +641,22 @@ async function syncDocuments(ctx, {
       items: entries,
       concurrency: detailConcurrency,
       fetchDetail: ({ number }) => getFn(number),
-      resolveKey: (_full, { id }) => ({ keyField: 'Id', keyValue: id }),
+      resolveKey: (_full, { key }) => key,
       prepare,
       stampDetailSyncedAt: true,
-      logContext: ({ id, number }) => ({ [`${noun}Number`]: number, [`${noun}Id`]: id }),
+      logContext: ({ key, number }) => ({ [`${noun}Number`]: number, [`${noun}${key.keyField}`]: key.keyValue }),
       progressLogLabel: `${noun}Details`,
     });
   }
   if (mongoEnabled && sweep) {
-    const swept = await sweepMissingPerParent(ctx, { model, noun, parent, ...sweep, listed });
+    const swept = await sweepMissingPerParent(ctx, { model, noun, parent, ...sweep, keyField: seenKeyField, listed });
     if (onSwept) onSwept(swept);
   }
-  if (skippedMissingId > 0) logger.warn({ skippedMissingId }, `Skipped ${noun} upserts with missing Id`);
+  if (skippedMissingKey > 0) {
+    const message = `Skipped ${noun} upserts with no ${keyFields.join('/')}`;
+    logger.warn({ skippedMissingKey }, message);
+    ctx.emitLog('warn', message, { count: skippedMissingKey });
+  }
   logger.info({ [`${summaryKey}Count`]: total }, `Fetched ${summaryKey} (per ${parent})`);
   return total;
 }
@@ -667,12 +684,13 @@ async function syncPurchases(ctx, kf, { mongoEnabled, suppliers, supplierCodes }
     parent: 'supplier', parentCodes: supplierCodes, parentsTotal: (suppliers || []).length,
     listFn: (code) => kf.purchases.listAll({ perpage: 200, supplierCode: code }),
     getFn: (number) => kf.purchases.get(number),
-    onListed: ({ total: listed, entries, skippedMissingId }) => {
+    onListed: ({ total: listed, entries, skippedMissingKey }) => {
       listedWithNumber = entries.length;
-      logger.info({ purchasesListTotal: listed, purchasesWithNumber: entries.length, purchasesSkippedMissingId: skippedMissingId, purchasesMissingNumber: listed - entries.length - skippedMissingId }, 'Purchase Phase 1 summary');
-      ctx.emitLog('info', 'Purchase Phase 1 summary', { listed, withNumber: entries.length, missingId: skippedMissingId });
+      logger.info({ purchasesListTotal: listed, purchasesWithNumber: entries.length, purchasesSkippedMissingId: skippedMissingKey, purchasesMissingNumber: listed - entries.length - skippedMissingKey }, 'Purchase Phase 1 summary');
+      ctx.emitLog('info', 'Purchase Phase 1 summary', { listed, withNumber: entries.length, missingId: skippedMissingKey });
     },
-    prepare: (full, { id, number }) => {
+    prepare: (full, { key, number }) => {
+      const id = key.keyValue;
       if (!Array.isArray(full.LineItems) || full.LineItems.length === 0) {
         noLineItems += 1;
         const paymentLinesCount = Array.isArray(full.PaymentLines) ? full.PaymentLines.length : 0;
@@ -743,8 +761,9 @@ async function runDetailPhases(ctx, kf, { mongoEnabled, lists, customerCodes, su
       parent: 'customer', parentCodes: customerCodes, parentsTotal: (customers || []).length,
       listFn: (code) => kf.quotes.listAll({ perpage: 200, customerCode: code }),
       getFn: (number) => kf.quotes.get(number),
-      // KashFlow deletes a quote when it is converted to an invoice.
-      sweep: { scopeField: 'CustomerCode', graceMs: config.quoteSweepGraceMs },
+      // KashFlow deletes a quote when it is converted to an invoice. Quote
+      // list rows carry no Id, so the sweep checks Number, which they all have.
+      sweep: { scopeField: 'CustomerCode', keyField: 'Number', graceMs: config.quoteSweepGraceMs },
       onSwept: (swept) => { quotesSoftDeleted = swept.softDeleted; },
     }),
     syncPurchases(ctx, kf, { mongoEnabled, suppliers, supplierCodes }),
