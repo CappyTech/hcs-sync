@@ -3,7 +3,10 @@ import { sendDiscord } from '../util/discord.js';
 
 // Not collections — sub-tallies of bankTransactions and quotes, so they must not
 // be reported as resources in their own right.
-const NON_RESOURCE_COUNT_KEYS = new Set(['bankTransactionsSoftDeleted', 'bankTransactionsFetched', 'quotesSoftDeleted']);
+const NON_RESOURCE_COUNT_KEYS = new Set([
+  'bankTransactionsSoftDeleted', 'bankTransactionsFetched',
+  'quotesSoftDeleted', 'invoicesSoftDeleted', 'projectsSoftDeleted',
+]);
 
 /**
  * Summarise what a run actually changed.

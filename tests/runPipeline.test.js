@@ -163,12 +163,12 @@ beforeAll(async () => {
 describe('run() end to end', () => {
   it('reports counts, carrying the stored bank-transaction count', () => {
     expect(result.counts).toEqual({
-      customers: 3, suppliers: 1, projects: 3, nominals: 3, vatRates: 3, bankAccounts: 3,
+      customers: 3, suppliers: 1, projects: 3, projectsSoftDeleted: 0, nominals: 3, vatRates: 3, bankAccounts: 3,
       bankTransactions: 3, bankTransactionsFetched: 3, bankTransactionsSoftDeleted: 0,
       bankReconciliations: 1,
       journals: 1, products: 1, purchaseOrders: 1, quoteCategories: 1, purchaseOrderCategories: 1,
       currencies: 0, countries: 1, accountingPeriods: 1, vatReturns: 1,
-      invoices: 4, quotes: 3, quotesSoftDeleted: 0, purchases: 2,
+      invoices: 4, invoicesSoftDeleted: 0, quotes: 3, quotesSoftDeleted: 0, purchases: 2,
     });
   });
 
@@ -253,6 +253,28 @@ describe('run() end to end', () => {
       CustomerCode: 'C1', Number: { $nin: [51762, 51763], $ne: null }, deletedAt: null,
     }));
     expect(filters.some((f) => 'Id' in f)).toBe(false);
+  });
+
+  it('sweeps invoices by Number, only for customers whose rows all had a Number', () => {
+    const filters = sweeps.filter((u) => u.model === 'Invoice').map((u) => u.filter);
+    expect(filters.length).toBeGreaterThan(0);
+    // C2 lists an invoice with no Number, so it cannot be accounted for.
+    expect(filters.every((f) => f.CustomerCode === 'C1')).toBe(true);
+    expect(filters).toContainEqual(expect.objectContaining({
+      CustomerCode: 'C1', Number: { $nin: [1, 2, 3], $ne: null }, deletedAt: null,
+    }));
+  });
+
+  it('sweeps projects per customer from the per-customer listing', () => {
+    const filters = sweeps.filter((u) => u.model === 'Project').map((u) => u.filter);
+    expect(filters).toContainEqual(expect.objectContaining({
+      CustomerCode: 'C1', Number: { $nin: [100], $ne: null }, deletedAt: null,
+    }));
+    // C2 genuinely lists no projects, so its stored ones are all absent.
+    expect(filters).toContainEqual(expect.objectContaining({
+      CustomerCode: 'C2', Number: { $nin: [], $ne: null }, deletedAt: null,
+    }));
+    expect(filters.some((f) => !f.CustomerCode)).toBe(false);
   });
 
   it('backfills a missing purchase SupplierId from the suppliers list', () => {
