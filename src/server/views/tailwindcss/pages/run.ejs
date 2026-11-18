@@ -18,6 +18,64 @@
   <p class="text-sm mb-6 <%= run.status === 'interrupted' ? 'text-amber-800 dark:text-amber-300' : 'text-red-800 dark:text-red-300' %>"><%= run.summary.error %></p>
 <% } %>
 
+<%
+  // Runs recorded before summary.warnings existed: fall back to the raw fields.
+  const runSummary = run?.summary || {};
+  const runWarnings = runSummary.warnings || {};
+  const failedLists = runWarnings.failedFetches || runSummary.failedFetches || [];
+  const staleChecks = runWarnings.stale || runSummary.freshness?.stale || [];
+  const freshnessUnreadable = runWarnings.freshnessUnreadable || runSummary.freshness?.unreadable || [];
+  const bankNotFetched = runWarnings.bankAccountsNotFetched || [];
+  const freshnessChecks = runSummary.freshness?.checks || [];
+  const hasRunWarnings = failedLists.length || staleChecks.length || freshnessUnreadable.length || bankNotFetched.length;
+%>
+<% if (hasRunWarnings) { %>
+  <div class="p-4 mb-6 border border-amber-300 bg-amber-50 rounded-lg dark:bg-gray-800 dark:border-amber-700" data-testid="run-warnings">
+    <h2 class="text-lg font-semibold text-amber-800 dark:text-amber-300 mb-2">Completed with warnings</h2>
+    <ul class="list-disc pl-5 text-sm text-amber-900 dark:text-amber-200 space-y-1">
+      <% staleChecks.forEach((c) => { %>
+        <li><span class="font-semibold"><%= c.collection %></span> lag KashFlow: stored up to <%= c.highestStored ?? 'none' %>, KashFlow next is <%= c.nextAvailable %> (<%= c.gap %> behind).</li>
+      <% }) %>
+      <% if (failedLists.length) { %>
+        <li>Lists not fetched (treated as empty; counts carried forward): <span class="font-mono"><%= failedLists.join(', ') %></span></li>
+      <% } %>
+      <% if (bankNotFetched.length) { %>
+        <li>Bank accounts not fetched: <span class="font-mono"><%= bankNotFetched.join(', ') %></span></li>
+      <% } %>
+      <% freshnessUnreadable.forEach((u) => { %>
+        <li>Freshness not checked for <span class="font-semibold"><%= u.collection %></span>: <%= u.message %></li>
+      <% }) %>
+    </ul>
+  </div>
+<% } %>
+
+<% if (freshnessChecks.length) { %>
+  <h2 class="text-xl font-semibold mb-2">Freshness</h2>
+  <p class="text-xs text-gray-500 dark:text-gray-400 mb-2">Highest stored Number vs KashFlow's next free number. A gap above <%= runSummary.freshness.threshold %> is a warning.</p>
+  <div class="relative overflow-x-auto shadow-md sm:rounded-lg mb-6">
+    <table class="w-full text-sm text-left rtl:text-right text-gray-500 dark:text-gray-400">
+      <thead class="text-xs text-gray-700 uppercase bg-gray-50 dark:bg-gray-700 dark:text-gray-400">
+        <tr>
+          <th class="px-6 py-3">Collection</th>
+          <th class="px-6 py-3">Highest stored</th>
+          <th class="px-6 py-3">KashFlow next</th>
+          <th class="px-6 py-3">Gap</th>
+        </tr>
+      </thead>
+      <tbody>
+        <% freshnessChecks.forEach((c) => { %>
+          <tr class="bg-white border-b dark:bg-gray-800 dark:border-gray-700">
+            <th scope="row" class="px-6 py-4 font-medium text-gray-900 whitespace-nowrap dark:text-white"><%= c.collection %></th>
+            <td class="px-6 py-4"><%= c.highestStored ?? '—' %></td>
+            <td class="px-6 py-4"><%= c.nextAvailable %></td>
+            <td class="px-6 py-4 <%= c.stale ? 'text-red-700 dark:text-red-400 font-semibold' : '' %>"><%= c.gap %></td>
+          </tr>
+        <% }) %>
+      </tbody>
+    </table>
+  </div>
+<% } %>
+
 <h2 class="text-xl font-semibold mb-2">Log</h2>
 <% const allLogs = Array.isArray(run.logs) ? run.logs : []; %>
 <% const logLimitRaw = String((query && query.logLimit) || '200').trim().toLowerCase(); %>

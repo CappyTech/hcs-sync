@@ -109,14 +109,26 @@ function fakeKashflow() {
         2: { Id: 402, Number: 2, SupplierId: null, SupplierCode: 'S1', LineItems: [] },
       }),
     },
+    // Freshness yardstick. Quotes are current, invoices are 20 behind,
+    // projects come back as an object, and purchases cannot be read.
+    nextAvailable: {
+      get: async (kind) => {
+        if (kind === 'purchase') throw new Error('next purchase down');
+        return { quote: 51764, invoice: 23, project: { Number: 103 } }[kind];
+      },
+    },
   };
 }
+
+// Highest stored live Number per model, as the freshness check's findOne sees it.
+const STORED_HIGHEST = { Quote: 51763, Invoice: 2, Project: 102, Purchase: 2 };
 
 // ── Captured Mongo ───────────────────────────────────────────────────────────
 
 const writes = [];
 const auditEntries = [];
 const sweeps = [];
+const findOneFilters = [];
 
 function captureWrites() {
   for (const [name, model] of Object.entries(models)) {
@@ -142,6 +154,15 @@ function captureWrites() {
       return { modifiedCount: 0 };
     });
     vi.spyOn(model, 'countDocuments').mockResolvedValue(3);
+    vi.spyOn(model, 'findOne').mockImplementation((filter) => {
+      findOneFilters.push({ model: name, filter });
+      const chain = {
+        sort: () => chain,
+        select: () => chain,
+        lean: async () => (STORED_HIGHEST[name] == null ? null : { Number: STORED_HIGHEST[name] }),
+      };
+      return chain;
+    });
     // C9 is a customer KashFlow no longer lists: its quotes are orphaned.
     vi.spyOn(model, 'distinct').mockResolvedValue(name === 'Quote' ? ['C1', 'c1 ', 'C9', ''] : ['C1']);
   }
@@ -177,6 +198,22 @@ describe('run() end to end', () => {
   it('records the failed optional list and the unreadable bank account', () => {
     expect(result.failedFetches).toEqual(['currencies']);
     expect(result.partial.bankTransactions).toEqual([{ accountId: 1003, message: 'timeout' }]);
+  });
+
+  it('checks stored Numbers against KashFlow next free numbers, ignoring soft-deleted docs', () => {
+    expect(result.freshness.threshold).toBe(5);
+    expect(result.freshness.checks).toEqual([
+      { kind: 'quote', collection: 'quotes', highestStored: 51763, nextAvailable: 51764, gap: 0, stale: false },
+      { kind: 'invoice', collection: 'invoices', highestStored: 2, nextAvailable: 23, gap: 20, stale: true },
+      { kind: 'project', collection: 'projects', highestStored: 102, nextAvailable: 103, gap: 0, stale: false },
+    ]);
+    expect(result.freshness.stale.map((c) => c.collection)).toEqual(['invoices']);
+    // A failed nextAvailable read is recorded, not thrown.
+    expect(result.freshness.unreadable).toEqual([
+      { kind: 'purchase', collection: 'purchases', message: 'next purchase down' },
+    ]);
+    expect(findOneFilters.length).toBeGreaterThan(0);
+    expect(findOneFilters.every((f) => f.filter.deletedAt === null)).toBe(true);
   });
 
   it('writes customer and supplier details keyed on Id, skipping blank codes', () => {

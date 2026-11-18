@@ -63,19 +63,94 @@ export function formatRunChange(c) {
 }
 
 /**
+ * Everything about a resolved run that is not clean, in one place, so the run
+ * log, the stored run summary, the run page and Discord all agree on what a
+ * "completed with warnings" run is.
+ *
+ *  - bankAccountsNotFetched — per-account bank fetches that failed
+ *  - failedFetches          — best-effort lists (journals, products, …) whose
+ *                             fetch failed and were treated as empty
+ *  - stale                  — collections whose highest stored Number lags
+ *                             KashFlow's next free number (src/sync/freshness.js)
+ *  - freshnessUnreadable    — collections the freshness check could not check
+ */
+export function collectRunWarnings(result) {
+  const bankAccountsNotFetched = (result?.partial?.bankTransactions || []).map((f) => f.accountId);
+  const failedFetches = [...(result?.failedFetches || [])];
+  const stale = [...(result?.freshness?.stale || [])];
+  const freshnessUnreadable = [...(result?.freshness?.unreadable || [])];
+  return {
+    bankAccountsNotFetched,
+    failedFetches,
+    stale,
+    freshnessUnreadable,
+    hasWarnings: bankAccountsNotFetched.length > 0 || failedFetches.length > 0
+      || stale.length > 0 || freshnessUnreadable.length > 0,
+  };
+}
+
+/** One freshness check, e.g. "stored up to 41200, KashFlow next is 51764 (10563 behind)". */
+export function formatStale(c) {
+  return `stored up to ${c.highestStored ?? 'none'}, KashFlow next is ${c.nextAvailable} (${c.gap} behind)`;
+}
+
+/** Build the description and fields of the "Completed with warnings" embed. */
+function buildWarningAlert(warnings, deltaFields, requestedBy, partialBank) {
+  const lines = [];
+  const fields = [];
+  if (warnings.stale.length) {
+    lines.push(`Stored ${warnings.stale.map((c) => c.collection).join(', ')} lag KashFlow's numbering — `
+      + 'documents KashFlow has issued are not being saved.');
+    for (const c of warnings.stale) {
+      fields.push({ name: `Behind: ${c.collection}`, value: formatStale(c), inline: false });
+    }
+  }
+  if (warnings.failedFetches.length) {
+    lines.push('Some KashFlow lists could not be fetched; their stored data and counts are unchanged this run.');
+    fields.push({ name: 'Lists not fetched', value: warnings.failedFetches.join(', ').slice(0, 1000), inline: false });
+  }
+  if (warnings.bankAccountsNotFetched.length) {
+    // Say plainly what did NOT happen, because the obvious reading of a bank
+    // alert is that rows vanished. They cannot have: the soft-delete sweep
+    // only runs after a successful, non-empty fetch, so a skipped account
+    // leaves its stored ledger exactly as it was.
+    lines.push(`${warnings.bankAccountsNotFetched.length} bank account(s) could not be read from KashFlow. `
+      + 'Their stored transactions are unchanged — nothing was deleted. '
+      + 'The next successful run will pick them up.');
+    fields.push({ name: 'Bank accounts not fetched', value: warnings.bankAccountsNotFetched.join(', '), inline: true });
+    fields.push({ name: 'Reason', value: String(partialBank[0]?.message || 'unknown').slice(0, 200), inline: true });
+  }
+  if (warnings.freshnessUnreadable.length) {
+    lines.push('The freshness check could not run for some collections.');
+    fields.push({
+      name: 'Freshness not checked',
+      value: warnings.freshnessUnreadable.map((u) => `${u.collection}: ${u.message}`).join('\n').slice(0, 1000),
+      inline: false,
+    });
+  }
+  // Discord caps an embed at 25 fields: warnings first, then as many data
+  // changes as fit, leaving one for the trigger.
+  const room = Math.max(0, 24 - fields.length);
+  const all = [...fields, ...deltaFields.slice(0, room)];
+  all.push({ name: 'Trigger', value: String(requestedBy || 'unknown'), inline: true });
+  return { description: lines.join('\n\n'), fields: all };
+}
+
+/**
  * Post the Discord alert for a successful run.
  */
 export function notifyRunCompleted({ result, prevCounts, counts, requestedBy }) {
-  // Discord alert — only for runs that actually changed data; silent on no-op
-  // success to keep a frequent cron quiet. Failures always alert (see the
-  // notifyRunFailed).
+  // Discord alert — for runs that changed data or finished with warnings;
+  // silent on a clean no-op success to keep a frequent cron quiet. Failures
+  // always alert (see notifyRunFailed).
   //
-  // A run that skipped an account is neither: nothing changed, but the run
-  // is not clean either. Before this, a per-account bank fetch failure was
-  // visible ONLY as a warn line in the container log — the run resolved,
-  // Discord said "Completed", and the only outward sign was a nonsense
-  // count delta on a green embed. It now alerts in its own right, in red.
+  // A run with warnings is neither a failure nor a no-op: a skipped bank
+  // account, a best-effort list that failed, or stored documents lagging
+  // KashFlow's numbering. Each was visible only in the container log, or not
+  // at all — nine months of unsaved quotes reported plain success — so they
+  // now alert in their own right, in red.
   const partialBank = result?.partial?.bankTransactions || [];
+  const warnings = collectRunWarnings(result);
   try {
     const changed = summariseRunChanges(prevCounts, counts || {}, result?.mongo);
     const deltaFields = changed.map((c) => ({
@@ -87,30 +162,12 @@ export function notifyRunCompleted({ result, prevCounts, counts, requestedBy }) 
     const upsertTotal = changed.reduce((a, c) => a + c.upserted, 0);
     const modifiedTotal = changed.reduce((a, c) => a + c.modified, 0);
 
-    if (partialBank.length > 0) {
-      const accounts = partialBank.map((f) => f.accountId).join(', ');
-      const fields = deltaFields.slice(0, 20);
-      fields.push({
-        name: 'Bank accounts not fetched',
-        value: accounts,
-        inline: true,
-      });
-      fields.push({
-        name: 'Reason',
-        value: String(partialBank[0]?.message || 'unknown').slice(0, 200),
-        inline: true,
-      });
-      fields.push({ name: 'Trigger', value: String(requestedBy || 'unknown'), inline: true });
+    if (warnings.hasWarnings) {
+      const { description, fields } = buildWarningAlert(warnings, deltaFields, requestedBy, partialBank);
       sendDiscord({
         ok: false,
         title: 'Heron CS | Sync — Completed with warnings',
-        // Say plainly what did NOT happen, because the obvious reading of a
-        // bank alert is that rows vanished. They cannot have: the
-        // soft-delete sweep only runs after a successful, non-empty fetch,
-        // so a skipped account leaves its stored ledger exactly as it was.
-        description: `${partialBank.length} bank account(s) could not be read from KashFlow. `
-          + 'Their stored transactions are unchanged — nothing was deleted. '
-          + 'The next successful run will pick them up.',
+        description,
         fields,
       }).catch(() => {});
     } else if (deltaFields.length > 0) {

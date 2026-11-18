@@ -8,6 +8,7 @@ import { ensureKashflowIndexes } from '../db/mongo.js';
 import { Customer, Supplier, Invoice, Quote, Purchase, Project, Nominal, VATRate, BankAccount, BankTransaction, BankReconciliation } from '../server/models/kashflow.js';
 import { buildUpsertUpdate, applyDetailSyncedAt, createBulkUpserter, sweepMissing, sweepMissingBankTransactions } from './upsert.js';
 import { describeEntity, LIST_ONLY_MODELS } from './entities.js';
+import { checkFreshness } from './freshness.js';
 
 function createPool(limit, label, handler, onProgress) {
   return async (items) => {
@@ -1186,6 +1187,22 @@ async function run(options = {}) {
       purchasesSoftDeleted: purchasesSoftDeleted + deletedSuppliers.orphansSoftDeleted.purchases,
       suppliersSoftDeleted: deletedSuppliers.suppliersSoftDeleted,
     });
+    // Runs after every write, so it sees what this run stored. Skipped in
+    // fetch-only mode: with nothing stored there is nothing to compare.
+    let freshness = null;
+    if (mongoEnabled) {
+      ctx.setStage('freshness');
+      try {
+        freshness = await checkFreshness(ctx, kf, {
+          models: { Quote, Invoice, Project, Purchase },
+          threshold: config.freshnessGapThreshold,
+        });
+      } catch (e) {
+        // checkFreshness never throws by design; belt and braces, as a
+        // monitoring check must not be the thing that fails a run.
+        ctx.emitLog('warn', 'Freshness check failed', { message: e?.message || null });
+      }
+    }
     ctx.setStage('finalising');
     logger.info({ counts, durationMs: Date.now() - start }, 'KashFlow admin sync (Node.js) finished');
     ctx.emitLog('success', 'Sync finished', { counts, durationMs: Date.now() - start });
@@ -1204,6 +1221,10 @@ async function run(options = {}) {
       // drop to zero. Includes bankTransactions/bankReconciliations when the
       // bankAccounts fetch they depend on failed.
       failedFetches: [...failedFetches],
+      // Stored highest Number vs KashFlow's next free number per collection
+      // (src/sync/freshness.js); null in fetch-only mode. Non-empty `stale` or
+      // `unreadable` makes the run "completed with warnings".
+      freshness,
     };
   } catch (err) {
     ctx.emitLog('error', 'Sync runner failed', { message: err?.message || null, status: err?.response?.status || null });

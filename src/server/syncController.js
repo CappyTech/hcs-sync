@@ -16,7 +16,7 @@ import settingsStore from './settingsStore.js';
 import { getMongoDb, isMongooseEnabled } from '../db/mongoose.js';
 import { runDedup } from '../db/dedup.js';
 import cronParser from 'cron-parser';
-import { summariseRunChanges, notifyRunCompleted, notifyRunFailed } from './notify.js';
+import { summariseRunChanges, notifyRunCompleted, notifyRunFailed, collectRunWarnings } from './notify.js';
 
 export let lastRun = null;
 export let isRunning = false;
@@ -210,17 +210,26 @@ export async function triggerSync({ requestedBy }) {
         });
       } catch {}
 
+      // One definition of "completed with warnings", shared with Discord and
+      // the run page (which reads summary.warnings).
+      const { hasWarnings, ...warnings } = collectRunWarnings(result);
       runStore.finishRun(runId, {
         counts: lastCounts,
         mongo: result?.mongo || null,
         mongoUpserts: result?.mongoUpserts || null,
+        failedFetches: result?.failedFetches || [],
+        freshness: result?.freshness || null,
+        warnings: hasWarnings ? warnings : null,
         error: null,
       });
 
-      if (result?.partial?.bankTransactions?.length) {
+      if (hasWarnings) {
         recordRunLog('warn', 'Sync completed with warnings', {
           counts: lastCounts,
-          bankAccountsNotFetched: result.partial.bankTransactions.map((f) => f.accountId),
+          bankAccountsNotFetched: warnings.bankAccountsNotFetched,
+          failedFetches: warnings.failedFetches,
+          staleCollections: warnings.stale.map((c) => c.collection),
+          freshnessUnreadable: warnings.freshnessUnreadable.map((u) => u.collection),
         });
       } else {
         recordRunLog('success', 'Sync completed successfully', { counts: lastCounts });
