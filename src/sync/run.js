@@ -181,31 +181,53 @@ function pickIdOrCode(row) {
 
 // ── List phase ───────────────────────────────────────────────────────────────
 
-// GET /projects returns a bare array and ignores `page` (asking for page 2
-// returns page 1 again), so listAll can never get past the first page. It
-// does honour `perpage`, so projects are asked for in one large page.
-const PROJECTS_PERPAGE = 5000;
+// GET /customers/{code}/projects allows at most 100 per page.
+const CUSTOMER_PROJECTS_PERPAGE = 100;
 
 /**
- * List projects in one large page. If KashFlow rejects the large perpage, fall
- * back to the old 200-row request rather than failing the run; a projects list
- * stuck at exactly `perpage` rows is logged, since it means rows were left out.
+ * List every project.
+ *
+ * GET /projects is a bare array capped at 200 rows: it ignores `page` (page 2
+ * repeats page 1) and returns 200 rows however large `perpage` is (0.17.2 and
+ * 0.17.3 both still listed exactly 200, newest first, against about 1,500 jobs
+ * in KashFlow). GET /customers/{code}/projects is properly paginated, so every
+ * customer's projects are listed there and merged with the GET /projects page,
+ * which still catches a recent project with no customer. Rows are de-duplicated
+ * on Number, the per-customer row winning.
+ *
+ * A customer the per-customer endpoint 404s is taken as having no projects.
+ * Any other per-customer failure drops back to the GET /projects page alone
+ * (the pre-0.17.4 list) with a warning, rather than failing the run. Nothing
+ * sweeps projects yet, so a short list costs nothing. A project sweep would
+ * need this to fail instead, as the quote and bank sweeps' listings do.
  */
-async function listProjects(kf) {
-  let projects;
-  let perpage = PROJECTS_PERPAGE;
-  try {
-    projects = await kf.projects.listAll({ perpage });
-  } catch (err) {
-    logger.warn({ err: err.message, perpage }, 'Projects list rejected the large page; retrying with perpage 200');
-    perpage = 200;
-    projects = await kf.projects.listAll({ perpage });
+async function listProjects(kf, customers) {
+  const codes = [...new Set((customers || []).map(pickCode).filter((c) => !isMissingKey(c)))];
+  const listForCustomer = (code) =>
+    kf.projects.listAllForCustomer(code, { perpage: CUSTOMER_PROJECTS_PERPAGE })
+      .catch((err) => { if (err?.response?.status === 404) return []; throw err; });
+  const [recent, perCustomer] = await Promise.all([
+    kf.projects.listAll({ perpage: 200 }),
+    createPool(config.concurrency || 4, 'projects:per-customer', listForCustomer)(codes)
+      .catch((err) => {
+        logger.warn({ err: err.message }, 'Per-customer projects listing failed; using GET /projects (200 rows) alone');
+        return [];
+      }),
+  ]);
+
+  const byNumber = new Map();
+  const unnumbered = [];
+  for (const row of [...perCustomer.flat(), ...(recent || [])]) {
+    if (!row || typeof row !== 'object') continue;
+    const number = pickNumber(row);
+    if (number == null) { unnumbered.push(row); continue; }
+    if (!byNumber.has(number)) byNumber.set(number, row);
   }
-  const count = projects?.length || 0;
-  logger.info({ projectsListed: count, perpage }, 'Fetched projects list');
-  if (count > 0 && count % 200 === 0) {
-    logger.warn({ projectsListed: count, perpage }, 'Projects list is a round multiple of 200; KashFlow may be capping the page');
-  }
+  const projects = [...byNumber.values(), ...unnumbered];
+  const fromCustomers = perCustomer.reduce((n, rows) => n + (rows?.length || 0), 0);
+  logger.info({
+    projectsListed: projects.length, fromCustomers, fromProjectsList: recent?.length || 0, customers: codes.length,
+  }, 'Fetched projects list');
   return projects;
 }
 
@@ -220,6 +242,8 @@ async function listProjects(kf) {
 async function fetchLists(kf, failedFetches) {
   const listOrEmpty = (key, label, promise) =>
     promise.catch((e) => { logger.warn({ err: e.message }, `Failed to fetch ${label}`); failedFetches.add(key); return []; });
+  // Projects are listed per customer, so they wait on the customers list.
+  const customersListed = kf.customers.listAll({ perpage: 200 });
 
   const [
     customers, suppliers, projects, nominals, vatRates, bankAccounts,
@@ -227,9 +251,9 @@ async function fetchLists(kf, failedFetches) {
     purchaseOrderCategories, currencies, countries,
     accountingPeriods, vatReturns,
   ] = await Promise.all([
-    kf.customers.listAll({ perpage: 200 }),
+    customersListed,
     kf.suppliers.listAll({ perpage: 200 }),
-    listProjects(kf),
+    customersListed.then((rows) => listProjects(kf, rows)),
     kf.nominals.list(),
     listOrEmpty('vatRates', 'VAT rates', kf.vatRates.list()),
     listOrEmpty('bankAccounts', 'bank accounts', kf.bankAccounts.list()),
@@ -1013,5 +1037,5 @@ export {
   addMongoStats,
   carryForwardFailedCounts,
   listProjects,
-  PROJECTS_PERPAGE,
+  CUSTOMER_PROJECTS_PERPAGE,
 };

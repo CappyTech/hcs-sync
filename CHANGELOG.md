@@ -2,6 +2,11 @@
 
 All notable changes to hcs-sync will be documented here. Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [0.17.4] - 2026-11-18
+
+### Fixed
+- **Projects are listed per customer, so all of them sync.** The first 0.17.3 run still listed exactly 200 projects: `GET /projects` returns at most 200 rows however large `perpage` is, and ignores `page`. Projects are now listed from `GET /customers/{code}/projects` for every customer. That endpoint is paginated (`{ MetaData, Data }`, up to 100 per page). The `GET /projects` page is merged in, which keeps a recent project with no customer, and rows are de-duplicated on `Number`. A customer the endpoint 404s counts as having no projects. Any other failure falls back to the `GET /projects` page alone with a warning, because nothing sweeps projects yet. The run log records how many projects came from each source.
+
 ## [0.17.3] - 2026-11-18
 
 ### Fixed

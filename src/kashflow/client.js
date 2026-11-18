@@ -253,7 +253,13 @@ async function createClient() {
     suppliers: documentResource(http, listers, '/suppliers', { encodeKey: true }),
     invoices: documentResource(http, listers, '/invoices'),
     purchases: documentResource(http, listers, '/purchases'),
-    projects: documentResource(http, listers, '/projects'),
+    projects: {
+      ...documentResource(http, listers, '/projects'),
+      // GET /customers/{code}/projects: paginated ({ MetaData, Data }, page,
+      // perpage up to 100), unlike GET /projects, which caps at 200 rows.
+      listAllForCustomer: (code, params = {}) =>
+        listAllInternal(`/customers/${encodeURIComponent(code)}/projects`, params),
+    },
     quotes: documentResource(http, listers, '/quotes'),
     nominals: {
       list: () => http.get('/nominals').then((r) => normalizeList(r.data)),

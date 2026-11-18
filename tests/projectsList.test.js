@@ -1,11 +1,11 @@
 /**
- * The projects list is fetched in one large page.
+ * Projects are listed per customer.
  *
- * KashFlow's GET /projects returns a bare array and ignores `page` (page 2
- * comes back identical to page 1), so paging can never get past the first
- * page; it does honour `perpage`. Live shape capture, 18/11/2026: the default
- * page was 50 rows, newest first, and perpage=200 gave exactly 200 every run
- * against roughly 1,500 jobs in KashFlow.
+ * KashFlow's GET /projects is a bare array capped at 200 rows: it ignores
+ * `page` and returns 200 rows however large `perpage` is (0.17.2 and 0.17.3
+ * still listed exactly 200 against about 1,500 jobs). GET
+ * /customers/{code}/projects is paginated, so listProjects walks every
+ * customer and merges in the GET /projects page for projects with no customer.
  */
 import { describe, it, expect, vi } from 'vitest';
 
@@ -21,41 +21,69 @@ vi.mock('../src/db/mongoose.js', () => ({ isMongooseEnabled: vi.fn(() => false),
 vi.mock('../src/db/mongo.js', () => ({ ensureKashflowIndexes: vi.fn() }));
 vi.mock('dotenv', () => ({ default: { config: () => ({}) }, config: () => ({}) }));
 
-import logger from '../src/util/logger.js';
-import { listProjects, PROJECTS_PERPAGE } from '../src/sync/run.js';
+import { listProjects, CUSTOMER_PROJECTS_PERPAGE } from '../src/sync/run.js';
 
-const projects = (n) => Array.from({ length: n }, (_, i) => ({ Number: 41300 - i }));
+const range = (from, n, extra = {}) => Array.from({ length: n }, (_, i) => ({ Number: from + i, ...extra }));
+
+function fakeKf({ recent = [], byCustomer = {} } = {}) {
+  return {
+    projects: {
+      listAll: vi.fn(async () => structuredClone(recent)),
+      listAllForCustomer: vi.fn(async (code) => {
+        const v = byCustomer[code];
+        if (v instanceof Error) throw v;
+        return structuredClone(v || []);
+      }),
+    },
+  };
+}
 
 describe('listProjects()', () => {
-  it('asks for every project in one large page', async () => {
-    const listAll = vi.fn(async () => projects(1543));
-    const result = await listProjects({ projects: { listAll } });
-    expect(result).toHaveLength(1543);
-    expect(listAll).toHaveBeenCalledTimes(1);
-    expect(listAll).toHaveBeenCalledWith({ perpage: PROJECTS_PERPAGE });
-    expect(PROJECTS_PERPAGE).toBeGreaterThan(1500);
+  it('lists every customer\'s projects, past the 200-row cap of GET /projects', async () => {
+    const kf = fakeKf({
+      recent: range(41101, 200, { CustomerCode: 'PLUS01' }), // the newest 200
+      byCustomer: { PLUS01: range(40000, 1301, { CustomerCode: 'PLUS01' }), KNOW01: range(39000, 40, { CustomerCode: 'KNOW01' }) },
+    });
+    const result = await listProjects(kf, [{ Code: 'PLUS01' }, { Code: 'KNOW01' }]);
+
+    expect(result).toHaveLength(1341);
+    expect(new Set(result.map((p) => p.Number)).size).toBe(1341);
+    expect(kf.projects.listAllForCustomer).toHaveBeenCalledWith('PLUS01', { perpage: CUSTOMER_PROJECTS_PERPAGE });
+    expect(CUSTOMER_PROJECTS_PERPAGE).toBeLessThanOrEqual(100);
   });
 
-  it('falls back to 200 per page when KashFlow rejects the large page', async () => {
-    const listAll = vi.fn()
-      .mockRejectedValueOnce(new Error('400 perpage out of range'))
-      .mockResolvedValueOnce(projects(200));
-    const result = await listProjects({ projects: { listAll } });
+  it('keeps a project from GET /projects that no customer lists', async () => {
+    const kf = fakeKf({
+      recent: [{ Number: 41300, CustomerCode: '' }, { Number: 41299, CustomerCode: 'C1' }],
+      byCustomer: { C1: [{ Number: 41299, CustomerCode: 'C1', Name: 'per-customer row' }] },
+    });
+    const result = await listProjects(kf, [{ Code: 'C1' }]);
+    expect(result.map((p) => p.Number).sort()).toEqual([41299, 41300]);
+    expect(result.find((p) => p.Number === 41299).Name).toBe('per-customer row');
+  });
+
+  it('skips blank and repeated customer codes', async () => {
+    const kf = fakeKf();
+    await listProjects(kf, [{ Code: 'C1' }, { Code: '' }, { Code: 'C1' }, {}]);
+    expect(kf.projects.listAllForCustomer.mock.calls.map(([code]) => code)).toEqual(['C1']);
+  });
+
+  it('takes a customer the endpoint 404s as having no projects', async () => {
+    const notFound = Object.assign(new Error('Not Found'), { response: { status: 404 } });
+    const kf = fakeKf({ recent: [{ Number: 9 }], byCustomer: { C1: [{ Number: 1 }], C2: notFound } });
+    const result = await listProjects(kf, [{ Code: 'C1' }, { Code: 'C2' }]);
+    expect(result.map((p) => p.Number).sort()).toEqual([1, 9]);
+  });
+
+  it('falls back to GET /projects alone when a customer listing fails otherwise', async () => {
+    const kf = fakeKf({ recent: range(41101, 200), byCustomer: { C1: [{ Number: 1 }], C2: new Error('KashFlow 500') } });
+    const result = await listProjects(kf, [{ Code: 'C1' }, { Code: 'C2' }]);
     expect(result).toHaveLength(200);
-    expect(listAll.mock.calls.map(([p]) => p.perpage)).toEqual([PROJECTS_PERPAGE, 200]);
   });
 
-  it('fails the run when the fallback fails too, as a required list', async () => {
-    const listAll = vi.fn().mockRejectedValue(new Error('KashFlow 500'));
-    await expect(listProjects({ projects: { listAll } })).rejects.toThrow('KashFlow 500');
-  });
-
-  it('warns when the list is a round 200s, the sign of a capped page', async () => {
-    logger.warn.mockClear();
-    await listProjects({ projects: { listAll: async () => projects(200) } });
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.objectContaining({ projectsListed: 200 }),
-      expect.stringMatching(/may be capping/),
-    );
+  it('fails when GET /projects itself fails, as a required list', async () => {
+    const kf = fakeKf();
+    kf.projects.listAll.mockRejectedValue(new Error('KashFlow 503'));
+    await expect(listProjects(kf, [{ Code: 'C1' }])).rejects.toThrow('KashFlow 503');
   });
 });

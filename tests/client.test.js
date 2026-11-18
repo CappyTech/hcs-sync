@@ -276,6 +276,20 @@ describe('src/kashflow/client.js', () => {
       await expect(kf.projects.listAll({ perpage: 200 })).rejects.toThrow('KashFlow 500');
     });
 
+    it('lists a customer\'s projects from the paginated per-customer endpoint', async () => {
+      mockHttp.get
+        .mockResolvedValueOnce({ data: { Data: rows(1, 100), MetaData: { NextPageUrl: null, TotalRecords: 130 } } })
+        .mockResolvedValueOnce({ data: { Data: rows(101, 30), MetaData: { NextPageUrl: null, TotalRecords: 130 } } });
+
+      const kf = await createClient();
+      const result = await kf.projects.listAllForCustomer('PLUS 01', { perpage: 100 });
+      expect(result).toHaveLength(130);
+      expect(mockHttp.get.mock.calls.map(([url, opts]) => [url, opts.params])).toEqual([
+        ['/customers/PLUS%2001/projects', { perpage: 100 }],
+        ['/customers/PLUS%2001/projects', { perpage: 100, page: 2 }],
+      ]);
+    });
+
     it('refuses an endless listing', async () => {
       let n = 0;
       mockHttp.get.mockImplementation(async () => ({ data: rows((n++) * 2, 2) }));
