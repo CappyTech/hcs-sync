@@ -181,6 +181,34 @@ function pickIdOrCode(row) {
 
 // ── List phase ───────────────────────────────────────────────────────────────
 
+// GET /projects returns a bare array and ignores `page` (asking for page 2
+// returns page 1 again), so listAll can never get past the first page. It
+// does honour `perpage`, so projects are asked for in one large page.
+const PROJECTS_PERPAGE = 5000;
+
+/**
+ * List projects in one large page. If KashFlow rejects the large perpage, fall
+ * back to the old 200-row request rather than failing the run; a projects list
+ * stuck at exactly `perpage` rows is logged, since it means rows were left out.
+ */
+async function listProjects(kf) {
+  let projects;
+  let perpage = PROJECTS_PERPAGE;
+  try {
+    projects = await kf.projects.listAll({ perpage });
+  } catch (err) {
+    logger.warn({ err: err.message, perpage }, 'Projects list rejected the large page; retrying with perpage 200');
+    perpage = 200;
+    projects = await kf.projects.listAll({ perpage });
+  }
+  const count = projects?.length || 0;
+  logger.info({ projectsListed: count, perpage }, 'Fetched projects list');
+  if (count > 0 && count % 200 === 0) {
+    logger.warn({ projectsListed: count, perpage }, 'Projects list is a round multiple of 200; KashFlow may be capping the page');
+  }
+  return projects;
+}
+
 /**
  * Fetch every list endpoint in parallel.
  *
@@ -201,7 +229,7 @@ async function fetchLists(kf, failedFetches) {
   ] = await Promise.all([
     kf.customers.listAll({ perpage: 200 }),
     kf.suppliers.listAll({ perpage: 200 }),
-    kf.projects.listAll({ perpage: 200 }),
+    listProjects(kf),
     kf.nominals.list(),
     listOrEmpty('vatRates', 'VAT rates', kf.vatRates.list()),
     listOrEmpty('bankAccounts', 'bank accounts', kf.bankAccounts.list()),
@@ -984,4 +1012,6 @@ export {
   createSkipCounter,
   addMongoStats,
   carryForwardFailedCounts,
+  listProjects,
+  PROJECTS_PERPAGE,
 };

@@ -2,6 +2,11 @@
 
 All notable changes to hcs-sync will be documented here. Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [0.17.3] - 2026-11-18
+
+### Fixed
+- **The projects list was still exactly 200 after 0.17.2.** A live shape capture showed `GET /projects` returns a bare array that honours `perpage` (50 rows by default, newest first) but ignores `page`. Page 2 came back the same as page 1, so 0.17.2's repeated-page check ended the listing at 200. Projects are now requested in one page of up to 5,000 rows, against about 1,500 jobs in KashFlow. If KashFlow rejects that page size, the run retries with 200 instead of failing. The run log records how many projects were listed, and warns when the count is a round multiple of 200, which would mean KashFlow is capping the page.
+
 ## [0.17.2] - 2026-11-18
 
 ### Fixed
