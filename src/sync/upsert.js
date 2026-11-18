@@ -161,16 +161,26 @@ function buildUpsertUpdate({ keyField, keyValue, payload, runId, model, protecte
  * @param {Date}   opts.now
  * @param {number} [opts.graceMs]
  * @param {boolean} [opts.allowEmpty]
+ * @param {boolean} [opts.wholeCollection]  sweep the whole collection rather
+ *   than a scope; for a listing that returns every row (the customers list).
+ *   Requires `scope` to be absent and refuses an empty `seen` regardless of
+ *   allowEmpty — an empty full listing is always a failure.
  * @returns {Promise<{pending: number, softDeleted: number}>}
  */
-async function sweepMissing({ model, scope, keyField = 'Id', seen, now, graceMs = 0, allowEmpty = false }) {
+async function sweepMissing({ model, scope, keyField = 'Id', seen, now, graceMs = 0, allowEmpty = false, wholeCollection = false }) {
   const result = { pending: 0, softDeleted: 0 };
   if (!Array.isArray(seen)) return result;
-  if (!seen.length && !allowEmpty) return result;
-  // An empty or null-valued scope would widen the sweep to the whole collection.
-  if (!scope || typeof scope !== 'object' || Object.keys(scope).length === 0
-      || Object.values(scope).some((v) => v == null || v === '')) {
-    throw new Error('sweepMissing requires a non-empty scope');
+  if (wholeCollection) {
+    if (scope) throw new Error('sweepMissing: wholeCollection takes no scope');
+    if (!seen.length) return result;
+    scope = {};
+  } else {
+    if (!seen.length && !allowEmpty) return result;
+    // An empty or null-valued scope would widen the sweep to the whole collection.
+    if (!scope || typeof scope !== 'object' || Object.keys(scope).length === 0
+        || Object.values(scope).some((v) => v == null || v === '')) {
+      throw new Error('sweepMissing requires a non-empty scope');
+    }
   }
 
   // A row with no key can't be checked against the listing, so it's never swept.

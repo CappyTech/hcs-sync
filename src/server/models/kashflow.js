@@ -44,7 +44,7 @@ const syncOnlyFields = {
 export const SYNC_INTERNAL_FIELDS = new Set([
   '_id', '__v', 'data', 'uuid',
   'syncedAt', 'detailSyncedAt', 'createdAt', 'updatedAt', 'createdByRunId',
-  // missingSince — the bank/quote/invoice/project soft-delete grace timer (see run.js). Sync-owned and
+  // missingSince — the bank/quote/invoice/project/customer soft-delete grace timer (see run.js). Sync-owned and
   // never returned by KashFlow, so it must not reach the payload or the audit
   // diff, which walks the union of stored and incoming keys and would otherwise
   // report it 'removed' on every run.
@@ -63,7 +63,11 @@ function buildSchema(entity, extraFields = {}, schemaOpts = {}) {
 
 // ── Customer ────────────────────────────────────────────────────────────
 
-const CustomerSchema = buildSchema(schemas.customer);
+// missingSince: the soft-delete grace timer for customers KashFlow no longer
+// lists, as for quotes below.
+const CustomerSchema = buildSchema(schemas.customer, {
+  missingSince: { type: Date, default: null },
+});
 
 CustomerSchema.statics.syncConfig = {
   summaryKey: 'customers',

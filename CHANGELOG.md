@@ -2,7 +2,13 @@
 
 All notable changes to hcs-sync will be documented here. Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/).
 
-## [0.17.5] - 2026-11-18
+## [0.17.6] - 2026-11-18
+
+### Added
+- **Customers deleted from KashFlow, and what they leave behind, are now marked deleted.** The per-customer sweeps only visit customers KashFlow still lists. Project 41301 "Test Job" belonged to TEST01, which was deleted with it, so neither was ever checked. After the detail phases, each run now:
+  - **Sweeps customers.** It compares the stored customers with KashFlow's complete customer list, by `Code`. A stored customer the list no longer returns gets `missingSince`, then `deletedAt` after `CUSTOMER_SWEEP_GRACE_MS` (24 hours by default). A stored customer with a blank code is never swept, and nothing is swept when the list has no codes.
+  - **Sweeps orphaned documents.** Stored quotes, invoices and projects whose `CustomerCode` matches no listed customer are swept as absent, each with its own grace period. Codes are compared trimmed and case-insensitively, because KashFlow pads them. If more than 5 unknown codes appear in one run, this stands down: that is likelier to be a code mismatch than a spate of deletions.
+- The run counts gain `customersSoftDeleted`, and orphaned documents count towards `quotesSoftDeleted`, `invoicesSoftDeleted` and `projectsSoftDeleted`. All of these are kept out of change alerts.
 
 ### Added
 - **Invoices and projects that disappear from KashFlow are now marked deleted.** Until now only bank transactions and quotes were swept. Invoice 1776 and project 41301 were deleted in KashFlow but stayed live in MongoDB. Both now use the same per-customer sweep as quotes, checked on `Number`:

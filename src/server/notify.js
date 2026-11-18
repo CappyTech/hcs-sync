@@ -5,7 +5,7 @@ import { sendDiscord } from '../util/discord.js';
 // be reported as resources in their own right.
 const NON_RESOURCE_COUNT_KEYS = new Set([
   'bankTransactionsSoftDeleted', 'bankTransactionsFetched',
-  'quotesSoftDeleted', 'invoicesSoftDeleted', 'projectsSoftDeleted',
+  'quotesSoftDeleted', 'invoicesSoftDeleted', 'projectsSoftDeleted', 'customersSoftDeleted',
 ]);
 
 /**

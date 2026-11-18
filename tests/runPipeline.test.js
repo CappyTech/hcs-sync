@@ -142,6 +142,8 @@ function captureWrites() {
       return { modifiedCount: 0 };
     });
     vi.spyOn(model, 'countDocuments').mockResolvedValue(3);
+    // C9 is a customer KashFlow no longer lists: its quotes are orphaned.
+    vi.spyOn(model, 'distinct').mockResolvedValue(name === 'Quote' ? ['C1', 'c1 ', 'C9', ''] : ['C1']);
   }
   mongoose.connection.db = {
     collection: () => ({ insertMany: async (docs) => { auditEntries.push(...docs); } }),
@@ -163,7 +165,7 @@ beforeAll(async () => {
 describe('run() end to end', () => {
   it('reports counts, carrying the stored bank-transaction count', () => {
     expect(result.counts).toEqual({
-      customers: 3, suppliers: 1, projects: 3, projectsSoftDeleted: 0, nominals: 3, vatRates: 3, bankAccounts: 3,
+      customers: 3, customersSoftDeleted: 0, suppliers: 1, projects: 3, projectsSoftDeleted: 0, nominals: 3, vatRates: 3, bankAccounts: 3,
       bankTransactions: 3, bankTransactionsFetched: 3, bankTransactionsSoftDeleted: 0,
       bankReconciliations: 1,
       journals: 1, products: 1, purchaseOrders: 1, quoteCategories: 1, purchaseOrderCategories: 1,
@@ -246,7 +248,8 @@ describe('run() end to end', () => {
   });
 
   it('sweeps quotes by Number, only for customers whose rows were all keyed', () => {
-    const filters = sweeps.filter((u) => u.model === 'Quote').map((u) => u.filter);
+    // C9 is a deleted customer, swept separately (see below).
+    const filters = sweeps.filter((u) => u.model === 'Quote' && u.filter.CustomerCode !== 'C9').map((u) => u.filter);
     expect(filters.length).toBeGreaterThan(0);
     expect(filters.every((f) => f.CustomerCode === 'C1')).toBe(true);
     expect(filters).toContainEqual(expect.objectContaining({
@@ -275,6 +278,22 @@ describe('run() end to end', () => {
       CustomerCode: 'C2', Number: { $nin: [], $ne: null }, deletedAt: null,
     }));
     expect(filters.some((f) => !f.CustomerCode)).toBe(false);
+  });
+
+  it('sweeps stored customers KashFlow no longer lists, by Code over the whole collection', () => {
+    const filters = sweeps.filter((u) => u.model === 'Customer').map((u) => u.filter);
+    expect(filters).toContainEqual({
+      Code: { $nin: ['C1', 'C2', ''], $ne: null }, deletedAt: null, missingSince: null,
+    });
+  });
+
+  it('sweeps the documents of a customer KashFlow no longer lists', () => {
+    const quoteFilters = sweeps.filter((u) => u.model === 'Quote').map((u) => u.filter);
+    // C9 is gone: everything stored under it is absent. 'c1 ' is C1, padded.
+    expect(quoteFilters).toContainEqual(expect.objectContaining({
+      CustomerCode: 'C9', Number: { $nin: [], $ne: null }, deletedAt: null,
+    }));
+    expect(quoteFilters.some((f) => f.CustomerCode === 'c1 ')).toBe(false);
   });
 
   it('backfills a missing purchase SupplierId from the suppliers list', () => {
