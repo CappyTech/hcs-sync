@@ -2,6 +2,11 @@
 
 All notable changes to hcs-sync will be documented here. Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [0.17.8] - 2026-11-26
+
+### Added
+- **"Sign in with a passkey" on the login form** (`HCS_SYNC_LOGIN_MODE=form`). A passkey only works on hcs-app's own address, so the button goes through hcs-app's sign-in handoff and comes back signed in, the same way redirect mode (the default) does. It shows only when there is an hcs-app to reach (`HCS_SYNC_API_KEY` set), not with the local dev bypass. Since hcs-app 6.154.1, an account with passkeys and no authenticator app is refused on the password form and told to use this button.
+
 ## [0.17.7] - 2026-11-18
 
 ### Added

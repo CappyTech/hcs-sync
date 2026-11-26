@@ -5,7 +5,9 @@
   /login, checks Turnstile, and passes an optional TOTP code through to
   hcs-app's SSO token endpoint.
 
-  Locals: next, skipTurnstile, siteKey (routes/auth.js GET /login).
+  Locals: next, skipTurnstile, siteKey, passkeyHref (routes/auth.js GET /login).
+  passkeyHref, when set, is the hcs-app handoff: passkeys work there, not on
+  this form, so it is offered first.
 %>
 <% const _input = 'w-full px-3.5 py-2 border border-gray-200 dark:border-gray-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-green-500 bg-gray-50 dark:bg-gray-800 text-sm text-gray-900 dark:text-gray-100'; %>
 <% const _label = 'block mb-1 text-sm font-medium text-gray-700 dark:text-gray-300'; %>
@@ -21,6 +23,19 @@
       <% if (skipTurnstile) { %>
       <div class="mb-4 p-3 rounded-xl bg-amber-50 dark:bg-amber-900/30 text-amber-800 dark:text-amber-300 text-sm border border-amber-200 dark:border-amber-800">
         CAPTCHA bypass is active (non-production environment or SKIP_TURNSTILE=true). Turnstile always runs in production.
+      </div>
+      <% } %>
+
+      <% if (typeof passkeyHref !== 'undefined' && passkeyHref) { %>
+      <a href="<%= passkeyHref %>"
+         class="w-full inline-flex items-center justify-center gap-2 px-6 py-2.5 rounded-lg text-sm font-medium border border-green-600 text-green-700 dark:text-green-400 dark:border-green-500 hover:bg-green-50 dark:hover:bg-green-900/20 transition">
+        <i class="bi bi-fingerprint" aria-hidden="true"></i> Sign in with a passkey
+      </a>
+      <p class="text-center text-xs text-gray-400 dark:text-gray-500 mt-2">Opens the HCS app to confirm with your passkey, then brings you back.</p>
+      <div class="flex items-center gap-3 my-4">
+        <span class="h-px flex-1 bg-gray-200 dark:bg-gray-700"></span>
+        <span class="text-xs uppercase tracking-wide text-gray-400 dark:text-gray-500">or use your password</span>
+        <span class="h-px flex-1 bg-gray-200 dark:bg-gray-700"></span>
       </div>
       <% } %>
 

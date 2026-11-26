@@ -372,6 +372,36 @@ describe('Express server routes', () => {
       expect(res.headers.location).toBe('/');
     });
 
+    // A passkey only works on hcs-app's address, so the form offers the
+    // hcs-app handoff for it — but only when there is an hcs-app to reach.
+    it('offers "Sign in with a passkey" through the hcs-app handoff', async () => {
+      const saved = process.env.HCS_SYNC_API_KEY;
+      process.env.HCS_SYNC_API_KEY = 'test-key';
+      try {
+        const res = await supertest(app).get('/login?next=/history');
+        expect(res.status).toBe(200);
+        expect(res.text).toContain('Sign in with a passkey');
+        const href = res.text.match(/href="([^"]*\/sso\/hcs-sync[^"]*)"/);
+        expect(href).not.toBeNull();
+        const returnTo = new URL(href[1].replace(/&amp;/g, '&')).searchParams.get('return_to');
+        expect(returnTo).toContain('/login?next=%2Fhistory');
+        expect(returnTo).toContain('sso_return=1');
+      } finally {
+        if (saved === undefined) delete process.env.HCS_SYNC_API_KEY; else process.env.HCS_SYNC_API_KEY = saved;
+      }
+    });
+
+    it('leaves the passkey link out without an hcs-app (local dev bypass)', async () => {
+      const saved = process.env.HCS_SYNC_API_KEY;
+      delete process.env.HCS_SYNC_API_KEY;
+      try {
+        const res = await supertest(app).get('/login');
+        expect(res.text).not.toContain('Sign in with a passkey');
+      } finally {
+        if (saved !== undefined) process.env.HCS_SYNC_API_KEY = saved;
+      }
+    });
+
     // layout.ejs loads /static/app.js on every page, so the dashboard poller
     // runs on the login page too. There, /status answering 401 is the normal
     // resting state rather than an expired session, and the poller's 401
