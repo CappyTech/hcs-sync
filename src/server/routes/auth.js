@@ -58,7 +58,12 @@ router.get('/login', (req, res) => {
   const error = typeof req.query.error === 'string' ? req.query.error : null;
   const skipTurnstile = SKIP_TURNSTILE;
   const siteKey = String(process.env.TURNSTILE_SITE_KEY || '');
-  res.render('layout', { title: 'Log In', content: 'login', next, error, skipTurnstile, siteKey, isAuthenticated: false });
+  // Passkeys can't be used on this form: the browser only offers a passkey on
+  // hcs-app's own address. "Sign in with a passkey" goes through hcs-app's
+  // handoff instead, which sets the same cookie as redirect mode. Only offered
+  // when there is an hcs-app to hand off to (not the local dev bypass).
+  const passkeyHref = String(process.env.HCS_SYNC_API_KEY || '').trim() ? handoffUrl(req, next) : null;
+  res.render('layout', { title: 'Log In', content: 'login', next, error, skipTurnstile, siteKey, passkeyHref, isAuthenticated: false });
 });
 
 router.post('/login', loginLimiter, async (req, res) => {
