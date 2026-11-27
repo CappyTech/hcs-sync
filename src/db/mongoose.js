@@ -94,3 +94,14 @@ export async function disconnectMongoose() {
   if (mongoose.connection?.readyState === 0) return;
   await mongoose.disconnect();
 }
+
+/**
+ * The Staffology payroll database: a second database on the same Mongo server,
+ * reached through the main connection's pool and credentials (useDb), so it
+ * works the same whether the URI comes from MONGO_URI or MONGO_HOST. Payroll
+ * data is kept out of the KashFlow mirror on purpose.
+ */
+export async function getStaffologyConnection() {
+  await connectMongoose();
+  return mongoose.connection.useDb(config.staffologyDbName || 'staffology', { useCache: true });
+}

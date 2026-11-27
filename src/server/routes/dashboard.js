@@ -8,6 +8,7 @@ import {
   isRunning, lastRun, lastCounts, lastError, logs, dedupRunning, lastDedupResult,
   getEffectiveCronConfig, currentCronHealth, computeNextCronRunAtMs, triggerSync, runDashboardDedup,
 } from '../syncController.js';
+import { state as staffology, isStaffologyConfigured, triggerStaffologySync } from '../../staffology/controller.js';
 
 const syncLimiter = rateLimit({ windowMs: 60_000, max: 5, standardHeaders: true, legacyHeaders: false, message: 'Too many requests, please slow down.' });
 const dedupLimiter = rateLimit({ windowMs: 300_000, max: 3, standardHeaders: true, legacyHeaders: false, message: 'Too many dedup requests, please slow down.' });
@@ -56,7 +57,19 @@ router.get('/', (req, res) => {
     cronHealth,
     cronNextRunAt,
     dedupResult,
+    staffology: { ...staffology, configured: isStaffologyConfigured() },
   });
+});
+
+// Staffology payroll sync on demand (it also follows every KashFlow run).
+// Read-only against Staffology, so allowed while cron is on.
+router.post('/staffology/run', requireAdmin, syncLimiter, async (_req, res) => {
+  const out = await triggerStaffologySync({ requestedBy: 'dashboard' });
+  if (!out.started) {
+    return res.status(409).send(out.reason === 'not-configured' ? 'Staffology is not configured (set STAFFOLOGY_API_KEY).' : 'Staffology sync already running');
+  }
+  out.promise.catch(() => {});
+  return res.redirect('/');
 });
 
 router.post('/run', requireAdmin, syncLimiter, async (_req, res) => {

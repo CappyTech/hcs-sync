@@ -17,6 +17,7 @@ import { getMongoDb, isMongooseEnabled } from '../db/mongoose.js';
 import { runDedup } from '../db/dedup.js';
 import cronParser from 'cron-parser';
 import { summariseRunChanges, notifyRunCompleted, notifyRunFailed, collectRunWarnings } from './notify.js';
+import { triggerStaffologySync } from '../staffology/controller.js';
 
 export let lastRun = null;
 export let isRunning = false;
@@ -257,6 +258,13 @@ export async function triggerSync({ requestedBy }) {
 
       throw err;
     });
+
+  // Staffology payroll follows every KashFlow run, whatever its outcome, on its
+  // own state (src/staffology/controller.js). Hung off a derived promise so the
+  // caller still sees this run's own result or rejection.
+  promise
+    .finally(() => triggerStaffologySync({ requestedBy: `after-kashflow:${requestedBy}` }))
+    .catch(() => {});
 
   return { started: true, reason: null, runId, promise };
 }

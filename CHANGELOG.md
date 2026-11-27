@@ -2,6 +2,14 @@
 
 All notable changes to hcs-sync will be documented here. Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [0.19.0] - 2026-11-27
+
+### Added
+- **Staffology payroll sync (optional, read-only).** With `STAFFOLOGY_API_KEY` set, employees and pay run entries are pulled after every KashFlow run, and from a new admin **Sync Staffology now** button (`POST /staffology/run`). They go into their own Mongo database (`STAFFOLOGY_DB_NAME`, default `staffology`) as the hcs-schemas 3.1.0 `payrollEmployee` / `payrollPayRunEntry` entities, not into the KashFlow database. Closed periods already stored are skipped after the first run. Runs on its own state, so a Staffology failure never fails a KashFlow run. Dashboard panel shows the last run, counts and any error. New optional env: `STAFFOLOGY_API_KEY`, `STAFFOLOGY_EMPLOYER_ID`, `STAFFOLOGY_DB_NAME`, `STAFFOLOGY_YEARS_BACK`, `STAFFOLOGY_BASE_URL`.
+
+### Changed
+- Requires `@cappytech/hcs-schemas` 3.1.0.
+
 ## [0.18.0] - 2026-11-27
 
 ### Added
