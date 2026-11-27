@@ -16,9 +16,11 @@ import {
  * has a schedule for. Read-only against Staffology; writes only the Staffology
  * database (see src/db/mongoose.js getStaffologyConnection).
  *
- * A pay period whose stored entries are all closed is not fetched again, except
- * the latest period of each schedule, so after the first run each sync fetches
- * roughly one week.
+ * A pay period whose stored entries are all closed, and all carry the basic pay
+ * options (see PAY_OPTION_FIELDS), is not fetched again, except the latest
+ * period of each schedule, so after the first run each sync fetches roughly one
+ * week. Entries stored before the pay options were mirrored lack them, so their
+ * periods are fetched once more and then settle.
  *
  * Dependencies are injectable for tests.
  */
@@ -62,14 +64,23 @@ async function payPeriodsFor(client, employerId, taxYear) {
   }
 }
 
-/** Is every stored entry of this period closed? (false when none are stored) */
-async function periodClosedLocally(Entry, { taxYear, payPeriod, period, ordinal }) {
+/** Entry fields added in 0.20.0; an entry with none of them set predates them. */
+export const PAY_OPTION_FIELDS = ['PayBasis', 'BaseHourlyRate', 'BaseDailyRate', 'PayAmount', 'PayAmountMultiplier'];
+
+/**
+ * Is this period stored completely: every entry closed and carrying the pay
+ * options? (false when none are stored). `{ field: null }` matches a missing
+ * field as well as null, so an entry is stale only when all of them are unset.
+ */
+export async function periodClosedLocally(Entry, { taxYear, payPeriod, period, ordinal }) {
   const filter = { Source: SOURCE, TaxYear: taxYear, PayPeriod: payPeriod, Period: period, Ordinal: ordinal };
-  const [total, open] = await Promise.all([
+  const noPayOptions = Object.fromEntries(PAY_OPTION_FIELDS.map((f) => [f, null]));
+  const [total, open, stale] = await Promise.all([
     Entry.countDocuments(filter),
     Entry.countDocuments({ ...filter, IsClosed: { $ne: true } }),
+    Entry.countDocuments({ ...filter, ...noPayOptions }),
   ]);
-  return total > 0 && open === 0;
+  return total > 0 && open === 0 && stale === 0;
 }
 
 export async function runStaffologySync({

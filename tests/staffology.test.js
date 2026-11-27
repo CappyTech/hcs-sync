@@ -13,7 +13,7 @@ const {
   parseTaxYear, taxYearOf, payRunRef, normaliseEmployee, normalisePayRunEntry,
 } = await import('../src/staffology/normalise.js');
 const { createStaffologyClient } = await import('../src/staffology/client.js');
-const { runStaffologySync, resolveEmployerId } = await import('../src/staffology/run.js');
+const { runStaffologySync, resolveEmployerId, periodClosedLocally } = await import('../src/staffology/run.js');
 const { triggerStaffologySync, state } = await import('../src/staffology/controller.js');
 const { resolveStaffologySettings, staffologyMayBeConfigured } = await import('../src/staffology/settings.js');
 const config = (await import('../src/config.js')).default;
@@ -59,6 +59,25 @@ describe('staffology normalise', () => {
       PayLines: [{ Code: 'BASICHOURLY', Multiplier: 10 }],
     });
     expect(doc.StartDate).toBeInstanceOf(Date);
+  });
+
+  it('keeps the basic pay options the entry was paid on', () => {
+    const doc = normalisePayRunEntry({
+      id: 'ent-2',
+      payOptions: {
+        basis: 'Hourly', baseHourlyRate: '12.34', baseDailyRate: 98.7, payAmount: 456.78, payAmountMultiplier: 37,
+        regularPayLines: [{ code: 'OT', value: 20, rate: 18.5, multiplier: 1 }],
+      },
+    }, { run: { taxYear: 'Year2026', payPeriod: 'Weekly', period: 5 } });
+    expect(doc).toMatchObject({
+      PayBasis: 'Hourly', BaseHourlyRate: 12.34, BaseDailyRate: 98.7, PayAmount: 456.78, PayAmountMultiplier: 37,
+      PayLines: [{ Code: 'OT', Rate: 18.5 }],
+    });
+  });
+
+  it('leaves the pay options null when the entry has none', () => {
+    const doc = normalisePayRunEntry({ id: 'ent-3' }, { run: { taxYear: 'Year2026', payPeriod: 'Weekly', period: 5 } });
+    expect(doc).toMatchObject({ PayBasis: null, BaseHourlyRate: null, BaseDailyRate: null, PayAmount: null, PayAmountMultiplier: null, PayLines: [] });
   });
 });
 
@@ -114,7 +133,12 @@ describe('staffology client', () => {
 
 function fakeModels(stored = []) {
   const docs = [...stored];
-  const match = (f) => (d) => Object.entries(f).every(([k, v]) => (v && typeof v === 'object' && '$ne' in v ? d[k] !== v.$ne : d[k] === v));
+  // Mongo semantics for what run.js asks: { $ne }, null (missing or null), equality.
+  const match = (f) => (d) => Object.entries(f).every(([k, v]) => {
+    if (v && typeof v === 'object' && '$ne' in v) return d[k] !== v.$ne;
+    if (v === null) return d[k] == null;
+    return d[k] === v;
+  });
   const entryModel = { countDocuments: async (f) => docs.filter(match(f)).length };
   return { models: { PayrollEmployee: {}, PayrollPayRunEntry: entryModel }, docs };
 }
@@ -158,13 +182,37 @@ describe('staffology run', () => {
 
   it('skips closed periods already stored, but always refetches the latest', async () => {
     const client = fakeClient();
-    const stored = [1, 2, 3].map((p) => ({ Source: 'staffology', TaxYear: 2026, PayPeriod: 'Weekly', Period: p, Ordinal: 1, IsClosed: true }));
+    const stored = [1, 2, 3].map((p) => ({ Source: 'staffology', TaxYear: 2026, PayPeriod: 'Weekly', Period: p, Ordinal: 1, IsClosed: true, PayBasis: 'Hourly' }));
     const { models } = fakeModels(stored);
     const upsert = vi.fn(async () => ({ upserted: 0, modified: 0 }));
     const r = await runStaffologySync({ client, models, upsert, now, yearsBack: 1 });
     expect(r.payRuns).toMatchObject({ fetched: 1, skippedClosed: 2 });
     expect(client.getPayRun).toHaveBeenCalledTimes(1);
     expect(client.getPayRun.mock.calls[0][3]).toBe(3);
+  });
+
+  it('refetches a closed period stored before the pay options were kept', async () => {
+    const client = fakeClient();
+    const base = { Source: 'staffology', TaxYear: 2026, PayPeriod: 'Weekly', Ordinal: 1, IsClosed: true };
+    const stored = [
+      { ...base, Period: 1, ExternalId: 'a' }, // legacy: no pay options at all
+      { ...base, Period: 2, ExternalId: 'b', BaseHourlyRate: 11 },
+      { ...base, Period: 2, ExternalId: 'c', PayBasis: null, BaseHourlyRate: null }, // one stale entry
+      { ...base, Period: 3, ExternalId: 'd', PayBasis: 'Daily' },
+    ];
+    const { models } = fakeModels(stored);
+    const r = await runStaffologySync({ client, models, upsert: async () => ({ upserted: 0, modified: 0 }), now, yearsBack: 1 });
+    expect(r.payRuns).toMatchObject({ fetched: 3, skippedClosed: 0 });
+  });
+
+  it('treats a closed period as complete once any pay option is set on every entry', async () => {
+    const key = { taxYear: 2026, payPeriod: 'Weekly', period: 4, ordinal: 1 };
+    const base = { Source: 'staffology', TaxYear: 2026, PayPeriod: 'Weekly', Period: 4, Ordinal: 1, IsClosed: true };
+    const check = (docs) => periodClosedLocally(fakeModels(docs).models.PayrollPayRunEntry, key);
+    await expect(check([])).resolves.toBe(false);
+    await expect(check([{ ...base, PayAmountMultiplier: 5 }, { ...base, BaseDailyRate: 90 }])).resolves.toBe(true);
+    await expect(check([{ ...base, PayBasis: 'Hourly' }, { ...base }])).resolves.toBe(false);
+    await expect(check([{ ...base, PayBasis: 'Hourly', IsClosed: false }])).resolves.toBe(false);
   });
 
   it('records a failed entry and carries on', async () => {
