@@ -15,6 +15,7 @@ const {
 const { createStaffologyClient } = await import('../src/staffology/client.js');
 const { runStaffologySync, resolveEmployerId } = await import('../src/staffology/run.js');
 const { triggerStaffologySync, state } = await import('../src/staffology/controller.js');
+const { resolveStaffologySettings, staffologyMayBeConfigured } = await import('../src/staffology/settings.js');
 const config = (await import('../src/config.js')).default;
 const axios = (await import('axios')).default;
 
@@ -188,11 +189,90 @@ describe('staffology run', () => {
   });
 });
 
+describe('staffology settings', () => {
+  const env = {};
+  beforeEach(() => {
+    for (const k of ['HCS_APP_BASE_URL', 'HCS_SYNC_API_KEY']) env[k] = process.env[k];
+    env.key = config.staffologyApiKey;
+    env.employer = config.staffologyEmployerId;
+    return () => {
+      for (const k of ['HCS_APP_BASE_URL', 'HCS_SYNC_API_KEY']) {
+        if (env[k] === undefined) delete process.env[k]; else process.env[k] = env[k];
+      }
+      config.staffologyApiKey = env.key;
+      config.staffologyEmployerId = env.employer;
+    };
+  });
+
+  it('prefers a key in this service’s own environment and never asks hcs-app', async () => {
+    config.staffologyApiKey = 'env-key';
+    config.staffologyEmployerId = 'er-env';
+    const http = { get: vi.fn() };
+    await expect(resolveStaffologySettings({ http })).resolves.toEqual({ apiKey: 'env-key', employerId: 'er-env', source: 'env' });
+    expect(http.get).not.toHaveBeenCalled();
+  });
+
+  it('reads the key from hcs-app with the sync API key', async () => {
+    config.staffologyApiKey = '';
+    process.env.HCS_APP_BASE_URL = 'http://hcs-app:5000/';
+    process.env.HCS_SYNC_API_KEY = 'shared';
+    const http = { get: vi.fn(async () => ({ data: { apiKey: 'app-key', employerId: '' } })) };
+    await expect(resolveStaffologySettings({ http })).resolves.toEqual({ apiKey: 'app-key', employerId: '', source: 'hcs-app' });
+    expect(http.get).toHaveBeenCalledWith('http://hcs-app:5000/api/sync/staffology-config', expect.objectContaining({
+      headers: expect.objectContaining({ 'X-Sync-Api-Key': 'shared' }),
+    }));
+  });
+
+  it('is unconfigured when hcs-app has no key, or there is no way to ask it', async () => {
+    config.staffologyApiKey = '';
+    process.env.HCS_APP_BASE_URL = 'http://hcs-app:5000';
+    process.env.HCS_SYNC_API_KEY = 'shared';
+    await expect(resolveStaffologySettings({ http: { get: async () => ({ data: { apiKey: '' } }) } })).resolves.toBeNull();
+    delete process.env.HCS_APP_BASE_URL;
+    expect(staffologyMayBeConfigured()).toBe(false);
+    await expect(resolveStaffologySettings({ http: { get: vi.fn() } })).resolves.toBeNull();
+  });
+
+  it('explains a refused sync key', async () => {
+    config.staffologyApiKey = '';
+    process.env.HCS_APP_BASE_URL = 'http://hcs-app:5000';
+    process.env.HCS_SYNC_API_KEY = 'shared';
+    const http = { get: async () => { throw Object.assign(new Error('x'), { response: { status: 401 } }); } };
+    await expect(resolveStaffologySettings({ http })).rejects.toThrow(/HCS_SYNC_API_KEY must match/);
+  });
+});
+
 describe('staffology controller', () => {
   it('does nothing without an API key', async () => {
     const prev = config.staffologyApiKey;
+    const prevBase = process.env.HCS_APP_BASE_URL;
     config.staffologyApiKey = '';
+    delete process.env.HCS_APP_BASE_URL;
     await expect(triggerStaffologySync()).resolves.toMatchObject({ started: false, reason: 'not-configured' });
+    config.staffologyApiKey = prev;
+    if (prevBase !== undefined) process.env.HCS_APP_BASE_URL = prevBase;
+  });
+
+  it('passes the resolved settings to the run', async () => {
+    const prev = config.staffologyApiKey;
+    config.staffologyApiKey = 'k';
+    const run = vi.fn(async () => ({ errors: [], employees: {}, payRuns: {}, entries: {} }));
+    const out = await triggerStaffologySync({ run, resolveSettings: async () => ({ apiKey: 'app-key', employerId: 'er', source: 'hcs-app' }) });
+    await out.promise;
+    expect(run).toHaveBeenCalledWith({ settings: { apiKey: 'app-key', employerId: 'er', source: 'hcs-app' } });
+    expect(state.settingsSource).toBe('hcs-app');
+    config.staffologyApiKey = prev;
+  });
+
+  it('skips the run and records why when hcs-app cannot be asked', async () => {
+    const prev = config.staffologyApiKey;
+    config.staffologyApiKey = 'k';
+    const run = vi.fn();
+    const out = await triggerStaffologySync({ run, resolveSettings: async () => { throw new Error('hcs-app down'); } });
+    expect(out).toMatchObject({ started: false, reason: 'settings-unavailable' });
+    expect(run).not.toHaveBeenCalled();
+    expect(state.lastError).toBe('hcs-app down');
+    expect(state.isRunning).toBe(false);
     config.staffologyApiKey = prev;
   });
 

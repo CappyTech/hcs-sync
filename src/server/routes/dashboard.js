@@ -66,7 +66,10 @@ router.get('/', (req, res) => {
 router.post('/staffology/run', requireAdmin, syncLimiter, async (_req, res) => {
   const out = await triggerStaffologySync({ requestedBy: 'dashboard' });
   if (!out.started) {
-    return res.status(409).send(out.reason === 'not-configured' ? 'Staffology is not configured (set STAFFOLOGY_API_KEY).' : 'Staffology sync already running');
+    if (out.reason === 'settings-unavailable') return res.redirect('/'); // the panel shows why
+    return res.status(409).send(out.reason === 'not-configured'
+      ? 'Staffology is not configured. Add the API key in hcs-app: Settings → Connections → Staffology.'
+      : 'Staffology sync already running');
   }
   out.promise.catch(() => {});
   return res.redirect('/');

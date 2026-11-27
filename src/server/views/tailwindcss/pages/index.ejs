@@ -77,10 +77,13 @@
         </form>
       <% } %>
     </div>
-    <% if (!staffology.configured) { %>
-      <p class="mt-2 text-sm text-gray-500 dark:text-gray-400">Not configured. Set <span class="font-medium text-gray-700 dark:text-gray-200">STAFFOLOGY_API_KEY</span> to sync employees and pay runs (read-only) after each KashFlow run.</p>
+    <% if (!staffology.configured || staffology.notConfigured) { %>
+      <p class="mt-2 text-sm text-gray-500 dark:text-gray-400">Not configured. Add the Staffology API key in hcs-app under <span class="font-medium text-gray-700 dark:text-gray-200">Settings → Connections → Staffology</span> to sync employees and pay runs (read-only) after each KashFlow run.</p>
     <% } else { %>
       <p class="mt-2 text-gray-900 dark:text-white">Last run: <%= staffology.lastRunAt ? formatDateTimeUK(staffology.lastRunAt) : 'Never' %></p>
+      <% if (staffology.settingsSource) { %>
+        <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">Key from <%= staffology.settingsSource === 'env' ? 'this service’s environment (STAFFOLOGY_API_KEY)' : 'hcs-app settings' %></p>
+      <% } %>
       <% const r = staffology.lastResult; %>
       <% if (r) { %>
         <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">

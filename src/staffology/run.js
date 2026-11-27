@@ -73,7 +73,8 @@ async function periodClosedLocally(Entry, { taxYear, payPeriod, period, ordinal 
 }
 
 export async function runStaffologySync({
-  client = createStaffologyClient(),
+  settings = { apiKey: config.staffologyApiKey, employerId: config.staffologyEmployerId },
+  client = createStaffologyClient({ apiKey: settings.apiKey }),
   models,
   upsert,
   now = new Date(),
@@ -102,7 +103,7 @@ export async function runStaffologySync({
     logger.warn({ where, err: err?.message }, 'Staffology sync step failed');
   };
 
-  const employerId = await resolveEmployerId(client);
+  const employerId = await resolveEmployerId(client, settings.employerId || '');
   result.employerId = employerId;
 
   // ── Employees ──
