@@ -301,7 +301,7 @@ describe('bank transactions are keyed per account, not per KashFlow Id', () => {
     // indistinguishable; if they are stored under one key they overwrite each
     // other forever, which is exactly what happened.
     const main = transferAsSeenBy(611594, { paidIn: 0, paidOut: 312.17, balance: -1494.24, type: 'Business Credit Card' });
-    const sub  = transferAsSeenBy(938298, { paidIn: 312.17, paidOut: 0, balance: 28250.34, type: 'Heron Constructive Solutions LTD' });
+    const sub  = transferAsSeenBy(938298, { paidIn: 312.17, paidOut: 0, balance: 28250.34, type: 'Example Building Co LTD' });
     expect(hashFor(main)).not.toBe(hashFor(sub));
   });
 
@@ -325,7 +325,7 @@ describe('bank transactions are keyed per account, not per KashFlow Id', () => {
       '_kfHash',
     );
     const main = transferAsSeenBy(611594, { paidIn: 0, paidOut: 312.17, balance: -1494.24, type: 'Business Credit Card' });
-    const sub  = transferAsSeenBy(938298, { paidIn: 312.17, paidOut: 0, balance: 28250.34, type: 'Heron Constructive Solutions LTD' });
+    const sub  = transferAsSeenBy(938298, { paidIn: 312.17, paidOut: 0, balance: 28250.34, type: 'Example Building Co LTD' });
     expect(volatileHashFor(main)).not.toBe(volatileHashFor(sub));
 
     // ...while a Balance-only difference on one half is no longer a change.

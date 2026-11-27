@@ -11,6 +11,7 @@ process.env.PORT = '0';               // random port so tests don't clash
 process.env.HCS_SSO_JWT_SECRET = 'test-server-jwt-secret';
 process.env.SKIP_TURNSTILE = 'true';  // disable CAPTCHA in tests
 process.env.HCS_SYNC_API_KEY = 'test-sync-api-key'; // machine-to-machine API key
+process.env.HCS_APP_BASE_URL = 'https://app.example.co.uk'; // hcs-app has no built-in address
 
 // ---------------------------------------------------------------------------
 // Mocks – hoisted before imports
@@ -257,14 +258,27 @@ describe('Express server routes', () => {
     const returnTo = (location) => new URL(location).searchParams.get('return_to');
 
     it('redirects to the hcs-app handoff with a return_to back to /login', async () => {
-      const res = await supertest(app).get('/login?next=/history').set('Host', 'sync.heroncs.co.uk');
+      const res = await supertest(app).get('/login?next=/history').set('Host', 'sync.example.co.uk');
       expect(res.status).toBe(302);
-      expect(res.headers.location).toMatch(/^https:\/\/app\.heroncs\.co\.uk\/sso\/hcs-sync\?return_to=/);
+      expect(res.headers.location).toMatch(/^https:\/\/app\.example.co.uk\/sso\/hcs-sync\?return_to=/);
       const back = new URL(returnTo(res.headers.location));
-      expect(back.host).toBe('sync.heroncs.co.uk');
+      expect(back.host).toBe('sync.example.co.uk');
       expect(back.pathname).toBe('/login');
       expect(back.searchParams.get('next')).toBe('/history');
       expect(back.searchParams.get('sso_return')).toBe('1');
+    });
+
+    it('says sign-in is not set up when no hcs-app address is configured', async () => {
+      const saved = process.env.HCS_APP_BASE_URL;
+      delete process.env.HCS_APP_BASE_URL;
+      try {
+        const res = await supertest(app).get('/login?next=/history');
+        expect(res.status).toBe(503);
+        expect(res.headers.location).toBeUndefined();
+        expect(res.text).toContain('Sign-in is not set up');
+      } finally {
+        process.env.HCS_APP_BASE_URL = saved;
+      }
     });
 
     it('does not carry an off-site next through the handoff', async () => {
@@ -322,12 +336,12 @@ describe('Express server routes', () => {
     it('clears the host-only cookie and the shared-domain one hcs-app set', async () => {
       const res = await supertest(app)
         .get('/logout')
-        .set('Host', 'sync.heroncs.co.uk')
+        .set('Host', 'sync.example.co.uk')
         .set('Cookie', `hcs_sso=${makeSsoToken()}`);
       expect(res.status).toBe(200);
       const cleared = cookies(res).filter((c) => c.startsWith('hcs_sso=;'));
       expect(cleared).toHaveLength(2);
-      expect(cleared.some((c) => /Domain=\.heroncs\.co\.uk/i.test(c))).toBe(true);
+      expect(cleared.some((c) => /Domain=\.example.co.uk/i.test(c))).toBe(true);
       expect(cleared.some((c) => !/Domain=/i.test(c))).toBe(true);
     });
 
@@ -348,7 +362,7 @@ describe('Express server routes', () => {
       expect(res.status).toBe(200);
       expect(res.headers.location).toBeUndefined();
       expect(res.text).toContain('Signed out');
-      expect(res.text).toContain('https://app.heroncs.co.uk/user/logout');
+      expect(res.text).toContain('https://app.example.co.uk/user/logout');
     });
   });
 
@@ -553,6 +567,28 @@ describe('Express server routes', () => {
         expect(res.status).toBe(200);
         expect(res.headers['set-cookie']).toBeUndefined();
       }
+    });
+
+    it('builds the manifest with the company name and the hcs-app icons', async () => {
+      const saved = process.env.COMPANY_NAME;
+      process.env.COMPANY_NAME = 'Example Building Co LTD';
+      try {
+        const res = await supertest(app).get('/static/manifest.json');
+        const body = JSON.parse(res.text);
+        expect(body.name).toBe('Example Building Co LTD | Sync');
+        expect(body.icons.map((i) => i.src)).toEqual([
+          'https://app.example.co.uk/brand/icon-192.png',
+          'https://app.example.co.uk/brand/icon-512.png',
+        ]);
+      } finally {
+        if (saved === undefined) delete process.env.COMPANY_NAME; else process.env.COMPANY_NAME = saved;
+      }
+    });
+
+    it('lets pages load images from hcs-app and nowhere else off-site', async () => {
+      const res = await supertest(app).get('/health');
+      const img = /img-src ([^;]*)/.exec(res.headers['content-security-policy'])[1];
+      expect(img.split(' ').sort()).toEqual(["'self'", 'data:', 'https://app.example.co.uk'].sort());
     });
 
   });

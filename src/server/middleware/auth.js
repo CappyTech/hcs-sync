@@ -22,18 +22,18 @@ export const SKIP_TURNSTILE = process.env.SKIP_TURNSTILE === 'true' || !IS_PROD;
 // (sessions die with the process — fine for local dev).
 export const SSO_JWT_SECRET = process.env.HCS_SSO_JWT_SECRET || (!IS_PROD ? crypto.randomBytes(32).toString('hex') : '');
 
-const DEFAULT_APP_URL = 'https://app.heroncs.co.uk';
-
 // Where hcs-sync calls hcs-app server to server (POST /api/sso/token). In a
 // compose stack this is often the internal service address (http://hcs-app:5000).
+// There is no default: each deployment names its own hcs-app. '' when unset.
 export function appBaseUrl() {
-  return String(process.env.HCS_APP_BASE_URL || DEFAULT_APP_URL).replace(/\/$/, '');
+  return String(process.env.HCS_APP_BASE_URL || '').trim().replace(/\/$/, '');
 }
 
 // Where the browser is sent: the login handoff, "sign out of HCS" links, and
 // the parent domain the SSO cookie lives on. Must be hcs-app's public address,
 // so an internal HCS_APP_BASE_URL (a bare service name with no dot in its
 // host, like hcs-app) is not used here. HCS_APP_PUBLIC_URL sets it outright.
+// '' when neither gives a public address.
 export function appPublicUrl() {
   const explicit = String(process.env.HCS_APP_PUBLIC_URL || '').trim();
   if (explicit) return explicit.replace(/\/$/, '');
@@ -41,9 +41,9 @@ export function appPublicUrl() {
   try {
     if (new URL(base).hostname.includes('.')) return base;
   } catch {
-    // fall through to the default
+    // not a URL: no public address
   }
-  return DEFAULT_APP_URL;
+  return '';
 }
 
 // How GET /login signs people in.

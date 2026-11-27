@@ -1,6 +1,6 @@
 # hcs-sync — KashFlow Data Adapter
 
-hcs-sync is a dedicated **KashFlow accounting data sync service** for **Heron Constructive Solutions LTD**. It is one possible data provider for the REST MongoDB namespace that [hcs-app](https://github.com/cappytech/hcs-app) consumes.
+hcs-sync is a dedicated **KashFlow accounting data sync service**, deployed once per company alongside its hcs-app. Nothing company-specific is hard-coded: names come from `COMPANY_NAME`, addresses from `HCS_APP_BASE_URL` / `HCS_APP_PUBLIC_URL`. It is one possible data provider for the REST MongoDB namespace that [hcs-app](https://github.com/cappytech/hcs-app) consumes.
 
 **hcs-sync is KashFlow-specific.** It owns the KashFlow API integration — authentication, pagination, normalisation, and upsert to MongoDB. It does not know about hcs-app's internals, users, or business logic. It writes to the **REST** namespace and nothing else.
 

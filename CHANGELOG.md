@@ -2,6 +2,21 @@
 
 All notable changes to hcs-sync will be documented here. Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [0.18.0] - 2026-11-27
+
+### Added
+- **`COMPANY_NAME` / `COMPANY_SHORT_NAME`** (optional, the same keys hcs-app uses) name the company in the dashboard title, footer, web app manifest and Discord alerts ("<short name> | Sync — Completed"). Unset, everything reads "HCS Sync".
+
+### Changed
+- **No company is hard-coded any more.** The favicon, footer logo and manifest icons come from hcs-app's `/brand/icon-*.png` (hcs-app 6.155.0+) at its public address, so they follow the logo uploaded under Admin → Branding. The footer, "forgot password" and "create an account" links all point at the configured hcs-app; the footer no longer shows a company or VAT number. The image CSP allows that origin only.
+- The web app manifest is generated per request at the same `/static/manifest.json` address.
+- The Discord User-Agent is now `hcs-sync/1.0`.
+
+### Removed
+- **The built-in hcs-app address.** `HCS_APP_BASE_URL` has no default, and `appPublicUrl()` no longer falls back to a fixed address when `HCS_APP_BASE_URL` is an internal service name. Sign-in shows "Sign-in is not set up" (503) instead of guessing.
+
+**Upgrade:** before deploying, set `HCS_APP_PUBLIC_URL` to hcs-app's public address wherever `HCS_APP_BASE_URL` is an internal one (like `http://hcs-app:5000`), or sign-in stops working. Add `COMPANY_NAME` (and optionally `COMPANY_SHORT_NAME`) to the sync env.
+
 ## [0.17.8] - 2026-11-26
 
 ### Added

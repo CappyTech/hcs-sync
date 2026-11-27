@@ -1,5 +1,6 @@
 import logger from '../util/logger.js';
 import { sendDiscord } from '../util/discord.js';
+import { syncLabel } from '../util/brand.js';
 
 // Not collections — sub-tallies of bankTransactions and quotes, so they must not
 // be reported as resources in their own right.
@@ -166,7 +167,7 @@ export function notifyRunCompleted({ result, prevCounts, counts, requestedBy }) 
       const { description, fields } = buildWarningAlert(warnings, deltaFields, requestedBy, partialBank);
       sendDiscord({
         ok: false,
-        title: 'Heron CS | Sync — Completed with warnings',
+        title: `${syncLabel()} — Completed with warnings`,
         description,
         fields,
       }).catch(() => {});
@@ -189,7 +190,7 @@ export function notifyRunCompleted({ result, prevCounts, counts, requestedBy }) 
       fields.push({ name: 'Trigger', value: String(requestedBy || 'unknown'), inline: true });
       sendDiscord({
         ok: true,
-        title: 'Heron CS | Sync — Completed',
+        title: `${syncLabel()} — Completed`,
         description: 'Sync completed with data changes.',
         fields,
       }).catch(() => {});
@@ -203,7 +204,7 @@ export function notifyRunCompleted({ result, prevCounts, counts, requestedBy }) 
 export function notifyRunFailed({ error, requestedBy }) {
   sendDiscord({
     ok: false,
-    title: 'Heron CS | Sync — Failed',
+    title: `${syncLabel()} — Failed`,
     description: error || 'Sync failed — see the run logs for details.',
     fields: [{ name: 'Trigger', value: String(requestedBy || 'unknown'), inline: true }],
   }).catch(() => {});
