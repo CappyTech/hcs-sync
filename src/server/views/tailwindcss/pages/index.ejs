@@ -63,6 +63,43 @@
   </div>
 </section>
 
+<% if (typeof staffology !== 'undefined' && staffology) { %>
+<section class="mb-6">
+  <div class="p-4 bg-white border border-gray-200 rounded-lg shadow sm:p-6 dark:bg-gray-800 dark:border-gray-700">
+    <div class="flex flex-wrap items-center justify-between gap-2">
+      <span class="text-sm font-medium text-gray-500 dark:text-gray-400">Staffology payroll</span>
+      <% if (staffology.configured) { %>
+        <form method="post" action="/staffology/run" class="inline">
+          <% if (csrfToken) { %><input type="hidden" name="_csrf" value="<%= csrfToken %>" /><% } %>
+          <button type="submit" <%= staffology.isRunning ? 'disabled aria-disabled="true"' : '' %>
+            class="text-white font-medium rounded-lg text-sm px-5 py-2.5 text-center focus:ring-4 focus:outline-none <%= staffology.isRunning ? 'bg-gray-400 cursor-not-allowed opacity-60 dark:bg-gray-600' : 'bg-blue-700 hover:bg-blue-800 focus:ring-blue-300 dark:bg-blue-600 dark:hover:bg-blue-700 dark:focus:ring-blue-800' %>"
+          ><%= staffology.isRunning ? 'Syncing…' : 'Sync Staffology now' %></button>
+        </form>
+      <% } %>
+    </div>
+    <% if (!staffology.configured || staffology.notConfigured) { %>
+      <p class="mt-2 text-sm text-gray-500 dark:text-gray-400">Not configured. Add the Staffology API key in hcs-app under <span class="font-medium text-gray-700 dark:text-gray-200">Settings → Connections → Staffology</span> to sync employees and pay runs (read-only) after each KashFlow run.</p>
+    <% } else { %>
+      <p class="mt-2 text-gray-900 dark:text-white">Last run: <%= staffology.lastRunAt ? formatDateTimeUK(staffology.lastRunAt) : 'Never' %></p>
+      <% if (staffology.settingsSource) { %>
+        <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">Key from <%= staffology.settingsSource === 'env' ? 'this service’s environment (STAFFOLOGY_API_KEY)' : 'hcs-app settings' %></p>
+      <% } %>
+      <% const r = staffology.lastResult; %>
+      <% if (r) { %>
+        <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+          Employees <%= r.employees.fetched %> ·
+          pay runs fetched <%= r.payRuns.fetched %> of <%= r.payRuns.listed %> (<%= r.payRuns.skippedClosed %> closed, skipped) ·
+          entries <%= r.entries.fetched %> (<%= r.entries.upserted %> new, <%= r.entries.modified %> changed)
+        </p>
+      <% } %>
+      <% if (staffology.lastError) { %>
+        <p class="mt-1 text-sm text-red-600 dark:text-red-400"><%= staffology.lastError %></p>
+      <% } %>
+    <% } %>
+  </div>
+</section>
+<% } %>
+
 <section class="mb-6">
   <div class="p-4 bg-white border border-gray-200 rounded-lg shadow sm:p-6 dark:bg-gray-800 dark:border-gray-700">
     <div class="flex items-center justify-between">

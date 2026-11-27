@@ -157,6 +157,11 @@ Each capability from three angles: **Dev** (how it's built), **User** (what an a
 - **User.** The service still starts and is diagnosable even when partially misconfigured.
 - **Business Owner.** Resilient operations and clear health signals reduce downtime and speed up fixing config mistakes.
 
+### 11 — Staffology Payroll (optional)
+- **Dev.** The API key is entered in hcs-app (Settings → Connections → Staffology). Before each run `src/staffology/settings.js` reads it from `GET {HCS_APP_BASE_URL}/api/sync/staffology-config` with the shared `X-Sync-Api-Key` and holds it in memory only. `STAFFOLOGY_API_KEY` in this service's env overrides that. With a key from either place, `src/staffology/` runs after every KashFlow run (and from **Sync Staffology now** on the dashboard, admin, `POST /staffology/run`). It reads employees and pay run entries (HTTP Basic, key as password) for the current tax year plus `STAFFOLOGY_YEARS_BACK`, and upserts them on `(Source, ExternalId)` into the `payrollemployees` / `payrollpayrunentries` collections (hcs-schemas 3.1.0) in their **own database**, `STAFFOLOGY_DB_NAME` (default `staffology`). Periods whose stored entries are all closed are not fetched again, apart from the latest. It has its own state, so a Staffology failure never fails the KashFlow run. No NI numbers, dates of birth, addresses or bank details are stored.
+- **User.** hcs-app shows each week's pay next to approved attendance.
+- **Business Owner.** Payroll stays in Staffology. hcs-app can now check it against the hours that were actually approved.
+
 ---
 
 ## Routes

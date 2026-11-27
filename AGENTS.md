@@ -6,6 +6,8 @@ hcs-sync is a dedicated **KashFlow accounting data sync service**, deployed once
 
 **hcs-sync is replaceable.** If the accounting provider changes (e.g. to Xero or QuickBooks), a new sync adapter would be built to write to the same REST schema contract. hcs-app would not need to change.
 
+**Staffology payroll is a second, optional adapter** (`src/staffology/`). It is read-only against Staffology and writes only its own database (`STAFFOLOGY_DB_NAME`), never REST. Its models (`src/server/models/payroll.js`) have no `syncConfig`, so the KashFlow entity registry, dedup and history ignore them.
+
 ---
 
 ## Repository Guidelines

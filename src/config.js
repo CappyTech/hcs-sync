@@ -61,6 +61,17 @@ const config = {
   // warnings" and posts to Discord. A few recently-deleted documents at the top
   // of a sequence legitimately leave a small gap, hence not 0.
   freshnessGapThreshold: Number(process.env.FRESHNESS_GAP_THRESHOLD ?? 5),
+
+  // Staffology payroll (src/staffology/). Off unless STAFFOLOGY_API_KEY is set.
+  // Read-only: employees and pay run results go to their own database
+  // (STAFFOLOGY_DB_NAME, same Mongo server and credentials), never the
+  // KashFlow one. With no STAFFOLOGY_EMPLOYER_ID the key must see exactly one
+  // employer. Years back counts tax years before the current one.
+  staffologyApiKey: process.env.STAFFOLOGY_API_KEY || '',
+  staffologyBaseUrl: process.env.STAFFOLOGY_BASE_URL || 'https://api.staffology.co.uk',
+  staffologyEmployerId: process.env.STAFFOLOGY_EMPLOYER_ID || '',
+  staffologyDbName: process.env.STAFFOLOGY_DB_NAME || 'staffology',
+  staffologyYearsBack: Number(process.env.STAFFOLOGY_YEARS_BACK ?? 1),
 };
 
 export default config;
