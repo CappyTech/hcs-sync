@@ -2,6 +2,8 @@ import crypto from 'crypto';
 import cronstrue from 'cronstrue';
 import { APP_BUILD } from '../buildInfo.js';
 import { getEffectiveCronConfig } from '../syncController.js';
+import { appPublicUrl } from './auth.js';
+import { companyName, syncLabel } from '../../util/brand.js';
 
 // Make cron config and nav helpers available to templates.
 export function templateLocals(req, res, next) {
@@ -13,6 +15,10 @@ export function templateLocals(req, res, next) {
   res.locals.appVersion = APP_BUILD?.version || null;
   res.locals.appCommit = APP_BUILD?.commit || null;
   res.locals.appBranch = APP_BUILD?.branch || null;
+  // hcs-app's public address ('' when unset) and the company it runs for.
+  res.locals.appPublic = appPublicUrl();
+  res.locals.companyName = companyName();
+  res.locals.syncLabel = syncLabel();
 
   res.locals.formatCronHuman = (schedule) => {
     const expr = String(schedule || '').trim();

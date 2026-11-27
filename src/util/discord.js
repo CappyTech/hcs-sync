@@ -1,5 +1,6 @@
 import os from 'node:os';
 import logger from './logger.js';
+import { syncLabel } from './brand.js';
 
 // Discord alerting for sync runs. Deliberately a "dumb" sender: the caller
 // decides *whether* to alert and builds the fields; this module only formats
@@ -12,7 +13,6 @@ import logger from './logger.js';
 // It never throws and never blocks a run: a Discord hiccup must not fail or
 // delay a sync, so every error path resolves quietly.
 
-const USERNAME = 'Heron CS Sync';
 const COLOR_OK = 0x10b981; // emerald — matches the backup alerts
 const COLOR_ERR = 0xed4245; // red
 
@@ -46,10 +46,10 @@ export async function sendDiscord({ ok = true, title = '', description = '', fie
     description: description || '',
     color: ok ? COLOR_OK : COLOR_ERR,
     fields: (fields || []).filter(Boolean).slice(0, 25),
-    footer: { text: `Heron CS sync • ${os.hostname()}` },
+    footer: { text: `${syncLabel()} • ${os.hostname()}` },
     timestamp: new Date().toISOString(),
   };
-  const body = JSON.stringify({ username: USERNAME, embeds: [embed] });
+  const body = JSON.stringify({ username: syncLabel(), embeds: [embed] });
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
@@ -57,7 +57,7 @@ export async function sendDiscord({ ok = true, title = '', description = '', fie
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'User-Agent': 'heroncs-sync/1.0', // Discord 403s some default UAs
+          'User-Agent': 'hcs-sync/1.0', // Discord 403s some default UAs
         },
         body,
       });

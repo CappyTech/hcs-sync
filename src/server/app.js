@@ -6,7 +6,8 @@ import helmet from 'helmet';
 import logger from '../util/logger.js';
 import { templateLocals, cspNonce } from './middleware/locals.js';
 import { requestLog } from './middleware/requestLog.js';
-import { ssoGuard } from './middleware/auth.js';
+import { ssoGuard, appPublicUrl } from './middleware/auth.js';
+import { syncLabel } from '../util/brand.js';
 import { csrfToken, csrfProtect } from './middleware/csrf.js';
 import dashboardRoutes from './routes/dashboard.js';
 import settingsRoutes from './routes/settings.js';
@@ -28,6 +29,11 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export function createApp() {
   const app = express();
 
+  // Icons come from hcs-app's /brand routes, so the browser may load images
+  // from its public origin. None when no public address is configured.
+  let appOrigin = null;
+  try { appOrigin = appPublicUrl() ? new URL(appPublicUrl()).origin : null; } catch { appOrigin = null; }
+
   // Behind reverse proxies (Caddy/FRP): trust loopback and Docker bridge range only.
   // Avoid trusting the full private-IP space to prevent X-Forwarded-For spoofing
   // from arbitrary hosts on 10.x / 192.168.x networks.
@@ -42,7 +48,7 @@ export function createApp() {
         defaultSrc: ["'self'"],
         scriptSrc: ["'self'", (_req, res) => `'nonce-${res.locals.cspNonce}'`, 'https://challenges.cloudflare.com'],
         styleSrc: ["'self'", (_req, res) => `'nonce-${res.locals.cspNonce}'`, 'https://cdn.jsdelivr.net'],
-        imgSrc: ["'self'", 'data:', 'https://app.heroncs.co.uk'],
+        imgSrc: ["'self'", 'data:', ...(appOrigin ? [appOrigin] : [])],
         fontSrc: ["'self'", 'https://cdn.jsdelivr.net'],
         connectSrc: ["'self'"],
         objectSrc: ["'none'"],
@@ -73,6 +79,25 @@ export function createApp() {
   // then the manifest fetch that followed minted secret B over the top of it, and the
   // POST failed with "Invalid CSRF token". Only responses that can carry a token
   // should mint one.
+  // The web app manifest names this company's dashboard and uses hcs-app's
+  // icons, so it is built per request rather than shipped as a file.
+  app.get('/static/manifest.json', (_req, res) => {
+    const base = appPublicUrl();
+    const icons = base
+      ? [192, 512].map((size) => ({ src: `${base}/brand/icon-${size}.png`, sizes: `${size}x${size}`, type: 'image/png' }))
+      : [];
+    res.set('Cache-Control', 'no-store');
+    res.type('application/manifest+json').send(JSON.stringify({
+      name: syncLabel(),
+      short_name: syncLabel(),
+      start_url: '/',
+      display: 'standalone',
+      background_color: '#818181',
+      theme_color: '#4e4e4e',
+      icons,
+    }, null, 2));
+  });
+
   // Serve static assets with no-store to avoid stale caching in admin dashboard
   app.use('/static', express.static(path.join(__dirname, 'public'), {
     etag: false,

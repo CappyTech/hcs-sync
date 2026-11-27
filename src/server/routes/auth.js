@@ -41,6 +41,16 @@ router.get('/login', (req, res) => {
   const next = sanitiseNext(req.query.next);
 
   if (loginMode() === 'redirect') {
+    if (!appPublicUrl()) {
+      // No hcs-app to hand off to: there is no built-in default address.
+      logger.error('[login] HCS_APP_BASE_URL (or HCS_APP_PUBLIC_URL) is not set — cannot hand sign-in to hcs-app');
+      return renderStatus(res, 503, {
+        heading: 'Sign-in is not set up',
+        icon: 'bi-exclamation-triangle',
+        message: 'The sync dashboard does not know where the main app is, so it cannot sign you in. An administrator needs to set HCS_APP_BASE_URL.',
+        retryHref: `/login?next=${encodeURIComponent(next)}`,
+      });
+    }
     if (req.query[SSO_RETURN_PARAM]) {
       // hcs-app said yes and sent us back, but there's no cookie we can verify:
       // it was set on a domain we don't receive, or HCS_SSO_JWT_SECRET differs.
@@ -130,6 +140,10 @@ router.post('/login', loginLimiter, async (req, res) => {
       return res.redirect(next);
     }
     logger.error('[login] HCS_SYNC_API_KEY is not set — cannot validate credentials');
+    return res.redirect(`/login?next=${encodeURIComponent(next)}&error=${encodeURIComponent('Login service is not configured.')}`);
+  }
+  if (!appBase) {
+    logger.error('[login] HCS_APP_BASE_URL is not set — cannot validate credentials');
     return res.redirect(`/login?next=${encodeURIComponent(next)}&error=${encodeURIComponent('Login service is not configured.')}`);
   }
 

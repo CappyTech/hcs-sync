@@ -49,20 +49,20 @@ describe('loginMode', () => {
 describe('ssoCookieDomain', () => {
   it('derives the shared parent domain, as hcs-app does', () => {
     delete process.env.HCS_SSO_COOKIE_DOMAIN;
-    process.env.HCS_APP_BASE_URL = 'https://app.heroncs.co.uk';
-    expect(ssoCookieDomain({ hostname: 'sync.heroncs.co.uk' })).toBe('.heroncs.co.uk');
+    process.env.HCS_APP_BASE_URL = 'https://app.example.co.uk';
+    expect(ssoCookieDomain({ hostname: 'sync.example.co.uk' })).toBe('.example.co.uk');
   });
 
   it('prefers HCS_SSO_COOKIE_DOMAIN', () => {
     process.env.HCS_SSO_COOKIE_DOMAIN = '.example.test';
-    expect(ssoCookieDomain({ hostname: 'sync.heroncs.co.uk' })).toBe('.example.test');
+    expect(ssoCookieDomain({ hostname: 'sync.example.co.uk' })).toBe('.example.test');
   });
 
   it('returns no domain for unrelated hosts or the same host', () => {
     delete process.env.HCS_SSO_COOKIE_DOMAIN;
-    process.env.HCS_APP_BASE_URL = 'https://app.heroncs.co.uk';
+    process.env.HCS_APP_BASE_URL = 'https://app.example.co.uk';
     expect(ssoCookieDomain({ hostname: 'localhost' })).toBe('');
-    expect(ssoCookieDomain({ hostname: 'app.heroncs.co.uk' })).toBe('');
+    expect(ssoCookieDomain({ hostname: 'app.example.co.uk' })).toBe('');
   });
 });
 
@@ -72,7 +72,13 @@ describe('appPublicUrl', () => {
   it('does not send the browser to an internal service address', () => {
     delete process.env.HCS_APP_PUBLIC_URL;
     process.env.HCS_APP_BASE_URL = 'http://hcs-app:5000';
-    expect(appPublicUrl()).toBe('https://app.heroncs.co.uk');
+    expect(appPublicUrl()).toBe('');
+  });
+
+  it('has no built-in address for any company', () => {
+    delete process.env.HCS_APP_PUBLIC_URL;
+    delete process.env.HCS_APP_BASE_URL;
+    expect(appPublicUrl()).toBe('');
   });
 
   it('uses a public HCS_APP_BASE_URL as is', () => {
@@ -89,8 +95,8 @@ describe('appPublicUrl', () => {
 
   it('derives the cookie domain from the public address', () => {
     delete process.env.HCS_SSO_COOKIE_DOMAIN;
-    delete process.env.HCS_APP_PUBLIC_URL;
+    process.env.HCS_APP_PUBLIC_URL = 'https://app.example.co.uk';
     process.env.HCS_APP_BASE_URL = 'http://hcs-app:5000';
-    expect(ssoCookieDomain({ hostname: 'sync.heroncs.co.uk' })).toBe('.heroncs.co.uk');
+    expect(ssoCookieDomain({ hostname: 'sync.example.co.uk' })).toBe('.example.co.uk');
   });
 });

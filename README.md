@@ -1,8 +1,8 @@
 # hcs-sync
 
-**KashFlow ↔ MongoDB sync adapter for Heron Constructive Solutions LTD.** A dedicated, backend-focused service (with an admin dashboard) that owns the entire KashFlow REST API integration and mirrors accounting data into a shared MongoDB **REST namespace**. The main business app, [hcs-app](https://github.com/CappyTech/hcs-app), reads that namespace and knows nothing about KashFlow internals.
+**KashFlow ↔ MongoDB sync adapter for hcs-app.** A dedicated, backend-focused service (with an admin dashboard) that owns the entire KashFlow REST API integration and mirrors accounting data into a shared MongoDB **REST namespace**. The main business app, [hcs-app](https://github.com/CappyTech/hcs-app), reads that namespace and knows nothing about KashFlow internals.
 
-It runs at `sync.heroncs.co.uk` and is deliberately **KashFlow-specific and replaceable** — swapping accounting providers means rewriting this service, not hcs-app.
+Each company's deployment runs it alongside its own hcs-app. It is deliberately **KashFlow-specific and replaceable** — swapping accounting providers means rewriting this service, not hcs-app.
 
 > For deeper architecture and module notes see [AGENTS.md](AGENTS.md). For the design rationale of each capability, see the walkthrough below.
 
@@ -225,7 +225,7 @@ Key details:
 - **Image:** `ghcr.io/cappytech/hcs-sync:latest` with `pull_policy: always`.
 - **Networking:** the app shares the **Tailscale** container's network namespace, so the edge **Caddy** must proxy to `tailscale:3000` (not `hcs-sync:3000`). Caddy terminates HTTPS automatically; HSTS is handled at the edge while CSP is enforced in-app.
 - **Health:** Docker healthcheck hits `GET /cron/health`.
-- **Auth wiring:** set `HCS_APP_BASE_URL` (may be hcs-app's internal address; set `HCS_APP_PUBLIC_URL` if the public one isn't `https://app.heroncs.co.uk`), `HCS_SSO_JWT_SECRET` (must match hcs-app), and `HCS_SYNC_API_KEY` (shared secret for `POST /api/pull`, and for the login handshake in form mode). In production set `HCS_SSO_COOKIE_DOMAIN=.heroncs.co.uk` so logout clears the cookie hcs-app's handoff set; hcs-app must allow this host in its `HCS_SSO_RETURN_HOSTS` (default `sync.heroncs.co.uk`). `HCS_SYNC_PUBLIC_URL` overrides the return address sent to hcs-app if the request origin isn't the public one.
+- **Auth wiring:** set `HCS_APP_BASE_URL` (may be hcs-app's internal address; set `HCS_APP_PUBLIC_URL` when that is an internal address, since there is no built-in default), `HCS_SSO_JWT_SECRET` (must match hcs-app), and `HCS_SYNC_API_KEY` (shared secret for `POST /api/pull`, and for the login handshake in form mode). In production set `HCS_SSO_COOKIE_DOMAIN` to the shared parent domain (e.g. `.example.co.uk`) so logout clears the cookie hcs-app's handoff set; hcs-app must allow this host in its `HCS_SSO_RETURN_HOSTS` (default: the host of its `HCS_SYNC_BASE_URL`). `HCS_SYNC_PUBLIC_URL` overrides the return address sent to hcs-app if the request origin isn't the public one. `COMPANY_NAME` (and optionally `COMPANY_SHORT_NAME`) labels the dashboard and Discord alerts; icons come from hcs-app's `/brand/icon-*.png`.
 - **State:** the `tailscale_state` volume persists tailnet auth across restarts.
 
 The container is built from a multi-stage [`Dockerfile`](Dockerfile): stage 1 compiles Tailwind CSS; stage 2 produces a slim `node:24-alpine` image (`npm ci --omit=dev`, `dumb-init` as PID 1, `tailscaled` baked in, `NODE_ENV=production`, listening on port `3000`).

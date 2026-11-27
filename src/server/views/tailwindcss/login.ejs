@@ -71,11 +71,13 @@
         <% } %>
       </form>
 
+      <% if (locals.appPublic) { %>
       <div class="mt-4 flex items-center justify-center gap-2 text-sm">
-        <a href="https://app.heroncs.co.uk/user/forgot-password" class="text-green-700 dark:text-green-400 hover:underline">Forgot your password?</a>
+        <a href="<%= locals.appPublic %>/user/forgot-password" class="text-green-700 dark:text-green-400 hover:underline">Forgot your password?</a>
         <span class="text-gray-300 dark:text-gray-600" aria-hidden="true">&middot;</span>
-        <a href="https://app.heroncs.co.uk/user/register" class="text-green-700 dark:text-green-400 hover:underline">Create an account</a>
+        <a href="<%= locals.appPublic %>/user/register" class="text-green-700 dark:text-green-400 hover:underline">Create an account</a>
       </div>
+      <% } %>
     </div>
   </div>
 </div>

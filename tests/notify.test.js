@@ -57,7 +57,7 @@ describe('notifyRunCompleted()', () => {
     expect(sendDiscord).toHaveBeenCalledTimes(1);
     const msg = sendDiscord.mock.calls[0][0];
     expect(msg.ok).toBe(false);
-    expect(msg.title).toBe('Heron CS | Sync — Completed with warnings');
+    expect(msg.title).toBe('HCS Sync — Completed with warnings');
     expect(msg.fields).toContainEqual(expect.objectContaining({ name: 'Lists not fetched', value: 'journals, products' }));
   });
 
@@ -74,7 +74,7 @@ describe('notifyRunCompleted()', () => {
       requestedBy: 'cron',
     });
     const msg = sendDiscord.mock.calls[0][0];
-    expect(msg.title).toBe('Heron CS | Sync — Completed with warnings');
+    expect(msg.title).toBe('HCS Sync — Completed with warnings');
     expect(msg.description).toContain('quotes');
     expect(msg.fields).toContainEqual(expect.objectContaining({
       name: 'Behind: quotes', value: 'stored up to 41200, KashFlow next is 51764 (10563 behind)',
@@ -109,6 +109,6 @@ describe('notifyRunCompleted()', () => {
 
   it('posts a plain Completed for a clean run with changes', () => {
     notifyRunCompleted({ result: {}, prevCounts: counts, counts: { ...counts, quotes: 11 }, requestedBy: 'cron' });
-    expect(sendDiscord.mock.calls[0][0].title).toBe('Heron CS | Sync — Completed');
+    expect(sendDiscord.mock.calls[0][0].title).toBe('HCS Sync — Completed');
   });
 });
