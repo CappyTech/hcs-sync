@@ -2,6 +2,14 @@
 
 All notable changes to hcs-sync will be documented here. Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [0.20.0] - 2026-11-27
+
+### Added
+- **Pay run entries keep their basic pay options.** Each Staffology `payrollPayRunEntry` now stores `PayBasis`, `BaseHourlyRate`, `BaseDailyRate`, `PayAmount` and `PayAmountMultiplier` from the entry's `payOptions`: the rate actually paid that period and the hours or days paid at it, so hcs-app can price each attendance day at the rate it was really paid. Previously only the extra regular pay lines were kept. These are the hcs-schemas 3.2.0 fields; the payroll models are `strict: false`, so they are written even with 3.1.0 installed.
+
+### Changed
+- A closed pay period already stored is only skipped when every stored entry has at least one of the new pay option fields set. Periods stored by 0.19.0 lack them, so the first run after upgrading fetches every closed period in range once more (still GET-only) and fills them in; later runs skip them as before.
+
 ## [0.19.0] - 2026-11-27
 
 ### Added

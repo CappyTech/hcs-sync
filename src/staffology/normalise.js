@@ -115,6 +115,7 @@ export function normalisePayLines(lines) {
  */
 export function normalisePayRunEntry(entry, { employerId, run = {}, item, now = new Date() } = {}) {
   const ed = entry?.employmentDetails || {};
+  const po = entry?.payOptions || {};
   return {
     Source: SOURCE,
     ExternalId: String(entry?.id || item?.id),
@@ -130,8 +131,15 @@ export function normalisePayRunEntry(entry, { employerId, run = {}, item, now = 
     EndDate: date(entry?.endDate ?? run.endDate),
     PaymentDate: date(entry?.paymentDate ?? run.paymentDate),
     IsClosed: Boolean(entry?.isClosed ?? run.isClosed),
+    // The basic pay options of this entry: the rate actually paid this period,
+    // which may differ from the employee's current rate.
+    PayBasis: str(po.basis),
+    BaseHourlyRate: num(po.baseHourlyRate),
+    BaseDailyRate: num(po.baseDailyRate),
+    PayAmount: num(po.payAmount),
+    PayAmountMultiplier: num(po.payAmountMultiplier),
     Totals: normaliseTotals(entry?.totals),
-    PayLines: normalisePayLines(entry?.payOptions?.regularPayLines),
+    PayLines: normalisePayLines(po.regularPayLines),
     SyncedAt: now,
   };
 }
